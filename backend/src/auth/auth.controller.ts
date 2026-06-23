@@ -1,8 +1,8 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Controller, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
-import { LoginDto } from './dto/login.dto';
+import { FirebaseAuthGuard } from '../common/guards/firebase-auth.guard';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -10,19 +10,13 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  @ApiOperation({ summary: '회원가입 (국적 입력 → 팀 자동 배정)' })
+  @UseGuards(FirebaseAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '회원가입 (Firebase ID Token 검증 + 프로필 저장)' })
   @ApiResponse({ status: 201, description: '회원가입 성공' })
-  @ApiResponse({ status: 409, description: '이미 사용 중인 이메일' })
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
-  }
-
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: '로그인 (JWT 발급)' })
-  @ApiResponse({ status: 200, description: '로그인 성공, accessToken 반환' })
-  @ApiResponse({ status: 401, description: '이메일 또는 비밀번호 불일치' })
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  @ApiResponse({ status: 401, description: '유효하지 않은 Firebase ID Token' })
+  @ApiResponse({ status: 409, description: '이미 가입된 사용자' })
+  register(@Body() dto: RegisterDto, @Req() req: any) {
+    return this.authService.register(dto, req.user.uid, req.user.email);
   }
 }

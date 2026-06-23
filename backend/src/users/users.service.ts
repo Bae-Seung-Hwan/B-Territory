@@ -10,8 +10,8 @@ export class UsersService {
     private readonly userRepository: Repository<User>,
   ) {}
 
-  async findByEmail(email: string): Promise<User | null> {
-    return this.userRepository.findOne({ where: { email } });
+  async findByFirebaseUid(firebaseUid: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { firebaseUid } });
   }
 
   async create(data: Partial<User>): Promise<User> {

@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import { Controller, DefaultValuePipe, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { SpotsService } from './spots.service';
 
@@ -16,8 +16,8 @@ export class SpotsController {
   @ApiQuery({ name: 'contenttypeid', required: false, type: String, description: '콘텐츠 유형' })
   @ApiResponse({ status: 200, description: '관광지 목록 반환' })
   findAll(
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('areacode') areacode?: string,
     @Query('sigungucode') sigungucode?: string,
     @Query('contenttypeid') contenttypeid?: string,

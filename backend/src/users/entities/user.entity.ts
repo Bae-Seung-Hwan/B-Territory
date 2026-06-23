@@ -6,10 +6,10 @@ export class User {
   id: string;
 
   @Column({ unique: true })
-  email: string;
+  firebaseUid: string;
 
-  @Column()
-  password: string;
+  @Column({ unique: true })
+  email: string;
 
   @Column()
   nickname: string;
