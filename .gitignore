@@ -6,8 +6,8 @@ dist/
 
 # 환경변수 (절대 커밋 금지!)
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
 
 # 로그
 *.log
@@ -20,3 +20,7 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# AI tool local settings
+.claude/
+!.claude/settings.json
