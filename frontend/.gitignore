@@ -46,3 +46,4 @@ example
 
 # AI tool local settings
 .claude/
+!.claude/settings.json
