@@ -3,6 +3,10 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
+import { SpotsModule } from './spots/spots.module';
+import { FirebaseModule } from './common/firebase/firebase.module';
 
 @Module({
   imports: [
@@ -20,11 +24,15 @@ import { AppService } from './app.service';
         username: config.get<string>('DB_USERNAME'),
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_NAME'),
-        entities: [__dirname + '/**/*.entity{.ts,.js}'],
+        autoLoadEntities: true,
         synchronize: config.get<string>('NODE_ENV') !== 'production',
         logging: config.get<string>('NODE_ENV') === 'development',
       }),
     }),
+    FirebaseModule,
+    AuthModule,
+    UsersModule,
+    SpotsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
