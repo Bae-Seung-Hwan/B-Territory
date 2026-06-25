@@ -1,0 +1,5 @@
+cd backend
+echo "Running lint..."
+npm run lint
+echo "Running build..."
+npm run build
