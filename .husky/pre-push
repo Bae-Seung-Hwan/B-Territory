@@ -1,3 +1,4 @@
+set -e
 cd backend
 echo "Running lint..."
 npm run lint
