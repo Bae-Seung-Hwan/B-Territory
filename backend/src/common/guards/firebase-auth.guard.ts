@@ -11,7 +11,9 @@ export class FirebaseAuthGuard implements CanActivate {
   constructor(private readonly firebaseService: FirebaseService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<{ headers: { authorization?: string }; user: unknown }>();
+    const request = context
+      .switchToHttp()
+      .getRequest<{ headers: { authorization?: string }; user: unknown }>();
     const authHeader = request.headers.authorization ?? '';
 
     if (!authHeader.startsWith('Bearer ')) {
