@@ -41,3 +41,13 @@ jobs:
 
       - name: Web export (build check)
         run: npx expo export --platform web
+
+      - name: Lint check
+        run: npx eslint .
+
+      - name: Security audit
+        run: npm audit --audit-level=high || true
+        # 취약점이 있어도 일단 경고만 : '|| true'
+
+      - name: Run Tests
+        run: npm test -- --passWithNoTests
