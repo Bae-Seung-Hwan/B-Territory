@@ -2,6 +2,11 @@ name: Temp Lockfile Regen
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/Ryu/frontend-setup
+    paths:
+      - ".github/workflows/lockfile-regen-temp.yml"
 
 jobs:
   regen:
