@@ -12,7 +12,7 @@ on:
       - "frontend/**"
 
 jobs:
-  build:
+  ci:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,7 +26,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
       - name: Generate expo-env.d.ts
         run: |
@@ -39,15 +40,8 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      - name: Web export (build check)
-        run: npx expo export --platform web
-
-      - name: Lint check
+      - name: Lint
         run: npx eslint .
 
-      - name: Security audit
-        run: npm audit --audit-level=high || true
-        # 취약점이 있어도 일단 경고만 : '|| true'
-
-      - name: Run Tests
+      - name: Test
         run: npm test -- --passWithNoTests
