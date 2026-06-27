@@ -35,7 +35,10 @@ export class ClaimsController {
   @ApiResponse({ status: 201, description: '점령 성공' })
   @ApiResponse({ status: 400, description: '50m 초과 — 방문 인증 실패' })
   @ApiResponse({ status: 409, description: '방어 시간 중' })
-  async visit(@Body() dto: VisitDto, @Request() req: any) {
+  async visit(
+    @Body() dto: VisitDto,
+    @Request() req: { user: { uid: string } },
+  ) {
     const firebaseUid: string = req.user.uid;
     const user = await this.usersService.findByFirebaseUid(firebaseUid);
     if (!user) throw new NotFoundException('등록되지 않은 사용자입니다.');

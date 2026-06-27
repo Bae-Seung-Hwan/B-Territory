@@ -31,12 +31,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** GET + TTL in a single pipeline to avoid TOCTOU between two calls */
-  async getWithTtl(key: string): Promise<{ value: string | null; ttl: number }> {
-    const [[, value], [, ttl]] = await this.client
+  async getWithTtl(
+    key: string,
+  ): Promise<{ value: string | null; ttl: number }> {
+    const [[, value], [, ttl]] = (await this.client
       .pipeline()
       .get(key)
       .ttl(key)
-      .exec() as [[null, string | null], [null, number]];
+      .exec()) as [[null, string | null], [null, number]];
     return { value, ttl };
   }
 

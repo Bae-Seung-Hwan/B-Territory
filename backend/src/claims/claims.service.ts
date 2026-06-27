@@ -3,7 +3,6 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
@@ -49,7 +48,8 @@ export class ClaimsService {
       [lng, lat, spotId],
     );
 
-    if (!result.length) throw new NotFoundException('관광지를 찾을 수 없습니다.');
+    if (!result.length)
+      throw new NotFoundException('관광지를 찾을 수 없습니다.');
 
     const { within_range, distance } = result[0];
     if (!within_range) {
@@ -104,10 +104,7 @@ export class ClaimsService {
     );
 
     // 구 단위로 최다 점령 팀 선정
-    const districtMap = new Map<
-      string,
-      { team: string; spotCount: number }
-    >();
+    const districtMap = new Map<string, { team: string; spotCount: number }>();
     for (const row of rows) {
       const count = Number(row.spot_count);
       const current = districtMap.get(row.sigungucode);
