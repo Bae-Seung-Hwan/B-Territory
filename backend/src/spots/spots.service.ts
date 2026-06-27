@@ -19,16 +19,35 @@ export class SpotsService {
   ) {}
 
   async findAll(query: SpotListQuery) {
-    const { page = 1, limit = 20, areacode, sigungucode, contenttypeid } = query;
+    const {
+      page = 1,
+      limit = 20,
+      areacode,
+      sigungucode,
+      contenttypeid,
+    } = query;
 
     const qb = this.spotRepository.createQueryBuilder('spot');
 
     if (areacode) qb.andWhere('spot.areacode = :areacode', { areacode });
-    if (sigungucode) qb.andWhere('spot.sigungucode = :sigungucode', { sigungucode });
-    if (contenttypeid) qb.andWhere('spot.contenttypeid = :contenttypeid', { contenttypeid });
+    if (sigungucode)
+      qb.andWhere('spot.sigungucode = :sigungucode', { sigungucode });
+    if (contenttypeid)
+      qb.andWhere('spot.contenttypeid = :contenttypeid', { contenttypeid });
 
     const [items, total] = await qb
-      .select(['spot.id', 'spot.contentId', 'spot.title', 'spot.addr1', 'spot.mapX', 'spot.mapY', 'spot.firstimage', 'spot.contenttypeid', 'spot.areacode', 'spot.sigungucode'])
+      .select([
+        'spot.id',
+        'spot.contentId',
+        'spot.title',
+        'spot.addr1',
+        'spot.mapX',
+        'spot.mapY',
+        'spot.firstimage',
+        'spot.contenttypeid',
+        'spot.areacode',
+        'spot.sigungucode',
+      ])
       .orderBy('spot.id', 'ASC')
       .skip((page - 1) * limit)
       .take(limit)

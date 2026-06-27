@@ -30,4 +30,4 @@ async function bootstrap() {
   console.log(`Server running on http://localhost:${port}`);
   console.log(`Swagger docs: http://localhost:${port}/api/docs`);
 }
-bootstrap();
+void bootstrap();
