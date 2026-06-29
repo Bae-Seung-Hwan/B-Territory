@@ -28,28 +28,38 @@ export class ClaimsService {
   async visit(dto: VisitDto, userId: string, team: string) {
     const { spotId, lat, lng } = dto;
 
-    // PostGIS로 50m 이내 여부 + 거리 계산
+    // NULL 좌표 대비 CASE WHEN으로 안전하게 처리
     const result = await this.dataSource.query<
-      { within_range: boolean; distance: number }[]
+      { has_coords: boolean; within_range: boolean | null; distance: number | null }[]
     >(
       `SELECT
-         ST_DWithin(
-           ST_SetSRID(ST_MakePoint("mapX"::float, "mapY"::float), 4326)::geography,
-           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-           50
-         ) AS within_range,
-         ROUND(
-           ST_Distance(
+         "mapX" IS NOT NULL AND "mapY" IS NOT NULL AS has_coords,
+         CASE WHEN "mapX" IS NOT NULL AND "mapY" IS NOT NULL THEN
+           ST_DWithin(
              ST_SetSRID(ST_MakePoint("mapX"::float, "mapY"::float), 4326)::geography,
-             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
-           )::numeric, 1
-         ) AS distance
+             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+             50
+           )
+         END AS within_range,
+         CASE WHEN "mapX" IS NOT NULL AND "mapY" IS NOT NULL THEN
+           ROUND(
+             ST_Distance(
+               ST_SetSRID(ST_MakePoint("mapX"::float, "mapY"::float), 4326)::geography,
+               ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+             )::numeric, 1
+           )::float8
+         END AS distance
        FROM spots WHERE id = $3`,
       [lng, lat, spotId],
     );
 
     if (!result.length)
       throw new NotFoundException('관광지를 찾을 수 없습니다.');
+
+    if (!result[0].has_coords)
+      throw new BadRequestException(
+        '해당 관광지는 좌표 정보가 없어 방문 인증이 불가합니다.',
+      );
 
     const { within_range, distance } = result[0];
     if (!within_range) {
@@ -58,26 +68,31 @@ export class ClaimsService {
       );
     }
 
-    // 방어 시간 체크 (GET + TTL 단일 파이프라인)
-    const { value: defenseTeam, ttl: remaining } = await this.redis.getWithTtl(
+    // Lua 원자 연산으로 방어 체크 + 타이머 갱신을 단일 명령으로 처리
+    // 신규 점령 시에만 타이머를 설정하고, 같은 팀 재방문은 타이머 리셋 없이 통과
+    const defense = await this.redis.claimDefense(
       DEFENSE_KEY(spotId),
+      team,
+      DEFENSE_TTL,
     );
-    if (defenseTeam && defenseTeam !== team) {
+    if (defense.status === 'blocked') {
       throw new ConflictException(
-        `방어 시간 중: ${defenseTeam} 팀이 ${Math.max(0, remaining)}초 동안 방어 중입니다.`,
+        `방어 시간 중: ${defense.defenseTeam} 팀이 ${Math.max(0, defense.remaining)}초 동안 방어 중입니다.`,
       );
     }
 
-    // 점령 처리 (upsert)
-    await this.spotClaimRepo.upsert(
-      { spotId, team, userId },
-      { conflictPaths: ['spotId'] },
-    );
+    // 점령 처리 (upsert) — 실패 시 Redis 방어 키 롤백
+    try {
+      await this.spotClaimRepo.upsert(
+        { spotId, team, userId },
+        { conflictPaths: ['spotId'] },
+      );
+    } catch (err) {
+      await this.redis.del(DEFENSE_KEY(spotId)).catch(() => {});
+      throw err;
+    }
 
-    // 방어 타이머 갱신
-    await this.redis.set(DEFENSE_KEY(spotId), team, DEFENSE_TTL);
-
-    return { success: true, spotId, team, defenseSeconds: DEFENSE_TTL };
+    return { success: true, spotId, team, defenseSeconds: defense.remaining };
   }
 
   async getSpotClaim(spotId: number) {
@@ -87,7 +102,9 @@ export class ClaimsService {
   }
 
   async getDistrictClaim(sigungucode: string) {
-    return this.districtClaimRepo.findOne({ where: { sigungucode } });
+    const claim = await this.districtClaimRepo.findOne({ where: { sigungucode } });
+    if (!claim) return { sigungucode, team: null, calculatedAt: null };
+    return claim;
   }
 
   async aggregateDistricts() {
@@ -100,10 +117,12 @@ export class ClaimsService {
          COUNT(*) AS spot_count
        FROM spot_claims sc
        JOIN spots s ON s.id = sc."spotId"
-       GROUP BY s.sigungucode, sc.team`,
+       GROUP BY s.sigungucode, sc.team
+       ORDER BY s.sigungucode, COUNT(*) DESC, MIN(sc."claimedAt") ASC`,
     );
 
     // 구 단위로 최다 점령 팀 선정
+    // 동점 시: SQL ORDER BY MIN(claimedAt) ASC 기준으로 먼저 점령한 팀이 우선됨
     const districtMap = new Map<string, { team: string; spotCount: number }>();
     for (const row of rows) {
       const count = Number(row.spot_count);
