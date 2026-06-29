@@ -4,27 +4,54 @@ import * as path from 'path';
 
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
-const SERVICE_KEY =
-  '3a3a0f8a921262ce249d0d2ef3576a5a06cec8c95c45e0266609298199ccb24c';
+if (!process.env.TOUR_API_KEY) throw new Error('TOUR_API_KEY 환경변수가 필요합니다.');
+const SERVICE_KEY = process.env.TOUR_API_KEY as string;
 const BASE_URL = 'https://apis.data.go.kr/B551011/KorService2';
 const AREA_CODE = '6'; // 부산
 const NUM_OF_ROWS = 100;
 
-async function fetchPage(pageNo: number): Promise<{ items: any[]; total: number }> {
-  const url =
-    `${BASE_URL}/areaBasedList2` +
-    `?serviceKey=${SERVICE_KEY}` +
-    `&numOfRows=${NUM_OF_ROWS}` +
-    `&pageNo=${pageNo}` +
-    `&MobileOS=ETC` +
-    `&MobileApp=BTerritorySeeder` +
-    `&_type=json` +
-    `&areaCode=${AREA_CODE}`;
+interface TourItem {
+  contentid: string;
+  title: string;
+  addr1?: string;
+  mapx?: string;
+  mapy?: string;
+  firstimage?: string;
+  contenttypeid?: string;
+  areacode?: string;
+  sigungucode?: string;
+}
+
+interface TourApiResponse {
+  response: {
+    header: { resultCode: string; resultMsg: string };
+    body: {
+      items: { item: TourItem | TourItem[] };
+      totalCount: number | string;
+    };
+  };
+}
+
+async function fetchPage(pageNo: number): Promise<{ items: TourItem[]; total: number }> {
+  const params = new URLSearchParams({
+    serviceKey: SERVICE_KEY,
+    numOfRows: String(NUM_OF_ROWS),
+    pageNo: String(pageNo),
+    MobileOS: 'ETC',
+    MobileApp: 'BTerritorySeeder',
+    _type: 'json',
+    areaCode: AREA_CODE,
+  });
+  const url = `${BASE_URL}/areaBasedList2?${params}`;
 
   const res = await fetch(url);
-  const data: any = await res.json();
-  const body = data?.response?.body;
+  if (!res.ok) throw new Error(`API HTTP 오류: ${res.status} ${res.statusText}`);
+  const data: TourApiResponse = await res.json();
 
+  const { resultCode, resultMsg } = data?.response?.header ?? {};
+  if (resultCode !== '0000') throw new Error(`API 응답 오류: ${resultCode} ${resultMsg}`);
+
+  const body = data?.response?.body;
   const raw = body?.items?.item;
   const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
 
@@ -43,7 +70,8 @@ async function main() {
   await client.connect();
   console.log('DB 연결 성공');
 
-  const { total } = await fetchPage(1);
+  // page 1을 한 번만 호출해 총 건수와 첫 페이지 데이터를 함께 확보
+  const { total, items: page1Items } = await fetchPage(1);
   const totalPages = Math.ceil(total / NUM_OF_ROWS);
   console.log(`총 ${total}건 / ${totalPages}페이지`);
 
@@ -51,30 +79,38 @@ async function main() {
   let skipped = 0;
 
   for (let page = 1; page <= totalPages; page++) {
-    process.stdout.write(`[${page}/${totalPages}] 요청 중...`);
-    const { items } = await fetchPage(page);
+    process.stdout.write(`[${page}/${totalPages}] 처리 중...`);
+    const items = page === 1 ? page1Items : (await fetchPage(page)).items;
 
-    for (const item of items) {
-      const result = await client.query(
-        `INSERT INTO spots
-           ("contentId", title, addr1, "mapX", "mapY", firstimage,
-            contenttypeid, areacode, sigungucode)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         ON CONFLICT ("contentId") DO NOTHING`,
-        [
-          item.contentid,
-          item.title ?? '',
-          item.addr1 ?? null,
-          item.mapx ? parseFloat(item.mapx) : null,
-          item.mapy ? parseFloat(item.mapy) : null,
-          item.firstimage ?? null,
-          item.contenttypeid ?? null,
-          item.areacode ?? null,
-          item.sigungucode ?? null,
-        ],
-      );
-      if (result.rowCount! > 0) inserted++;
-      else skipped++;
+    // 컬럼 목록은 spot.entity.ts와 동기화 필요 (overview, usetime, homepage는 areaBasedList2 미제공)
+    await client.query('BEGIN');
+    try {
+      for (const item of items) {
+        const result = await client.query(
+          `INSERT INTO spots
+             ("contentId", title, addr1, "mapX", "mapY", firstimage,
+              contenttypeid, areacode, sigungucode)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT ("contentId") DO NOTHING`,
+          [
+            item.contentid,
+            item.title ?? '',
+            item.addr1 ?? null,
+            item.mapx ? parseFloat(item.mapx) : null,
+            item.mapy ? parseFloat(item.mapy) : null,
+            item.firstimage ?? null,
+            item.contenttypeid ?? null,
+            item.areacode ?? null,
+            item.sigungucode ?? null,
+          ],
+        );
+        if ((result.rowCount ?? 0) > 0) inserted++;
+        else skipped++;
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
     }
 
     console.log(` ${items.length}건 처리`);
