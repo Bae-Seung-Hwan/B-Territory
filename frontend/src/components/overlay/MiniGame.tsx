@@ -1,0 +1,47 @@
+import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useOverlayStore } from '@/store/useOverlayStore';
+
+export function MiniGame() {
+  const showMiniGame = useOverlayStore((s) => s.showMiniGame);
+  const setShowMiniGame = useOverlayStore((s) => s.setShowMiniGame);
+  const setEnemyInfo = useOverlayStore((s) => s.setEnemyInfo);
+
+  const handleClose = () => {
+    setShowMiniGame(false);
+    setEnemyInfo(null);
+  };
+
+  return (
+    <Modal visible={showMiniGame} transparent={false} animationType="slide" statusBarTranslucent>
+      <View style={styles.container}>
+        <Text style={styles.title}>⚡ 미니게임</Text>
+        <Text style={styles.placeholder}>미니게임 UI가 여기에 구현됩니다</Text>
+        {/* TODO: 실제 미니게임 컴포넌트로 교체 */}
+        <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
+          <Text style={styles.closeBtnText}>닫기</Text>
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#0A0A0F',
+    gap: 24,
+  },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#fff' },
+  placeholder: { color: '#555', fontSize: 14 },
+  closeBtn: {
+    marginTop: 32,
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  closeBtnText: { color: '#888', fontWeight: '600' },
+});
