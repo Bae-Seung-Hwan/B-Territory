@@ -5,10 +5,12 @@ on:
     branches: [develop, main]
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
   pull_request:
     branches: [develop, main]
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
 
 jobs:
   check:
@@ -40,3 +42,6 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Build check
+        run: npx expo export --platform web
