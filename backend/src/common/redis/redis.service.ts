@@ -77,7 +77,8 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       | string
       | number
     )[];
-    if (result[0] === 'ok') return { status: 'ok', remaining: Number(result[1]) };
+    if (result[0] === 'ok')
+      return { status: 'ok', remaining: Number(result[1]) };
     return {
       status: 'blocked',
       defenseTeam: result[1] as string,

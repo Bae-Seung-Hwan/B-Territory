@@ -30,7 +30,11 @@ export class ClaimsService {
 
     // NULL 좌표 대비 CASE WHEN으로 안전하게 처리
     const result = await this.dataSource.query<
-      { has_coords: boolean; within_range: boolean | null; distance: number | null }[]
+      {
+        has_coords: boolean;
+        within_range: boolean | null;
+        distance: number | null;
+      }[]
     >(
       `SELECT
          "mapX" IS NOT NULL AND "mapY" IS NOT NULL AS has_coords,
@@ -102,7 +106,9 @@ export class ClaimsService {
   }
 
   async getDistrictClaim(sigungucode: string) {
-    const claim = await this.districtClaimRepo.findOne({ where: { sigungucode } });
+    const claim = await this.districtClaimRepo.findOne({
+      where: { sigungucode },
+    });
     if (!claim) return { sigungucode, team: null, calculatedAt: null };
     return claim;
   }
