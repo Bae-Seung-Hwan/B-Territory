@@ -3,9 +3,10 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, Not, In } from 'typeorm';
 import { SpotClaim } from './entities/spot-claim.entity';
 import { DistrictClaim } from './entities/district-claim.entity';
 import { RedisService } from '../common/redis/redis.service';
@@ -16,6 +17,8 @@ const DEFENSE_KEY = (spotId: number) => `defense:${spotId}`;
 
 @Injectable()
 export class ClaimsService {
+  private readonly logger = new Logger(ClaimsService.name);
+
   constructor(
     @InjectRepository(SpotClaim)
     private readonly spotClaimRepo: Repository<SpotClaim>,
@@ -92,7 +95,12 @@ export class ClaimsService {
         { conflictPaths: ['spotId'] },
       );
     } catch (err) {
-      await this.redis.del(DEFENSE_KEY(spotId)).catch(() => {});
+      await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+        this.logger.error(
+          `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+          redisErr,
+        );
+      });
       throw err;
     }
 
@@ -114,6 +122,10 @@ export class ClaimsService {
   }
 
   async aggregateDistricts() {
+    // 기존 구 점령 현황 로드 — 동점 시 기존 보유팀 우선 처리에 사용
+    const currentHolders = await this.districtClaimRepo.find();
+    const holderMap = new Map(currentHolders.map((d) => [d.sigungucode, d.team]));
+
     const rows = await this.dataSource.query<
       { sigungucode: string; team: string; spot_count: string }[]
     >(
@@ -128,26 +140,39 @@ export class ClaimsService {
     );
 
     // 구 단위로 최다 점령 팀 선정
-    // 동점 시: SQL ORDER BY MIN(claimedAt) ASC 기준으로 먼저 점령한 팀이 우선됨
+    // 동점 시: 기존 보유팀 우선, 보유팀 없으면 MIN(claimedAt) ASC 기준으로 먼저 점령한 팀
     const districtMap = new Map<string, { team: string; spotCount: number }>();
     for (const row of rows) {
       const count = Number(row.spot_count);
       const current = districtMap.get(row.sigungucode);
-      if (!current || count > current.spotCount) {
+      if (!current) {
+        districtMap.set(row.sigungucode, { team: row.team, spotCount: count });
+      } else if (count > current.spotCount) {
+        districtMap.set(row.sigungucode, { team: row.team, spotCount: count });
+      } else if (count === current.spotCount && row.team === holderMap.get(row.sigungucode)) {
+        // 동점 시 기존 보유팀 우선
         districtMap.set(row.sigungucode, { team: row.team, spotCount: count });
       }
     }
 
     await this.dataSource.transaction(async (manager) => {
-      await Promise.all(
-        [...districtMap.entries()].map(([sigungucode, { team, spotCount }]) =>
-          manager.upsert(
-            DistrictClaim,
-            { sigungucode, team, spotCount },
-            { conflictPaths: ['sigungucode'] },
+      if (districtMap.size > 0) {
+        await Promise.all(
+          [...districtMap.entries()].map(([sigungucode, { team, spotCount }]) =>
+            manager.upsert(
+              DistrictClaim,
+              { sigungucode, team, spotCount },
+              { conflictPaths: ['sigungucode'] },
+            ),
           ),
-        ),
-      );
+        );
+        // 이번 배치에서 집계되지 않은 구 (점령자 없음) 제거
+        await manager.delete(DistrictClaim, {
+          sigungucode: Not(In([...districtMap.keys()])),
+        });
+      } else {
+        await manager.delete(DistrictClaim, {});
+      }
     });
 
     return { aggregated: districtMap.size };
