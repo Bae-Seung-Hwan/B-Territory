@@ -5,6 +5,7 @@ import * as path from 'path';
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 if (!process.env.TOUR_API_KEY) throw new Error('TOUR_API_KEY 환경변수가 필요합니다.');
+if (!process.env.DB_HOST) throw new Error('DB 환경변수(DB_HOST 등)가 설정되지 않았습니다. .env 파일을 확인하세요.');
 const SERVICE_KEY = process.env.TOUR_API_KEY as string;
 const BASE_URL = 'https://apis.data.go.kr/B551011/KorService2';
 const AREA_CODE = '6'; // 부산
@@ -58,9 +59,15 @@ async function fetchPage(pageNo: number): Promise<{ items: TourItem[]; total: nu
   return { items, total: Number(body?.totalCount ?? 0) };
 }
 
+function parseCoord(value?: string): number | null {
+  if (!value) return null;
+  const n = parseFloat(value);
+  return isFinite(n) ? n : null;
+}
+
 async function main() {
   const client = new Client({
-    host: process.env.DB_HOST ?? 'localhost',
+    host: process.env.DB_HOST,
     port: Number(process.env.DB_PORT ?? 5432),
     user: process.env.DB_USERNAME ?? 'postgres',
     password: process.env.DB_PASSWORD ?? 'postgres',
@@ -70,56 +77,65 @@ async function main() {
   await client.connect();
   console.log('DB 연결 성공');
 
-  // page 1을 한 번만 호출해 총 건수와 첫 페이지 데이터를 함께 확보
-  const { total, items: page1Items } = await fetchPage(1);
-  const totalPages = Math.ceil(total / NUM_OF_ROWS);
-  console.log(`총 ${total}건 / ${totalPages}페이지`);
+  try {
+    // page 1을 한 번만 호출해 총 건수와 첫 페이지 데이터를 함께 확보
+    const { total, items: page1Items } = await fetchPage(1);
+    const totalPages = Math.ceil(total / NUM_OF_ROWS);
+    console.log(`총 ${total}건 / ${totalPages}페이지`);
 
-  let inserted = 0;
-  let skipped = 0;
+    let inserted = 0;
+    let skipped = 0;
 
-  for (let page = 1; page <= totalPages; page++) {
-    process.stdout.write(`[${page}/${totalPages}] 처리 중...`);
-    const items = page === 1 ? page1Items : (await fetchPage(page)).items;
+    for (let page = 1; page <= totalPages; page++) {
+      process.stdout.write(`[${page}/${totalPages}] 처리 중...`);
+      const items = page === 1 ? page1Items : (await fetchPage(page)).items;
 
-    // 컬럼 목록은 spot.entity.ts와 동기화 필요 (overview, usetime, homepage는 areaBasedList2 미제공)
-    await client.query('BEGIN');
-    try {
-      for (const item of items) {
-        const result = await client.query(
-          `INSERT INTO spots
-             ("contentId", title, addr1, "mapX", "mapY", firstimage,
-              contenttypeid, areacode, sigungucode)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT ("contentId") DO NOTHING`,
-          [
-            item.contentid,
-            item.title ?? '',
-            item.addr1 ?? null,
-            item.mapx ? parseFloat(item.mapx) : null,
-            item.mapy ? parseFloat(item.mapy) : null,
-            item.firstimage ?? null,
-            item.contenttypeid ?? null,
-            item.areacode ?? null,
-            item.sigungucode ?? null,
-          ],
-        );
-        if ((result.rowCount ?? 0) > 0) inserted++;
-        else skipped++;
+      // 컬럼 목록은 spot.entity.ts와 동기화 필요 (overview, usetime, homepage는 areaBasedList2 미제공)
+      await client.query('BEGIN');
+      try {
+        for (const item of items) {
+          if (!item.title?.trim()) {
+            console.warn(`title 없음, 스킵: contentid=${item.contentid}`);
+            skipped++;
+            continue;
+          }
+
+          const result = await client.query(
+            `INSERT INTO spots
+               ("contentId", title, addr1, "mapX", "mapY", firstimage,
+                contenttypeid, areacode, sigungucode)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT ("contentId") DO NOTHING`,
+            [
+              item.contentid,
+              item.title,
+              item.addr1 ?? null,
+              parseCoord(item.mapx),
+              parseCoord(item.mapy),
+              item.firstimage ?? null,
+              item.contenttypeid ?? null,
+              item.areacode ?? null,
+              item.sigungucode ?? null,
+            ],
+          );
+          if ((result.rowCount ?? 0) > 0) inserted++;
+          else skipped++;
+        }
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
       }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw e;
+
+      console.log(` ${items.length}건 처리`);
+
+      if (page < totalPages) await new Promise((r) => setTimeout(r, 300));
     }
 
-    console.log(` ${items.length}건 처리`);
-
-    if (page < totalPages) await new Promise((r) => setTimeout(r, 300));
+    console.log(`\n완료: 신규 ${inserted}건 삽입, ${skipped}건 중복 스킵`);
+  } finally {
+    await client.end().catch(() => {});
   }
-
-  await client.end();
-  console.log(`\n완료: 신규 ${inserted}건 삽입, ${skipped}건 중복 스킵`);
 }
 
 main().catch((err) => {
