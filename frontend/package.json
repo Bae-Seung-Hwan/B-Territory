@@ -44,7 +44,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "jest",
+    "test": "jest --passWithNoTests --ci",
     "test:watch": "jest --watchAll"
   },
   "private": true,
@@ -52,6 +52,10 @@
     "@emnapi/wasi-threads": "1.2.1"
   },
   "jest": {
-    "preset": "jest-expo"
+    "preset": "jest-expo",
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/src/$1",
+      "\\.css$": "<rootDir>/__mocks__/fileMock.js"
+    }
   }
 }

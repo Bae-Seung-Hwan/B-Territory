@@ -14,7 +14,7 @@ on:
 
 jobs:
   check:
-    name: Type Check & Lint
+    name: Type Check, Lint & Build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -42,6 +42,12 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Security audit
+        run: npm audit --audit-level=critical
+
+      - name: Test
+        run: npm test
 
       - name: Build check
         run: npx expo export --platform web
