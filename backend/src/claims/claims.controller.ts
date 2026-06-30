@@ -43,7 +43,8 @@ export class ClaimsController {
     const firebaseUid: string = req.user.uid;
     const user = await this.usersService.findByFirebaseUid(firebaseUid);
     if (!user) throw new NotFoundException('등록되지 않은 사용자입니다.');
-    if (!user.team) throw new BadRequestException('팀이 배정되지 않은 사용자입니다.');
+    if (!user.team)
+      throw new BadRequestException('팀이 배정되지 않은 사용자입니다.');
     return this.claimsService.visit(dto, user.id, user.team);
   }
 

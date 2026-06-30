@@ -96,10 +96,7 @@ export class ClaimsService {
       );
     } catch (err) {
       await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
-        this.logger.error(
-          `Redis 방어 키 롤백 실패 spotId=${spotId}`,
-          redisErr,
-        );
+        this.logger.error(`Redis 방어 키 롤백 실패 spotId=${spotId}`, redisErr);
       });
       throw err;
     }
@@ -124,7 +121,9 @@ export class ClaimsService {
   async aggregateDistricts() {
     // 기존 구 점령 현황 로드 — 동점 시 기존 보유팀 우선 처리에 사용
     const currentHolders = await this.districtClaimRepo.find();
-    const holderMap = new Map(currentHolders.map((d) => [d.sigungucode, d.team]));
+    const holderMap = new Map(
+      currentHolders.map((d) => [d.sigungucode, d.team]),
+    );
 
     const rows = await this.dataSource.query<
       { sigungucode: string; team: string; spot_count: string }[]
@@ -149,7 +148,10 @@ export class ClaimsService {
         districtMap.set(row.sigungucode, { team: row.team, spotCount: count });
       } else if (count > current.spotCount) {
         districtMap.set(row.sigungucode, { team: row.team, spotCount: count });
-      } else if (count === current.spotCount && row.team === holderMap.get(row.sigungucode)) {
+      } else if (
+        count === current.spotCount &&
+        row.team === holderMap.get(row.sigungucode)
+      ) {
         // 동점 시 기존 보유팀 우선
         districtMap.set(row.sigungucode, { team: row.team, spotCount: count });
       }
