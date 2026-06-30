@@ -10,21 +10,21 @@ jest.mock('@/hooks/use-color-scheme', () => ({
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 describe('useTheme', () => {
-  it('light 모드일 때 light 색상을 반환한다', () => {
+  it('light 모드일 때 light 색상을 반환한다', async () => {
     (useColorScheme as jest.Mock).mockReturnValue('light');
-    const { result } = renderHook(() => useTheme());
+    const { result } = await renderHook(() => useTheme());
     expect(result.current).toEqual(Colors.light);
   });
 
-  it('dark 모드일 때 dark 색상을 반환한다', () => {
+  it('dark 모드일 때 dark 색상을 반환한다', async () => {
     (useColorScheme as jest.Mock).mockReturnValue('dark');
-    const { result } = renderHook(() => useTheme());
+    const { result } = await renderHook(() => useTheme());
     expect(result.current).toEqual(Colors.dark);
   });
 
-  it('unspecified일 때 light 색상을 반환한다', () => {
+  it('unspecified일 때 light 색상을 반환한다', async () => {
     (useColorScheme as jest.Mock).mockReturnValue('unspecified');
-    const { result } = renderHook(() => useTheme());
+    const { result } = await renderHook(() => useTheme());
     expect(result.current).toEqual(Colors.light);
   });
 });
