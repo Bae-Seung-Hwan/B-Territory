@@ -8,14 +8,14 @@ jest.mock('@/hooks/use-color-scheme', () => ({
 }));
 
 describe('HintRow', () => {
-  it('기본 props로 렌더링된다', () => {
-    const { getByText } = render(<HintRow />);
+  it('기본 props로 렌더링된다', async () => {
+    const { getByText } = await render(<HintRow />);
     expect(getByText('Try editing')).toBeTruthy();
     expect(getByText('app/index.tsx')).toBeTruthy();
   });
 
-  it('커스텀 title과 hint를 렌더링한다', () => {
-    const { getByText } = render(<HintRow title="파일 수정" hint="src/app/index.tsx" />);
+  it('커스텀 title과 hint를 렌더링한다', async () => {
+    const { getByText } = await render(<HintRow title="파일 수정" hint="src/app/index.tsx" />);
     expect(getByText('파일 수정')).toBeTruthy();
     expect(getByText('src/app/index.tsx')).toBeTruthy();
   });

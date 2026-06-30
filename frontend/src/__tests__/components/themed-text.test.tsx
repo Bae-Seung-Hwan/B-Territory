@@ -8,16 +8,16 @@ jest.mock('@/hooks/use-color-scheme', () => ({
 }));
 
 describe('ThemedText', () => {
-  it('텍스트를 렌더링한다', () => {
-    const { getByText } = render(<ThemedText>안녕하세요</ThemedText>);
+  it('텍스트를 렌더링한다', async () => {
+    const { getByText } = await render(<ThemedText>안녕하세요</ThemedText>);
     expect(getByText('안녕하세요')).toBeTruthy();
   });
 
-  it('모든 type prop에서 에러 없이 렌더링된다', () => {
+  it('모든 type prop에서 에러 없이 렌더링된다', async () => {
     const types = ['default', 'title', 'small', 'smallBold', 'subtitle', 'link', 'linkPrimary', 'code'] as const;
-    types.forEach((type) => {
-      const { getByText } = render(<ThemedText type={type}>텍스트</ThemedText>);
+    for (const type of types) {
+      const { getByText } = await render(<ThemedText type={type}>텍스트</ThemedText>);
       expect(getByText('텍스트')).toBeTruthy();
-    });
+    }
   });
 });

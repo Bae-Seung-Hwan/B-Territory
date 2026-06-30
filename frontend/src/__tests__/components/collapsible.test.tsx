@@ -24,26 +24,26 @@ jest.mock('expo-symbols', () => ({
 }));
 
 describe('Collapsible', () => {
-  it('제목을 렌더링한다', () => {
-    const { getByText } = render(<Collapsible title="섹션">내용</Collapsible>);
+  it('제목을 렌더링한다', async () => {
+    const { getByText } = await render(<Collapsible title="섹션">내용</Collapsible>);
     expect(getByText('섹션')).toBeTruthy();
   });
 
-  it('초기 상태에서 자식 요소가 숨겨져 있다', () => {
-    const { queryByText } = render(<Collapsible title="섹션">숨겨진 내용</Collapsible>);
+  it('초기 상태에서 자식 요소가 숨겨져 있다', async () => {
+    const { queryByText } = await render(<Collapsible title="섹션">숨겨진 내용</Collapsible>);
     expect(queryByText('숨겨진 내용')).toBeNull();
   });
 
-  it('제목을 누르면 자식 요소가 나타난다', () => {
-    const { getByText, queryByText } = render(
+  it('제목을 누르면 자식 요소가 나타난다', async () => {
+    const { getByText, queryByText } = await render(
       <Collapsible title="섹션">표시될 내용</Collapsible>
     );
     fireEvent.press(getByText('섹션'));
     expect(queryByText('표시될 내용')).toBeTruthy();
   });
 
-  it('제목을 두 번 누르면 자식 요소가 다시 숨겨진다', () => {
-    const { getByText, queryByText } = render(
+  it('제목을 두 번 누르면 자식 요소가 다시 숨겨진다', async () => {
+    const { getByText, queryByText } = await render(
       <Collapsible title="섹션">토글 내용</Collapsible>
     );
     fireEvent.press(getByText('섹션'));
