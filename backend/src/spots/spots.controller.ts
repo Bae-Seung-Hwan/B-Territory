@@ -1,4 +1,11 @@
-import { Controller, DefaultValuePipe, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import {
+  Controller,
+  DefaultValuePipe,
+  Get,
+  Param,
+  ParseIntPipe,
+  Query,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { SpotsService } from './spots.service';
 
@@ -11,9 +18,24 @@ export class SpotsController {
   @ApiOperation({ summary: '관광지 목록 조회' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'areacode', required: false, type: String, description: '지역코드 (부산=6)' })
-  @ApiQuery({ name: 'sigungucode', required: false, type: String, description: '구 코드' })
-  @ApiQuery({ name: 'contenttypeid', required: false, type: String, description: '콘텐츠 유형' })
+  @ApiQuery({
+    name: 'areacode',
+    required: false,
+    type: String,
+    description: '지역코드 (부산=6)',
+  })
+  @ApiQuery({
+    name: 'sigungucode',
+    required: false,
+    type: String,
+    description: '구 코드',
+  })
+  @ApiQuery({
+    name: 'contenttypeid',
+    required: false,
+    type: String,
+    description: '콘텐츠 유형',
+  })
   @ApiResponse({ status: 200, description: '관광지 목록 반환' })
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
@@ -22,7 +44,13 @@ export class SpotsController {
     @Query('sigungucode') sigungucode?: string,
     @Query('contenttypeid') contenttypeid?: string,
   ) {
-    return this.spotsService.findAll({ page, limit, areacode, sigungucode, contenttypeid });
+    return this.spotsService.findAll({
+      page,
+      limit,
+      areacode,
+      sigungucode,
+      contenttypeid,
+    });
   }
 
   @Get(':id')
