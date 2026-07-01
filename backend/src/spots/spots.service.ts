@@ -141,10 +141,24 @@ export class SpotsService {
     // API 응답에 없는 관광지 삭제 (폐업·제거된 관광지 정리)
     let deleted = 0;
     if (syncedContentIds.length > 0) {
+      const existingCount = await this.spotRepository.count({
+        where: { areacode: AREA_CODE },
+      });
+
+      if (syncedContentIds.length < existingCount * 0.5) {
+        this.logger.warn(
+          `동기화 건수(${syncedContentIds.length})가 기존(${existingCount})의 50% 미만 — 삭제 스킵`,
+        );
+        return { synced: syncedContentIds.length, deleted: 0 };
+      }
+
       const result = await this.spotRepository
         .createQueryBuilder()
         .delete()
-        .where('"contentId" NOT IN (:...ids)', { ids: syncedContentIds })
+        .where('areacode = :areaCode AND "contentId" NOT IN (:...ids)', {
+          areaCode: AREA_CODE,
+          ids: syncedContentIds,
+        })
         .execute();
       deleted = result.affected ?? 0;
     }
