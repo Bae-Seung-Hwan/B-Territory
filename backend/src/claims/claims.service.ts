@@ -106,16 +106,23 @@ export class ClaimsService {
 
   async getSpotClaim(spotId: number) {
     const claim = await this.spotClaimRepo.findOne({ where: { spotId } });
-    if (!claim) return { spotId, team: null, claimedAt: null };
-    return claim;
+    return {
+      spotId,
+      team: claim?.team ?? null,
+      claimedAt: claim?.claimedAt ?? null,
+    };
   }
 
   async getDistrictClaim(sigungucode: string) {
     const claim = await this.districtClaimRepo.findOne({
       where: { sigungucode },
     });
-    if (!claim) return { sigungucode, team: null, calculatedAt: null };
-    return claim;
+    return {
+      sigungucode,
+      team: claim?.team ?? null,
+      spotCount: claim?.spotCount ?? 0,
+      calculatedAt: claim?.calculatedAt ?? null,
+    };
   }
 
   async aggregateDistricts() {
@@ -134,6 +141,7 @@ export class ClaimsService {
          COUNT(*) AS spot_count
        FROM spot_claims sc
        JOIN spots s ON s.id = sc."spotId"
+       WHERE s.sigungucode IS NOT NULL
        GROUP BY s.sigungucode, sc.team
        ORDER BY s.sigungucode, COUNT(*) DESC, MIN(sc."claimedAt") ASC`,
     );
