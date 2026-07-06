@@ -5,7 +5,10 @@ import * as path from 'path';
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 if (!process.env.TOUR_API_KEY) throw new Error('TOUR_API_KEY 환경변수가 필요합니다.');
-if (!process.env.DB_HOST) throw new Error('DB 환경변수(DB_HOST 등)가 설정되지 않았습니다. .env 파일을 확인하세요.');
+const REQUIRED_DB_VARS = ['DB_HOST', 'DB_USERNAME', 'DB_PASSWORD', 'DB_NAME'] as const;
+for (const key of REQUIRED_DB_VARS) {
+  if (!process.env[key]) throw new Error(`${key} 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.`);
+}
 const SERVICE_KEY = process.env.TOUR_API_KEY as string;
 const BASE_URL = 'https://apis.data.go.kr/B551011/KorService2';
 const AREA_CODE = '6'; // 부산
@@ -69,9 +72,9 @@ async function main() {
   const client = new Client({
     host: process.env.DB_HOST,
     port: Number(process.env.DB_PORT ?? 5432),
-    user: process.env.DB_USERNAME ?? 'postgres',
-    password: process.env.DB_PASSWORD ?? 'postgres',
-    database: process.env.DB_NAME ?? 'b_territory',
+    user: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
   });
 
   await client.connect();
