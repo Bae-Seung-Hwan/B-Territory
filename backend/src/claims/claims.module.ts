@@ -41,10 +41,21 @@ export class ClaimsModule implements OnModuleInit {
         attempts: 3,
         backoff: { type: 'exponential', delay: 60000 },
       };
-      await this.queue.add('aggregate', {}, { repeat: { cron: '0 0 * * *' }, ...jobOptions });
-      await this.queue.add('aggregate', {}, { repeat: { cron: '0 12 * * *' }, ...jobOptions });
+      await this.queue.add(
+        'aggregate',
+        {},
+        { repeat: { cron: '0 0 * * *' }, ...jobOptions },
+      );
+      await this.queue.add(
+        'aggregate',
+        {},
+        { repeat: { cron: '0 12 * * *' }, ...jobOptions },
+      );
     } catch (err) {
-      this.logger.error('district-aggregation 잡 등록 실패 (Redis 연결 확인 필요)', err);
+      this.logger.error(
+        'district-aggregation 잡 등록 실패 (Redis 연결 확인 필요)',
+        err,
+      );
     }
   }
 }
