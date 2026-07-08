@@ -1,0 +1,351 @@
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
+
+@Injectable()
+export class RedisService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RedisService.name);
+  private client: Redis;
+
+  constructor(private readonly config: ConfigService) {}
+
+  onModuleInit() {
+    this.client = new Redis({
+      host: this.config.get<string>('REDIS_HOST', 'localhost'),
+      port: this.config.get<number>('REDIS_PORT', 6379),
+    });
+    this.client.on('error', (err) => {
+      this.logger.error(`connection error: ${err.message}`);
+    });
+  }
+
+  async onModuleDestroy() {
+    await this.client.quit();
+  }
+
+  async get(key: string): Promise<string | null> {
+    return this.client.get(key);
+  }
+
+  async set(key: string, value: string, ttlSeconds: number): Promise<void> {
+    await this.client.set(key, value, 'EX', ttlSeconds);
+  }
+
+  /** GET + TTL in a single pipeline to avoid TOCTOU between two calls */
+  async getWithTtl(
+    key: string,
+  ): Promise<{ value: string | null; ttl: number }> {
+    const [[, value], [, ttl]] = (await this.client
+      .pipeline()
+      .get(key)
+      .ttl(key)
+      .exec()) as [[null, string | null], [null, number]];
+    return { value, ttl };
+  }
+
+  async del(key: string): Promise<void> {
+    await this.client.del(key);
+  }
+
+  /**
+   * 방어 타이머 원자 연산 (Lua 스크립트)
+   * - 키 없음: 타이머 신규 설정 후 'ok'
+   * - 같은 팀:  타이머 리셋 없이 'ok' (무한 리셋 방지)
+   * - 다른 팀:  'blocked' + 현재 방어팀 + 남은 초
+   */
+  async claimDefense(
+    key: string,
+    team: string,
+    ttl: number,
+  ): Promise<
+    | { status: 'ok'; remaining: number }
+    | { status: 'blocked'; defenseTeam: string; remaining: number }
+  > {
+    const lua = `
+      local v = redis.call('GET', KEYS[1])
+      if v == false then
+        redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+        return {'ok', tonumber(ARGV[2])}
+      elseif v == ARGV[1] then
+        local remaining = redis.call('TTL', KEYS[1])
+        return {'ok', remaining}
+      else
+        local remaining = redis.call('TTL', KEYS[1])
+        return {'blocked', v, remaining}
+      end
+    `;
+    const result = (await this.client.eval(lua, 1, key, team, String(ttl))) as (
+      | string
+      | number
+    )[];
+    if (result[0] === 'ok')
+      return { status: 'ok', remaining: Number(result[1]) };
+    return {
+      status: 'blocked',
+      defenseTeam: result[1] as string,
+      remaining: Number(result[2]),
+    };
+  }
+
+  private static readonly GEO_KEY = 'geo:users';
+  // GEO 멤버 자체는 개별 TTL을 가질 수 없어, 정리를 위해 마지막 갱신 시각을 별도 ZSET에 기록해둔다.
+  private static readonly LASTSEEN_KEY = 'geo:lastseen';
+  private static readonly META_TTL = 120; // 위치 미갱신 시 자동 소멸 (초)
+
+  private metaKey(userId: string): string {
+    return `user:meta:${userId}`;
+  }
+
+  /** 유저 최신 좌표 등록 + 팀/소켓 메타 갱신 (메타는 TTL로 자동 소멸, geo:users는 pruneStaleGeo로 정리) */
+  async geoAdd(
+    userId: string,
+    lat: number,
+    lng: number,
+    team: string,
+    socketId: string,
+  ): Promise<void> {
+    await this.client
+      .pipeline()
+      .geoadd(RedisService.GEO_KEY, lng, lat, userId)
+      .zadd(RedisService.LASTSEEN_KEY, Date.now(), userId)
+      .hset(this.metaKey(userId), { team, socketId })
+      .expire(this.metaKey(userId), RedisService.META_TTL)
+      .exec();
+  }
+
+  async geoRemove(userId: string): Promise<void> {
+    await this.client
+      .pipeline()
+      .zrem(RedisService.GEO_KEY, userId)
+      .zrem(RedisService.LASTSEEN_KEY, userId)
+      .del(this.metaKey(userId))
+      .exec();
+  }
+
+  async getUserMeta(
+    userId: string,
+  ): Promise<{ team: string; socketId: string } | null> {
+    const meta = await this.client.hgetall(this.metaKey(userId));
+    if (!meta.team || !meta.socketId) return null;
+    return { team: meta.team, socketId: meta.socketId };
+  }
+
+  /**
+   * maxAgeSeconds보다 오래 갱신되지 않은 유저를 geo:users/geo:lastseen에서 제거한다.
+   * 비정상 종료(handleDisconnect 미호출) 등으로 남은 유령 좌표를 정리하기 위한 주기적 스윕용.
+   */
+  async pruneStaleGeo(maxAgeSeconds: number): Promise<number> {
+    const cutoff = Date.now() - maxAgeSeconds * 1000;
+    const staleIds = await this.client.zrangebyscore(
+      RedisService.LASTSEEN_KEY,
+      '-inf',
+      cutoff,
+    );
+    if (staleIds.length === 0) return 0;
+    await this.client
+      .pipeline()
+      .zrem(RedisService.GEO_KEY, ...staleIds)
+      .zrem(RedisService.LASTSEEN_KEY, ...staleIds)
+      .exec();
+    return staleIds.length;
+  }
+
+  /** 반경(m) 내 후보 유저 id 목록 (본인 포함 여부는 호출부에서 필터) */
+  async geoSearch(
+    lat: number,
+    lng: number,
+    radiusM: number,
+  ): Promise<string[]> {
+    const members = (await this.client.geosearch(
+      RedisService.GEO_KEY,
+      'FROMLONLAT',
+      lng,
+      lat,
+      'BYRADIUS',
+      radiusM,
+      'm',
+      'ASC',
+    )) as string[];
+    return members;
+  }
+
+  async geoPos(userId: string): Promise<{ lat: number; lng: number } | null> {
+    const [pos] = await this.client.geopos(RedisService.GEO_KEY, userId);
+    if (!pos) return null;
+    return { lng: Number(pos[0]), lat: Number(pos[1]) };
+  }
+
+  async geoPosMany(
+    userIds: string[],
+  ): Promise<Map<string, { lat: number; lng: number }>> {
+    const map = new Map<string, { lat: number; lng: number }>();
+    if (userIds.length === 0) return map;
+    const positions = await this.client.geopos(
+      RedisService.GEO_KEY,
+      ...userIds,
+    );
+    userIds.forEach((id, i) => {
+      const pos = positions[i];
+      if (pos) map.set(id, { lng: Number(pos[0]), lat: Number(pos[1]) });
+    });
+    return map;
+  }
+
+  /**
+   * SET NX EX 기반 1회성 락 (조우 알림 쿨다운, 결투 중복 방지 등에 공용 사용).
+   * token을 지정하면 releaseLock/extendLock에서 소유권(CAS) 검증에 쓸 수 있다.
+   */
+  async tryAcquireLock(
+    key: string,
+    ttlSeconds: number,
+    token: string = '1',
+  ): Promise<boolean> {
+    const result = await this.client.set(key, token, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  }
+
+  /**
+   * token을 주면 현재 값이 token과 일치할 때만 삭제(CAS) — 이미 만료되고 다른 소유자가
+   * 새로 잡은 락을 실수로 지우는 것을 방지한다. token을 생략하면 무조건 삭제(레거시 동작).
+   */
+  async releaseLock(key: string, token?: string): Promise<void> {
+    if (token === undefined) {
+      await this.client.del(key);
+      return;
+    }
+    const lua = `
+      if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+      end
+      return 0
+    `;
+    await this.client.eval(lua, 1, key, token);
+  }
+
+  /** 현재 값이 token과 일치할 때만 TTL을 연장(CAS) — 소유자가 아니면 조용히 무시(false 반환) */
+  async extendLock(
+    key: string,
+    ttlSeconds: number,
+    token: string,
+  ): Promise<boolean> {
+    const lua = `
+      if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+      end
+      return 0
+    `;
+    const result = await this.client.eval(
+      lua,
+      1,
+      key,
+      token,
+      String(ttlSeconds),
+    );
+    return Number(result) === 1;
+  }
+
+  async setPenalty(userId: string, ttlSeconds: number): Promise<void> {
+    await this.client.set(`penalty:${userId}`, '1', 'EX', ttlSeconds);
+  }
+
+  async hasPenalty(userId: string): Promise<boolean> {
+    const value = await this.client.get(`penalty:${userId}`);
+    return value !== null;
+  }
+
+  /**
+   * 결투 결과 자가신고 합의 (Lua 원자 연산)
+   * - 첫 신고: 'waiting'
+   * - 두번째 신고가 첫 신고와 같은 승자: 'confirmed' + winnerId
+   * - 두번째 신고가 첫 신고와 다른 승자: 'conflict'
+   */
+  async submitDuelResult(
+    duelId: number,
+    reporterId: string,
+    winnerId: string,
+    ttlSeconds: number,
+  ): Promise<
+    | { status: 'waiting' }
+    | { status: 'confirmed'; winnerId: string }
+    | { status: 'conflict' }
+  > {
+    const key = `duel:result:${duelId}`;
+    const lua = `
+      redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+      redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+      local all = redis.call('HGETALL', KEYS[1])
+      local winners = {}
+      local count = 0
+      for i = 1, #all, 2 do
+        count = count + 1
+        winners[count] = all[i + 1]
+      end
+      if count < 2 then
+        return {'waiting'}
+      end
+      if winners[1] == winners[2] then
+        return {'confirmed', winners[1]}
+      end
+      return {'conflict'}
+    `;
+    const result = (await this.client.eval(
+      lua,
+      1,
+      key,
+      reporterId,
+      winnerId,
+      String(ttlSeconds),
+    )) as string[];
+    if (result[0] === 'waiting') return { status: 'waiting' };
+    if (result[0] === 'confirmed')
+      return { status: 'confirmed', winnerId: result[1] };
+    return { status: 'conflict' };
+  }
+
+  private static readonly NOTIFICATION_MAX = 50;
+
+  private notifyKey(userId: string): string {
+    return `notify:${userId}`;
+  }
+
+  /**
+   * 대상 유저의 소켓이 현재 이 프로세스에서 확인되지 않을 때(메타 TTL 만료, 순간적 재접속 등)
+   * 이벤트를 잃어버리지 않도록 큐에 쌓아둔다. handleConnection에서 drainNotifications로 재생한다.
+   */
+  async queueNotification(
+    userId: string,
+    event: string,
+    payload: unknown,
+    ttlSeconds: number,
+  ): Promise<void> {
+    const key = this.notifyKey(userId);
+    const entry = JSON.stringify({ event, payload });
+    await this.client
+      .pipeline()
+      .rpush(key, entry)
+      .ltrim(key, -RedisService.NOTIFICATION_MAX, -1)
+      .expire(key, ttlSeconds)
+      .exec();
+  }
+
+  /** 큐에 쌓인 알림을 원자적으로(MULTI) 읽고 비운다 — 드레인 도중 새로 들어온 알림을 잃지 않는다 */
+  async drainNotifications(
+    userId: string,
+  ): Promise<{ event: string; payload: unknown }[]> {
+    const key = this.notifyKey(userId);
+    const results = await this.client
+      .multi()
+      .lrange(key, 0, -1)
+      .del(key)
+      .exec();
+    const entries = (results?.[0]?.[1] as string[] | undefined) ?? [];
+    return entries.map(
+      (raw) => JSON.parse(raw) as { event: string; payload: unknown },
+    );
+  }
+}

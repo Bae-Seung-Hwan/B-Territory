@@ -1,12 +1,17 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bull';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { SpotsModule } from './spots/spots.module';
 import { FirebaseModule } from './common/firebase/firebase.module';
+import { RedisModule } from './common/redis/redis.module';
+import { ClaimsModule } from './claims/claims.module';
+import { DuelsModule } from './duels/duels.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -29,10 +34,24 @@ import { FirebaseModule } from './common/firebase/firebase.module';
         logging: config.get<string>('NODE_ENV') === 'development',
       }),
     }),
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        redis: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+        },
+      }),
+    }),
     FirebaseModule,
+    RedisModule,
     AuthModule,
     UsersModule,
     SpotsModule,
+    ClaimsModule,
+    DuelsModule,
+    RealtimeModule,
   ],
   controllers: [AppController],
   providers: [AppService],
