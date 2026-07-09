@@ -19,7 +19,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "seed:spots": "ts-node -r tsconfig-paths/register scripts/seed-spots.ts"
+    "seed:spots": "ts-node -r tsconfig-paths/register scripts/seed-spots-csv.ts"
   },
   "dependencies": {
     "@nestjs/bull": "^11.0.4",
