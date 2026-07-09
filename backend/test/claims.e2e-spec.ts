@@ -8,8 +8,6 @@ import { AppModule } from './../src/app.module';
 import { FirebaseService } from '../src/common/firebase/firebase.service';
 import { User } from '../src/users/entities/user.entity';
 import { Spot } from '../src/spots/entities/spot.entity';
-import { SpotClaim } from '../src/claims/entities/spot-claim.entity';
-import { DistrictClaim } from '../src/claims/entities/district-claim.entity';
 import { ClaimsService } from '../src/claims/claims.service';
 
 const mockFirebaseService = {
@@ -20,12 +18,34 @@ const mockFirebaseService = {
 const SPOT_LAT = 35.1796;
 const SPOT_LNG = 129.0756;
 
+interface VisitSuccessBody {
+  success: boolean;
+  spotId: number;
+  team: string;
+  defenseSeconds: number;
+}
+
+interface ErrorBody {
+  message: string;
+}
+
+interface SpotClaimBody {
+  spotId: number;
+  team: string | null;
+  claimedAt: string | null;
+}
+
+interface DistrictClaimBody {
+  sigungucode: string;
+  team: string | null;
+  spotCount: number;
+  calculatedAt: string | null;
+}
+
 describe('Claims (e2e)', () => {
   let app: INestApplication<App>;
   let userRepo: Repository<User>;
   let spotRepo: Repository<Spot>;
-  let spotClaimRepo: Repository<SpotClaim>;
-  let districtClaimRepo: Repository<DistrictClaim>;
   let claimsService: ClaimsService;
   let dataSource: DataSource;
   let spotId: number;
@@ -57,8 +77,6 @@ describe('Claims (e2e)', () => {
 
     userRepo = moduleFixture.get(getRepositoryToken(User));
     spotRepo = moduleFixture.get(getRepositoryToken(Spot));
-    spotClaimRepo = moduleFixture.get(getRepositoryToken(SpotClaim));
-    districtClaimRepo = moduleFixture.get(getRepositoryToken(DistrictClaim));
     claimsService = moduleFixture.get(ClaimsService);
     dataSource = moduleFixture.get(DataSource);
 
@@ -110,8 +128,9 @@ describe('Claims (e2e)', () => {
       .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
       .expect(201);
 
-    expect(res.body).toMatchObject({ success: true, spotId, team: 'A' });
-    expect(res.body.defenseSeconds).toBeGreaterThan(0);
+    const body = res.body as VisitSuccessBody;
+    expect(body).toMatchObject({ success: true, spotId, team: 'A' });
+    expect(body.defenseSeconds).toBeGreaterThan(0);
   });
 
   it('시나리오 2: 50m 초과 좌표 → 400 방문 인증 실패', async () => {
@@ -121,7 +140,7 @@ describe('Claims (e2e)', () => {
       .send({ spotId, lat: SPOT_LAT + 0.01, lng: SPOT_LNG })
       .expect(400);
 
-    expect(res.body.message).toContain('방문 인증 실패');
+    expect((res.body as ErrorBody).message).toContain('방문 인증 실패');
   });
 
   it('시나리오 3: 5분 내 다른 팀 방문 → 409 방어 시간 중 + 남은 초 반환', async () => {
@@ -131,8 +150,9 @@ describe('Claims (e2e)', () => {
       .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
       .expect(409);
 
-    expect(res.body.message).toContain('방어 시간 중');
-    expect(res.body.message).toMatch(/\d+초/);
+    const body = res.body as ErrorBody;
+    expect(body.message).toContain('방어 시간 중');
+    expect(body.message).toMatch(/\d+초/);
   });
 
   it('시나리오 4: GET /claims/spots/:spotId — 점령 현황 정상 반환', async () => {
@@ -140,8 +160,9 @@ describe('Claims (e2e)', () => {
       .get(`/api/claims/spots/${spotId}`)
       .expect(200);
 
-    expect(res.body).toMatchObject({ spotId, team: 'A' });
-    expect(res.body.claimedAt).not.toBeNull();
+    const body = res.body as SpotClaimBody;
+    expect(body).toMatchObject({ spotId, team: 'A' });
+    expect(body.claimedAt).not.toBeNull();
   });
 
   it('시나리오 5: GET /claims/districts/:sigungucode — 구 단위 현황 정상 반환', async () => {
@@ -151,12 +172,13 @@ describe('Claims (e2e)', () => {
       .get(`/api/claims/districts/${sigungucode}`)
       .expect(200);
 
-    expect(res.body).toMatchObject({
+    const body = res.body as DistrictClaimBody;
+    expect(body).toMatchObject({
       sigungucode,
       team: 'A',
       spotCount: 1,
     });
-    expect(res.body.calculatedAt).not.toBeNull();
+    expect(body.calculatedAt).not.toBeNull();
   });
 
   it('시나리오 6: spotId에 음수 또는 문자 전송 → 400 validation 오류', async () => {
@@ -180,6 +202,6 @@ describe('Claims (e2e)', () => {
       .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
       .expect(400);
 
-    expect(res.body.message).toContain('팀이 배정되지 않은');
+    expect((res.body as ErrorBody).message).toContain('팀이 배정되지 않은');
   });
 });
