@@ -8,7 +8,7 @@ export default function OnboardingScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>B-Territory</Text>
       <Text style={styles.subtitle}>부산 점령 관광 게임</Text>
-      <TouchableOpacity style={styles.button} onPress={() => router.push('/(auth)/nationality')}>
+      <TouchableOpacity style={styles.button} onPress={() => router.push('/(auth)/login')}>
         <Text style={styles.buttonText}>시작하기</Text>
       </TouchableOpacity>
     </View>
