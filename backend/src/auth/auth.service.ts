@@ -1,6 +1,11 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class AuthService {
@@ -19,6 +24,17 @@ export class AuthService {
       team: nationality,
     });
 
+    return this.toProfile(user);
+  }
+
+  async getMe(firebaseUid: string) {
+    const user = await this.usersService.findByFirebaseUid(firebaseUid);
+    if (!user) throw new NotFoundException('등록되지 않은 사용자입니다.');
+
+    return this.toProfile(user);
+  }
+
+  private toProfile(user: User) {
     return {
       id: user.id,
       email: user.email,

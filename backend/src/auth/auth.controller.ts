@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -26,5 +26,15 @@ export class AuthController {
     @Req() req: { user: { uid: string; email: string } },
   ) {
     return this.authService.register(dto, req.user.uid, req.user.email);
+  }
+
+  @Get('me')
+  @UseGuards(FirebaseAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '내 프로필 조회 (가입 여부 확인)' })
+  @ApiResponse({ status: 200, description: '가입된 사용자의 프로필 반환' })
+  @ApiResponse({ status: 404, description: '등록되지 않은 사용자' })
+  getMe(@Req() req: { user: { uid: string } }) {
+    return this.authService.getMe(req.user.uid);
   }
 }
