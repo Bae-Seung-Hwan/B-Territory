@@ -1,20 +1,22 @@
 import { View, Text, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useGameStore } from '@/store/useGameStore';
+import { useTranslation } from '@/i18n';
 
 export function MapHUD() {
   const insets = useSafeAreaInsets();
   const topTeam = useGameStore((s) => s.topTeam);
   const capitalDistrict = useGameStore((s) => s.capitalDistrict);
+  const { t } = useTranslation();
 
   return (
     <View style={[styles.container, { top: insets.top + 8 }]}>
       <View style={styles.pill}>
-        <Text style={styles.label}>1위 팀</Text>
+        <Text style={styles.label}>{t('map.hud.topTeam')}</Text>
         <Text style={styles.value}>{topTeam ?? '—'}</Text>
       </View>
       <View style={styles.pill}>
-        <Text style={styles.label}>이번 주 수도</Text>
+        <Text style={styles.label}>{t('map.hud.capitalDistrict')}</Text>
         <Text style={styles.value}>{capitalDistrict ?? '—'}</Text>
       </View>
     </View>

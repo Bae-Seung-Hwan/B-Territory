@@ -1,11 +1,14 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from '@/i18n';
 
 export default function ProfileScreen() {
+  const { t } = useTranslation();
+
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>내정보</Text>
-      <Text style={styles.placeholder}>유저 프로필 · 점령 통계가 표시됩니다</Text>
+      <Text style={styles.title}>{t('profile.title')}</Text>
+      <Text style={styles.placeholder}>{t('profile.placeholder')}</Text>
     </SafeAreaView>
   );
 }

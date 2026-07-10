@@ -1,11 +1,13 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
+import { useTranslation } from '@/i18n';
 
 export function DuelRequest() {
   const showDuelRequest = useOverlayStore((s) => s.showDuelRequest);
   const enemyInfo = useOverlayStore((s) => s.enemyInfo);
   const setShowDuelRequest = useOverlayStore((s) => s.setShowDuelRequest);
   const setShowMiniGame = useOverlayStore((s) => s.setShowMiniGame);
+  const { t } = useTranslation();
 
   const handleAccept = () => {
     setShowDuelRequest(false);
@@ -16,17 +18,19 @@ export function DuelRequest() {
     <Modal visible={showDuelRequest} transparent animationType="slide" statusBarTranslucent>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          <Text style={styles.title}>⚔️ 결투 신청</Text>
+          <Text style={styles.title}>⚔️ {t('overlay.duelRequest.title')}</Text>
           {enemyInfo && (
-            <Text style={styles.body}>{enemyInfo.nationality} 팀에게 결투를 신청합니다</Text>
+            <Text style={styles.body}>
+              {t('overlay.duelRequest.body', { team: enemyInfo.nationality })}
+            </Text>
           )}
-          <Text style={styles.hint}>미니게임에서 승리하면 해당 구역을 점령합니다</Text>
+          <Text style={styles.hint}>{t('overlay.duelRequest.hint')}</Text>
           <View style={styles.actions}>
             <TouchableOpacity style={styles.btnCancel} onPress={() => setShowDuelRequest(false)}>
-              <Text style={styles.btnCancelText}>취소</Text>
+              <Text style={styles.btnCancelText}>{t('overlay.duelRequest.cancel')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.btnAccept} onPress={handleAccept}>
-              <Text style={styles.btnAcceptText}>결투 시작</Text>
+              <Text style={styles.btnAcceptText}>{t('overlay.duelRequest.start')}</Text>
             </TouchableOpacity>
           </View>
         </View>

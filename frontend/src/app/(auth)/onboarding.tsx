@@ -1,15 +1,17 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useTranslation } from '@/i18n';
 
 export default function OnboardingScreen() {
   const router = useRouter();
+  const { t } = useTranslation();
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>B-Territory</Text>
-      <Text style={styles.subtitle}>부산 점령 관광 게임</Text>
+      <Text style={styles.subtitle}>{t('onboarding.subtitle')}</Text>
       <TouchableOpacity style={styles.button} onPress={() => router.push('/(auth)/login')}>
-        <Text style={styles.buttonText}>시작하기</Text>
+        <Text style={styles.buttonText}>{t('onboarding.start')}</Text>
       </TouchableOpacity>
     </View>
   );

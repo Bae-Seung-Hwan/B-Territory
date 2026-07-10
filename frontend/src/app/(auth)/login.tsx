@@ -11,10 +11,12 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useUserStore } from '@/store/useUserStore';
+import { useTranslation } from '@/i18n';
 
 export default function LoginScreen() {
   const router = useRouter();
   const setAuthenticated = useUserStore((s) => s.setAuthenticated);
+  const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
@@ -28,7 +30,7 @@ export default function LoginScreen() {
   };
 
   const handleGoogleLogin = () => {
-    Alert.alert('준비 중', 'Google 로그인은 Firebase 연동 후 지원됩니다.');
+    Alert.alert(t('auth.login.googleComingSoonTitle'), t('auth.login.googleComingSoonMessage'));
   };
 
   return (
@@ -36,12 +38,12 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.title}>로그인</Text>
-      <Text style={styles.subtitle}>B-Territory에 오신 것을 환영합니다</Text>
+      <Text style={styles.title}>{t('auth.login.title')}</Text>
+      <Text style={styles.subtitle}>{t('auth.login.subtitle')}</Text>
 
       <TextInput
         style={styles.input}
-        placeholder="이메일"
+        placeholder={t('auth.login.emailPlaceholder')}
         placeholderTextColor="#666"
         value={email}
         onChangeText={setEmail}
@@ -50,7 +52,7 @@ export default function LoginScreen() {
       />
       <TextInput
         style={styles.input}
-        placeholder="비밀번호"
+        placeholder={t('auth.login.passwordPlaceholder')}
         placeholderTextColor="#666"
         value={password}
         onChangeText={setPassword}
@@ -62,17 +64,17 @@ export default function LoginScreen() {
         onPress={handleLogin}
         disabled={!canSubmit}
       >
-        <Text style={styles.buttonText}>로그인</Text>
+        <Text style={styles.buttonText}>{t('auth.login.submit')}</Text>
       </TouchableOpacity>
 
       <View style={styles.divider}>
         <View style={styles.dividerLine} />
-        <Text style={styles.dividerText}>또는</Text>
+        <Text style={styles.dividerText}>{t('auth.login.or')}</Text>
         <View style={styles.dividerLine} />
       </View>
 
       <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin}>
-        <Text style={styles.googleButtonText}>Google로 계속하기</Text>
+        <Text style={styles.googleButtonText}>{t('auth.login.google')}</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -80,7 +82,8 @@ export default function LoginScreen() {
         onPress={() => router.push('/(auth)/register')}
       >
         <Text style={styles.registerLinkText}>
-          아직 계정이 없으신가요? <Text style={styles.registerLinkAccent}>회원가입 하기</Text>
+          {t('auth.login.noAccount')}{' '}
+          <Text style={styles.registerLinkAccent}>{t('auth.login.registerLink')}</Text>
         </Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>

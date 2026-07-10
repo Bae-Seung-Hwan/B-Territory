@@ -1,11 +1,14 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from '@/i18n';
 
 export default function RankingScreen() {
+  const { t } = useTranslation();
+
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>랭킹</Text>
-      <Text style={styles.placeholder}>국가별 · 개인별 랭킹이 표시됩니다</Text>
+      <Text style={styles.title}>{t('ranking.title')}</Text>
+      <Text style={styles.placeholder}>{t('ranking.placeholder')}</Text>
     </SafeAreaView>
   );
 }

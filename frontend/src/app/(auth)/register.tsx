@@ -10,18 +10,20 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useUserStore } from '@/store/useUserStore';
+import { useTranslation } from '@/i18n';
 
 const NATIONALITIES = [
-  { code: 'KR', label: '🇰🇷 한국' },
-  { code: 'JP', label: '🇯🇵 일본' },
-  { code: 'US', label: '🇺🇸 미국' },
-  { code: 'CN', label: '🇨🇳 중국' },
-  { code: 'FR', label: '🇫🇷 프랑스' },
-];
+  { code: 'KR', flag: '🇰🇷' },
+  { code: 'JP', flag: '🇯🇵' },
+  { code: 'US', flag: '🇺🇸' },
+  { code: 'CN', flag: '🇨🇳' },
+  { code: 'FR', flag: '🇫🇷' },
+] as const;
 
 export default function RegisterScreen() {
   const router = useRouter();
   const { setNickname, setNationality, setAuthenticated } = useUserStore();
+  const { t } = useTranslation();
   const [nickname, setNicknameInput] = useState('');
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
 
@@ -45,20 +47,20 @@ export default function RegisterScreen() {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>회원가입</Text>
-        <Text style={styles.subtitle}>닉네임과 국적을 선택하세요</Text>
+        <Text style={styles.title}>{t('auth.register.title')}</Text>
+        <Text style={styles.subtitle}>{t('auth.register.subtitle')}</Text>
 
         <TextInput
           style={styles.input}
-          placeholder="닉네임 (2~20자)"
+          placeholder={t('auth.register.nicknamePlaceholder')}
           placeholderTextColor="#666"
           value={nickname}
           onChangeText={setNicknameInput}
           maxLength={20}
         />
 
-        <Text style={styles.sectionLabel}>국적 선택</Text>
-        <Text style={styles.sectionHint}>같은 국적 관광객과 팀이 됩니다</Text>
+        <Text style={styles.sectionLabel}>{t('auth.register.nationalityLabel')}</Text>
+        <Text style={styles.sectionHint}>{t('auth.register.nationalityHint')}</Text>
 
         {NATIONALITIES.map((item) => (
           <TouchableOpacity
@@ -66,7 +68,9 @@ export default function RegisterScreen() {
             style={[styles.item, selectedCode === item.code && styles.itemSelected]}
             onPress={() => setSelectedCode(item.code)}
           >
-            <Text style={styles.itemText}>{item.label}</Text>
+            <Text style={styles.itemText}>
+              {item.flag} {t(`auth.register.nationalities.${item.code}`)}
+            </Text>
           </TouchableOpacity>
         ))}
 
@@ -75,7 +79,7 @@ export default function RegisterScreen() {
           onPress={handleSubmit}
           disabled={!canSubmit}
         >
-          <Text style={styles.submitButtonText}>가입하기</Text>
+          <Text style={styles.submitButtonText}>{t('auth.register.submit')}</Text>
         </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>

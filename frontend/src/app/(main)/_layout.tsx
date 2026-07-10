@@ -1,22 +1,24 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from '@/i18n';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const TABS: {
-  name: string;
-  title: string;
+  name: 'spots' | 'chat' | 'map' | 'ranking' | 'profile';
   icon: IoniconName;
   iconFocused: IoniconName;
 }[] = [
-  { name: 'mission', title: '미션', icon: 'flag-outline', iconFocused: 'flag' },
-  { name: 'chat', title: '채팅', icon: 'chatbubbles-outline', iconFocused: 'chatbubbles' },
-  { name: 'map', title: '지도', icon: 'map-outline', iconFocused: 'map' },
-  { name: 'ranking', title: '랭킹', icon: 'trophy-outline', iconFocused: 'trophy' },
-  { name: 'profile', title: '내정보', icon: 'person-outline', iconFocused: 'person' },
+  { name: 'spots', icon: 'list-outline', iconFocused: 'list' },
+  { name: 'chat', icon: 'chatbubbles-outline', iconFocused: 'chatbubbles' },
+  { name: 'map', icon: 'map-outline', iconFocused: 'map' },
+  { name: 'ranking', icon: 'trophy-outline', iconFocused: 'trophy' },
+  { name: 'profile', icon: 'person-outline', iconFocused: 'person' },
 ];
 
 export default function MainLayout() {
+  const { t } = useTranslation();
+
   return (
     <Tabs
       screenOptions={{
@@ -30,12 +32,12 @@ export default function MainLayout() {
         tabBarInactiveTintColor: '#555',
       }}
     >
-      {TABS.map(({ name, title, icon, iconFocused }) => (
+      {TABS.map(({ name, icon, iconFocused }) => (
         <Tabs.Screen
           key={name}
           name={name}
           options={{
-            title,
+            title: t(`tabs.${name}`),
             tabBarIcon: ({ focused, color, size }) => (
               <Ionicons name={focused ? iconFocused : icon} size={size} color={color} />
             ),

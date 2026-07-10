@@ -1,11 +1,14 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from '@/i18n';
 
-export default function MissionScreen() {
+export default function SpotsScreen() {
+  const { t } = useTranslation();
+
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>미션</Text>
-      <Text style={styles.placeholder}>주변 관광지 미션 목록이 표시됩니다</Text>
+      <Text style={styles.title}>{t('spots.title')}</Text>
+      <Text style={styles.placeholder}>{t('spots.placeholder')}</Text>
     </SafeAreaView>
   );
 }

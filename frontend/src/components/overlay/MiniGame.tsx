@@ -1,10 +1,12 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
+import { useTranslation } from '@/i18n';
 
 export function MiniGame() {
   const showMiniGame = useOverlayStore((s) => s.showMiniGame);
   const setShowMiniGame = useOverlayStore((s) => s.setShowMiniGame);
   const setEnemyInfo = useOverlayStore((s) => s.setEnemyInfo);
+  const { t } = useTranslation();
 
   const handleClose = () => {
     setShowMiniGame(false);
@@ -14,11 +16,11 @@ export function MiniGame() {
   return (
     <Modal visible={showMiniGame} transparent={false} animationType="slide" statusBarTranslucent>
       <View style={styles.container}>
-        <Text style={styles.title}>⚡ 미니게임</Text>
-        <Text style={styles.placeholder}>미니게임 UI가 여기에 구현됩니다</Text>
+        <Text style={styles.title}>⚡ {t('overlay.miniGame.title')}</Text>
+        <Text style={styles.placeholder}>{t('overlay.miniGame.placeholder')}</Text>
         {/* TODO: 실제 미니게임 컴포넌트로 교체 */}
         <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
-          <Text style={styles.closeBtnText}>닫기</Text>
+          <Text style={styles.closeBtnText}>{t('overlay.miniGame.close')}</Text>
         </TouchableOpacity>
       </View>
     </Modal>

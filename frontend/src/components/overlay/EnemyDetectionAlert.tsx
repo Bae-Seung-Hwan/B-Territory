@@ -1,11 +1,13 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
+import { useTranslation } from '@/i18n';
 
 export function EnemyDetectionAlert() {
   const showEnemyAlert = useOverlayStore((s) => s.showEnemyAlert);
   const enemyInfo = useOverlayStore((s) => s.enemyInfo);
   const setShowEnemyAlert = useOverlayStore((s) => s.setShowEnemyAlert);
   const setShowDuelRequest = useOverlayStore((s) => s.setShowDuelRequest);
+  const { t } = useTranslation();
 
   const handleDuel = () => {
     setShowEnemyAlert(false);
@@ -17,18 +19,21 @@ export function EnemyDetectionAlert() {
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.icon}>⚠️</Text>
-          <Text style={styles.title}>적 탐지</Text>
+          <Text style={styles.title}>{t('overlay.enemyAlert.title')}</Text>
           {enemyInfo && (
             <Text style={styles.body}>
-              {enemyInfo.nationality} 팀이 {Math.round(enemyInfo.distance)}m 이내에 있습니다
+              {t('overlay.enemyAlert.body', {
+                team: enemyInfo.nationality,
+                distance: Math.round(enemyInfo.distance),
+              })}
             </Text>
           )}
           <View style={styles.actions}>
             <TouchableOpacity style={styles.btnSecondary} onPress={() => setShowEnemyAlert(false)}>
-              <Text style={styles.btnSecondaryText}>무시</Text>
+              <Text style={styles.btnSecondaryText}>{t('overlay.enemyAlert.ignore')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.btnPrimary} onPress={handleDuel}>
-              <Text style={styles.btnPrimaryText}>결투 신청</Text>
+              <Text style={styles.btnPrimaryText}>{t('overlay.enemyAlert.duel')}</Text>
             </TouchableOpacity>
           </View>
         </View>

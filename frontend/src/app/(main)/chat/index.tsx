@@ -1,11 +1,14 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from '@/i18n';
 
 export default function ChatScreen() {
+  const { t } = useTranslation();
+
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>채팅</Text>
-      <Text style={styles.placeholder}>팀 채팅이 표시됩니다</Text>
+      <Text style={styles.title}>{t('chat.title')}</Text>
+      <Text style={styles.placeholder}>{t('chat.placeholder')}</Text>
     </SafeAreaView>
   );
 }
