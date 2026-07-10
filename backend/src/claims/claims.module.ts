@@ -41,15 +41,11 @@ export class ClaimsModule implements OnModuleInit {
         attempts: 3,
         backoff: { type: 'exponential', delay: 60000 },
       };
+      // tz 미지정 시 서버 로컬 시간(컨테이너 기본 UTC) 기준으로 실행되므로 KST 고정
       await this.queue.add(
         'aggregate',
         {},
-        { repeat: { cron: '0 0 * * *' }, ...jobOptions },
-      );
-      await this.queue.add(
-        'aggregate',
-        {},
-        { repeat: { cron: '0 12 * * *' }, ...jobOptions },
+        { repeat: { cron: '0 0,12 * * *', tz: 'Asia/Seoul' }, ...jobOptions },
       );
     } catch (err) {
       this.logger.error(
