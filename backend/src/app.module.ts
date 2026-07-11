@@ -8,6 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { SpotsModule } from './spots/spots.module';
 import { FirebaseModule } from './common/firebase/firebase.module';
+import { RedisModule } from './common/redis/redis.module';
+import { ClaimsModule } from './claims/claims.module';
 
 @Module({
   imports: [
@@ -37,13 +39,16 @@ import { FirebaseModule } from './common/firebase/firebase.module';
         redis: {
           host: config.get<string>('REDIS_HOST', 'localhost'),
           port: config.get<number>('REDIS_PORT', 6379),
+          db: config.get<number>('REDIS_DB', 0),
         },
       }),
     }),
     FirebaseModule,
+    RedisModule,
     AuthModule,
     UsersModule,
     SpotsModule,
+    ClaimsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
