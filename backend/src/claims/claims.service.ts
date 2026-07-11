@@ -88,16 +88,22 @@ export class ClaimsService {
       );
     }
 
-    // 점령 처리 (upsert) — 실패 시 Redis 방어 키 롤백
+    // 점령 처리 (upsert) — 실패 시 이번 요청에서 새로 만든 방어 키만 롤백
+    // (같은 팀 재방문 시 기존 방어 타이머를 지우면 진행 중이던 방어가 무효화됨)
     try {
       await this.spotClaimRepo.upsert(
         { spotId, team, userId },
         { conflictPaths: ['spotId'] },
       );
     } catch (err) {
-      await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
-        this.logger.error(`Redis 방어 키 롤백 실패 spotId=${spotId}`, redisErr);
-      });
+      if (defense.created) {
+        await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+          this.logger.error(
+            `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+            redisErr,
+          );
+        });
+      }
       throw err;
     }
 
