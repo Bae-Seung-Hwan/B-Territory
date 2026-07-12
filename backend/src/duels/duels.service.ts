@@ -7,7 +7,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
@@ -29,6 +29,17 @@ export type DuelResultOutcome =
   | { status: 'conflict'; duel: Duel }
   | { status: 'confirmed'; duel: Duel };
 
+/** 게이트웨이가 주입하는 알림 콜백 (온라인이면 즉시 emit, 아니면 Redis 큐잉) */
+export type DuelNotifier = (
+  userId: string,
+  event: string,
+  payload: unknown,
+) => Promise<void>;
+
+const ACTIVE_STATUSES = [DuelStatus.PENDING, DuelStatus.ACCEPTED];
+
+type SweptDuelRow = { id: number; challengerId: string; opponentId: string };
+
 @Injectable()
 export class DuelsService {
   private readonly logger = new Logger(DuelsService.name);
@@ -43,6 +54,13 @@ export class DuelsService {
 
   private lockKey(a: string, b: string): string {
     return sortedPairKey('duel:lock', a, b);
+  }
+
+  // 정리 잡(프로세서)은 게이트웨이에 접근할 수 없어(모듈 순환), 게이트웨이가 기동 시 콜백을 주입한다.
+  private notifier: DuelNotifier | null = null;
+
+  setNotifier(notifier: DuelNotifier): void {
+    this.notifier = notifier;
   }
 
   /**
@@ -173,6 +191,20 @@ export class DuelsService {
       );
     }
 
+    // 유저 단위 배타성: 페어 락은 같은 두 유저 조합만 막으므로, 서로 다른 상대와의
+    // 동시 결투는 여기서 차단한다. 체크~저장 사이의 레이스로 드물게 중복이 생겨도
+    // 방치되면 sweepStaleDuels가 정리하므로 best-effort 체크로 충분하다.
+    const participantIds = [challenger.id, targetUserId];
+    const hasActiveDuel = await this.duelRepo.existsBy([
+      { challengerId: In(participantIds), status: In(ACTIVE_STATUSES) },
+      { opponentId: In(participantIds), status: In(ACTIVE_STATUSES) },
+    ]);
+    if (hasActiveDuel) {
+      throw new ConflictException(
+        '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+      );
+    }
+
     // 락보다 DB row를 먼저 만들어, row의 id를 락의 소유권 토큰으로 사용한다.
     // (락 획득 실패 시 방금 만든 row만 지우면 되므로 롤백이 단순해진다)
     const duel = await this.duelRepo.save(
@@ -211,11 +243,12 @@ export class DuelsService {
 
     // PENDING일 때만 전이하는 조건부 UPDATE로 accept/reject/expire 동시 요청 경쟁을 DB 레벨에서 막는다.
     const newStatus = accept ? DuelStatus.ACCEPTED : DuelStatus.REJECTED;
-    const respondedAt = new Date();
     const updateResult = await this.duelRepo
       .createQueryBuilder()
       .update(Duel)
-      .set({ status: newStatus, respondedAt })
+      // respondedAt은 DB 시계로 기록한다 — requestedAt(@CreateDateColumn, DB now())과
+      // sweepStaleDuels의 컷오프(DB now() 기준)가 같은 시계를 쓰도록 통일 (앱-DB 타임존 차이 방어)
+      .set({ status: newStatus, respondedAt: () => 'CURRENT_TIMESTAMP' })
       .where('id = :id AND status = :pending', {
         id: duelId,
         pending: DuelStatus.PENDING,
@@ -241,7 +274,7 @@ export class DuelsService {
     }
 
     duel.status = newStatus;
-    duel.respondedAt = respondedAt;
+    duel.respondedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
     return duel;
   }
 
@@ -308,6 +341,11 @@ export class DuelsService {
 
     const resolved = await this.resolveDuel(duel, result.winnerId);
     await this.redis.releaseLock(lock, token);
+    // 상태 확인~resolveDuel 사이에 정리 잡이 ACCEPTED→VOID를 선점했을 수 있다.
+    // 그 경우 COMPLETED가 아니므로 승자 없는 결과를 'confirmed'로 알리지 않고 무효로 매핑한다.
+    if (resolved.status !== DuelStatus.COMPLETED) {
+      return { status: 'conflict', duel: resolved };
+    }
     return { status: 'confirmed', duel: resolved };
   }
 
@@ -377,38 +415,66 @@ export class DuelsService {
     expiredPending: number;
     voidedAccepted: number;
   }> {
-    const now = Date.now();
-    const pendingCutoff = new Date(
-      now - (DUEL_REQUEST_TTL + DUEL_SWEEP_GRACE) * 1000,
-    );
-    const acceptedCutoff = new Date(
-      now - (DUEL_ACTIVE_TTL + DUEL_SWEEP_GRACE) * 1000,
-    );
-
+    // 컷오프는 DB 시계(now())로 계산한다. requestedAt은 @CreateDateColumn(DB now())으로
+    // 기록되므로, 앱 서버와 DB의 타임존이 다르면(예: 로컬 KST 앱 + 컨테이너 UTC DB)
+    // 앱에서 계산한 Date와 비교 시 수 시간이 어긋나 방금 만든 결투가 즉시 만료될 수 있다.
     const expired = await this.duelRepo
       .createQueryBuilder()
       .update(Duel)
       .set({ status: DuelStatus.EXPIRED })
-      .where('status = :pending AND "requestedAt" < :cutoff', {
-        pending: DuelStatus.PENDING,
-        cutoff: pendingCutoff,
-      })
+      .where(
+        'status = :pending AND "requestedAt" < now() - make_interval(secs => :sec)',
+        {
+          pending: DuelStatus.PENDING,
+          sec: DUEL_REQUEST_TTL + DUEL_SWEEP_GRACE,
+        },
+      )
+      .returning('id, "challengerId", "opponentId"')
       .execute();
 
     const voided = await this.duelRepo
       .createQueryBuilder()
       .update(Duel)
-      .set({ status: DuelStatus.VOID, completedAt: new Date() })
-      .where('status = :accepted AND "respondedAt" < :cutoff', {
-        accepted: DuelStatus.ACCEPTED,
-        cutoff: acceptedCutoff,
+      .set({
+        status: DuelStatus.VOID,
+        completedAt: () => 'CURRENT_TIMESTAMP',
       })
+      .where(
+        'status = :accepted AND "respondedAt" < now() - make_interval(secs => :sec)',
+        {
+          accepted: DuelStatus.ACCEPTED,
+          sec: DUEL_ACTIVE_TTL + DUEL_SWEEP_GRACE,
+        },
+      )
+      .returning('id, "challengerId", "opponentId"')
       .execute();
+
+    // 참가자에게 결과를 알린다 — 스윕된 결투는 인메모리 타이머·결과 핸들러를 타지 않아
+    // 여기서 알리지 않으면 클라이언트가 응답 대기 상태에 영영 갇힌다.
+    await this.notifySwept(expired.raw as SweptDuelRow[], 'duel:expired');
+    await this.notifySwept(voided.raw as SweptDuelRow[], 'duel:voided');
 
     return {
       expiredPending: expired.affected ?? 0,
       voidedAccepted: voided.affected ?? 0,
     };
+  }
+
+  private async notifySwept(
+    rows: SweptDuelRow[],
+    event: string,
+  ): Promise<void> {
+    if (!this.notifier || rows.length === 0) return;
+    const results = await Promise.allSettled(
+      rows.flatMap((row) => [
+        this.notifier!(row.challengerId, event, { duelId: row.id }),
+        this.notifier!(row.opponentId, event, { duelId: row.id }),
+      ]),
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) {
+      this.logger.warn(`스윕 알림 ${failed}건 발송 실패 (event: ${event})`);
+    }
   }
 
   /** 승자 기준 반경 100m 내 같은 팀 인원이 2명 이상(본인 제외)인지 확인 */

@@ -9,7 +9,7 @@ import {
   WsException,
 } from '@nestjs/websockets';
 import { Logger, ValidationPipe } from '@nestjs/common';
-import { Server, Socket } from 'socket.io';
+import { Namespace, Socket } from 'socket.io';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -49,15 +49,22 @@ export class RealtimeGateway
 {
   private readonly logger = new Logger(RealtimeGateway.name);
 
+  // namespace를 지정한 게이트웨이에는 Server가 아닌 해당 Namespace 인스턴스가 주입된다.
+  // (sockets Map으로 개별 소켓의 연결 상태를 확인하기 위해 정확한 타입을 쓴다)
   @WebSocketServer()
-  server: Server;
+  server: Namespace;
 
   constructor(
     private readonly firebaseService: FirebaseService,
     private readonly usersService: UsersService,
     private readonly redis: RedisService,
     private readonly duelsService: DuelsService,
-  ) {}
+  ) {
+    // 정리 잡(duel-cleanup)이 스윕한 결투의 참가자에게 알림을 보낼 수 있도록 콜백 주입
+    this.duelsService.setNotifier((userId, event, payload) =>
+      this.notifyUser(userId, event, payload),
+    );
+  }
 
   private getUser(client: Socket): AuthenticatedUser {
     const user = (client.data as SocketData).user;
@@ -79,9 +86,13 @@ export class RealtimeGateway
     event: string,
     payload: unknown,
   ): Promise<void> {
+    // 메타의 socketId가 살아있는 소켓인지 확인한다 — 네트워크 단절 후 ping 타임아웃으로
+    // disconnect가 발화하기 전까지 메타는 죽은 소켓을 가리키므로, 무조건 emit하면
+    // 알림이 큐잉조차 되지 않고 소실된다. (단일 인스턴스 전제 — 스케일아웃 시 어댑터 필요)
     const meta = await this.redis.getUserMeta(userId);
-    if (meta?.socketId) {
-      this.server.to(meta.socketId).emit(event, payload);
+    const socket = meta ? this.server.sockets.get(meta.socketId) : undefined;
+    if (socket?.connected) {
+      socket.emit(event, payload);
       return;
     }
     await this.redis.queueNotification(
@@ -142,25 +153,42 @@ export class RealtimeGateway
       dto.lng,
     );
 
-    for (const opponent of opponents) {
-      const isNewEncounter = await this.redis.tryAcquireLock(
-        sortedPairKey('encounter:cooldown', user.id, opponent.userId),
-        ENCOUNTER_COOLDOWN_TTL,
+    // 쿨다운 획득 → 닉네임 일괄 조회 → 알림을 상대별 병렬로 처리한다
+    // (상대 수에 비례하는 직렬 DB/Redis 왕복을 피한다)
+    const newEncounters = (
+      await Promise.all(
+        opponents.map(async (opponent) =>
+          (await this.redis.tryAcquireLock(
+            sortedPairKey('encounter:cooldown', user.id, opponent.userId),
+            ENCOUNTER_COOLDOWN_TTL,
+          ))
+            ? opponent
+            : null,
+        ),
+      )
+    ).filter((o) => o !== null);
+
+    if (newEncounters.length > 0) {
+      const nicknameById = new Map(
+        (
+          await this.usersService.findByIds(newEncounters.map((o) => o.userId))
+        ).map((u) => [u.id, u.nickname]),
       );
-      if (!isNewEncounter) continue;
 
-      const opponentUser = await this.usersService.findById(opponent.userId);
-
-      client.emit('encounter:detected', {
-        userId: opponent.userId,
-        nickname: opponentUser?.nickname ?? null,
-        team: opponent.team,
-      });
-      await this.notifyUser(opponent.userId, 'encounter:detected', {
-        userId: user.id,
-        nickname: user.nickname,
-        team: user.team,
-      });
+      await Promise.all(
+        newEncounters.map((opponent) => {
+          client.emit('encounter:detected', {
+            userId: opponent.userId,
+            nickname: nicknameById.get(opponent.userId) ?? null,
+            team: opponent.team,
+          });
+          return this.notifyUser(opponent.userId, 'encounter:detected', {
+            userId: user.id,
+            nickname: user.nickname,
+            team: user.team,
+          });
+        }),
+      );
     }
 
     return { status: 'ok' };

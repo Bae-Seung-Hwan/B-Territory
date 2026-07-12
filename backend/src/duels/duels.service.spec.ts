@@ -12,11 +12,12 @@ import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
 import { BASE_DUEL_SCORE, ALLY_BONUS_MULTIPLIER } from './constants';
 
-const createQueryBuilderMock = (affected: number) => ({
+const createQueryBuilderMock = (affected: number, raw: unknown[] = []) => ({
   update: jest.fn().mockReturnThis(),
   set: jest.fn().mockReturnThis(),
   where: jest.fn().mockReturnThis(),
-  execute: jest.fn().mockResolvedValue({ affected }),
+  returning: jest.fn().mockReturnThis(),
+  execute: jest.fn().mockResolvedValue({ affected, raw }),
 });
 
 describe('DuelsService', () => {
@@ -48,6 +49,7 @@ describe('DuelsService', () => {
   beforeEach(async () => {
     duelRepo = {
       findOne: jest.fn(),
+      existsBy: jest.fn().mockResolvedValue(false),
       create: jest.fn((data: Partial<Duel>) => data as Duel),
       save: jest.fn((duel: Duel) =>
         Promise.resolve({ ...duel, id: duel.id ?? 1 }),
@@ -120,6 +122,16 @@ describe('DuelsService', () => {
         BadRequestException,
       );
       expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('참가자 중 누군가 이미 진행 중인 결투가 있으면 신청할 수 없다', async () => {
+      (duelRepo.existsBy as jest.Mock).mockResolvedValue(true);
+
+      await expect(service.requestDuel(challenger, opponentId)).rejects.toThrow(
+        ConflictException,
+      );
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock 대상이라 바인딩 문제 없음
+      expect(duelRepo.save).not.toHaveBeenCalled();
     });
 
     it('100m 밖이면 결투를 신청할 수 없다', async () => {
@@ -358,6 +370,37 @@ describe('DuelsService', () => {
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
       expect(redis.setPenalty).not.toHaveBeenCalled();
     });
+
+    it('정리 잡이 먼저 VOID 처리한 결투는 confirmed 대신 conflict로 반환한다', async () => {
+      const sweptVoid = {
+        id: 1,
+        challengerId: challenger.id,
+        opponentId,
+        status: DuelStatus.VOID,
+        winnerId: null,
+      } as Duel;
+
+      duelRepo.findOne
+        .mockResolvedValueOnce(buildAcceptedDuel()) // submitResult의 초기 조회
+        .mockResolvedValueOnce(sweptVoid); // resolveDuel CAS 실패 후 재조회
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      // 스윕이 이미 ACCEPTED -> VOID 전환을 선점 (CAS 실패)
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      const outcome = await service.submitResult(
+        1,
+        challenger.id,
+        challenger.id,
+      );
+
+      expect(outcome.status).toBe('conflict');
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+    });
   });
 
   describe('sweepStaleDuels', () => {
@@ -395,6 +438,36 @@ describe('DuelsService', () => {
       const result = await service.sweepStaleDuels();
 
       expect(result).toEqual({ expiredPending: 0, voidedAccepted: 0 });
+    });
+
+    it('스윕된 결투의 양쪽 참가자에게 주입된 notifier로 알림을 보낸다', async () => {
+      const notifier = jest.fn().mockResolvedValue(undefined);
+      service.setNotifier(notifier);
+
+      const expiredRow = {
+        id: 7,
+        challengerId: 'user-a',
+        opponentId: 'user-b',
+      };
+      const voidedRow = { id: 8, challengerId: 'user-c', opponentId: 'user-d' };
+      (duelRepo.createQueryBuilder as jest.Mock)
+        .mockReturnValueOnce(createQueryBuilderMock(1, [expiredRow]))
+        .mockReturnValueOnce(createQueryBuilderMock(1, [voidedRow]));
+
+      await service.sweepStaleDuels();
+
+      expect(notifier).toHaveBeenCalledWith('user-a', 'duel:expired', {
+        duelId: 7,
+      });
+      expect(notifier).toHaveBeenCalledWith('user-b', 'duel:expired', {
+        duelId: 7,
+      });
+      expect(notifier).toHaveBeenCalledWith('user-c', 'duel:voided', {
+        duelId: 8,
+      });
+      expect(notifier).toHaveBeenCalledWith('user-d', 'duel:voided', {
+        duelId: 8,
+      });
     });
   });
 });
