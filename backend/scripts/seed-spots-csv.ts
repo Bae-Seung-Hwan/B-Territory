@@ -237,6 +237,27 @@ async function main() {
           `같은 장소가 중복 노출될 수 있으니 점령 데이터(spot_claims) 확인 후 정리하세요.`,
       );
     }
+
+    // upsert만 하므로 CSV에서 빠진 MISSION 행은 자동 삭제되지 않는다.
+    // 데이터팀이 폐업·오류로 제거한 장소가 계속 노출/점령 대상이 되지 않도록 목록을 경고로 남긴다.
+    const removedFromCsv = await client.query<{
+      contentId: string;
+      title: string;
+    }>(
+      `SELECT "contentId", title FROM spots
+       WHERE "contentId" LIKE 'MISSION%' AND NOT ("contentId" = ANY($1))
+       ORDER BY "contentId"`,
+      [missions.map((m) => m.mission_id).filter(Boolean)],
+    );
+    if ((removedFromCsv.rowCount ?? 0) > 0) {
+      console.warn(
+        `경고: 현재 CSV에 없는 MISSION 행 ${removedFromCsv.rowCount}건이 DB에 남아 있습니다 ` +
+          `(CSV에서 제거된 장소로 추정). 점령 데이터(spot_claims) 확인 후 정리하세요.`,
+      );
+      for (const row of removedFromCsv.rows) {
+        console.warn(`  - ${row.contentId} ${row.title}`);
+      }
+    }
   } finally {
     await client.end().catch(() => {});
   }
