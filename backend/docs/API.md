@@ -77,7 +77,8 @@ curl -X POST http://localhost:3000/api/auth/register \
 |---|---|---|
 | 토큰 없음 | 401 | `{"message":"Firebase ID Token이 필요합니다.","error":"Unauthorized","statusCode":401}` |
 | 유효하지 않은 토큰 | 401 | `{"message":"유효하지 않은 토큰입니다.","error":"Unauthorized","statusCode":401}` |
-| 이미 가입된 사용자로 재호출 | 409 | `{"message":"이미 가입된 사용자입니다.","error":"Conflict","statusCode":409}` (기존 프로필을 덮어쓰지 않고 그대로 유지) |
+| 이메일 정보가 없는 계정 (전화번호/익명 로그인 등) | 400 | `{"message":"이메일 정보가 있는 계정만 가입할 수 있습니다.","error":"Bad Request","statusCode":400}` |
+| 이미 가입된 사용자로 재호출 | 409 | `{"message":"이미 가입된 사용자입니다.","error":"Conflict","statusCode":409}` (기존 프로필을 덮어쓰지 않고 그대로 유지. 동시 중복 요청이 경합한 경우에도 409) |
 
 ---
 
