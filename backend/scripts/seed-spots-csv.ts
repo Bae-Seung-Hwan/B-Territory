@@ -21,6 +21,42 @@ for (const key of REQUIRED_DB_VARS) {
 const AREA_CODE = '6'; // 부산
 const CSV_PATH = path.join(__dirname, '../../data/mission_places_final.csv');
 
+// KTO 표준 부산(areaCode=6) 시군구 코드표 (가나다순 1~16).
+// CSV의 sigungu_code는 소스에 따라 숫자 코드(kto_area_based)와 한글 구 이름
+// (busan_attraction)이 혼재되어 있어(DATA_README "구 코드 또는 구 이름"),
+// 구 단위 점령 집계(GROUP BY sigungucode)가 쪼개지지 않도록 코드로 정규화한다.
+const BUSAN_SIGUNGU_CODE_BY_NAME: Record<string, string> = {
+  강서구: '1',
+  금정구: '2',
+  기장군: '3',
+  남구: '4',
+  동구: '5',
+  동래구: '6',
+  부산진구: '7',
+  북구: '8',
+  사상구: '9',
+  사하구: '10',
+  서구: '11',
+  수영구: '12',
+  연제구: '13',
+  영도구: '14',
+  중구: '15',
+  해운대구: '16',
+};
+const VALID_SIGUNGU_CODES = new Set(Object.values(BUSAN_SIGUNGU_CODE_BY_NAME));
+
+// 알 수 없는 값은 null로 조용히 넣으면 집계에서 해당 관광지가 증발하므로 시딩을 실패시킨다
+function normalizeSigunguCode(value: string, missionId: string): string | null {
+  const v = value.trim();
+  if (!v) return null;
+  if (VALID_SIGUNGU_CODES.has(v)) return v;
+  const mapped = BUSAN_SIGUNGU_CODE_BY_NAME[v];
+  if (mapped) return mapped;
+  throw new Error(
+    `알 수 없는 sigungu_code "${value}" (mission_id=${missionId}) — 부산 시군구 매핑 테이블 갱신 필요`,
+  );
+}
+
 interface MissionRow {
   mission_id: string;
   title: string;
@@ -121,6 +157,8 @@ async function main() {
 
   try {
     let inserted = 0;
+    let updated = 0;
+    let unchanged = 0;
     let skipped = 0;
 
     await client.query('BEGIN');
@@ -132,12 +170,33 @@ async function main() {
           continue;
         }
 
-        const result = await client.query(
+        // upsert: 데이터팀이 CSV를 보정하면 재실행만으로 기존 행에도 반영되도록 한다.
+        // WHERE ... IS DISTINCT FROM 으로 실제 변경이 있는 행만 갱신하고,
+        // RETURNING (xmax = 0)으로 신규 삽입/갱신을 구분해 집계한다.
+        const result = await client.query<{ inserted: boolean }>(
           `INSERT INTO spots
              ("contentId", title, addr1, "mapX", "mapY", firstimage,
               contenttypeid, areacode, sigungucode, overview, homepage)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-           ON CONFLICT ("contentId") DO NOTHING`,
+           ON CONFLICT ("contentId") DO UPDATE SET
+             title = EXCLUDED.title,
+             addr1 = EXCLUDED.addr1,
+             "mapX" = EXCLUDED."mapX",
+             "mapY" = EXCLUDED."mapY",
+             firstimage = EXCLUDED.firstimage,
+             contenttypeid = EXCLUDED.contenttypeid,
+             areacode = EXCLUDED.areacode,
+             sigungucode = EXCLUDED.sigungucode,
+             overview = EXCLUDED.overview,
+             homepage = EXCLUDED.homepage
+           WHERE (spots.title, spots.addr1, spots."mapX", spots."mapY",
+                  spots.firstimage, spots.contenttypeid, spots.areacode,
+                  spots.sigungucode, spots.overview, spots.homepage)
+                 IS DISTINCT FROM
+                 (EXCLUDED.title, EXCLUDED.addr1, EXCLUDED."mapX", EXCLUDED."mapY",
+                  EXCLUDED.firstimage, EXCLUDED.contenttypeid, EXCLUDED.areacode,
+                  EXCLUDED.sigungucode, EXCLUDED.overview, EXCLUDED.homepage)
+           RETURNING (xmax = 0) AS inserted`,
           [
             m.mission_id,
             m.title,
@@ -147,13 +206,14 @@ async function main() {
             m.image_url || null,
             m.content_type_id || null,
             AREA_CODE,
-            m.sigungu_code || null,
+            normalizeSigunguCode(m.sigungu_code ?? '', m.mission_id),
             m.description || null,
             m.homepage || null,
           ],
         );
-        if ((result.rowCount ?? 0) > 0) inserted++;
-        else skipped++;
+        if ((result.rowCount ?? 0) === 0) unchanged++;
+        else if (result.rows[0].inserted) inserted++;
+        else updated++;
       }
       await client.query('COMMIT');
     } catch (e) {
@@ -162,8 +222,21 @@ async function main() {
     }
 
     console.log(
-      `완료: 신규 ${inserted}건 삽입, ${skipped}건 스킵(중복/title 없음)`,
+      `완료: 신규 ${inserted}건, 갱신 ${updated}건, 변경 없음 ${unchanged}건, 스킵 ${skipped}건(title 없음)`,
     );
+
+    // 구 KTO 동기화(seed-spots.ts, 제거됨)가 넣어둔 행이 남아 있으면 같은 장소가
+    // CSV 행과 중복 노출된다. FK(spot_claims) 우려로 자동 삭제하지 않고 경고만 남긴다.
+    const stale = await client.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM spots WHERE "contentId" NOT LIKE 'MISSION%'`,
+    );
+    const staleCount = Number(stale.rows[0].count);
+    if (staleCount > 0) {
+      console.warn(
+        `경고: CSV 출처가 아닌 기존 행 ${staleCount}건이 남아 있습니다 (구 KTO 시딩 잔여 데이터 추정). ` +
+          `같은 장소가 중복 노출될 수 있으니 점령 데이터(spot_claims) 확인 후 정리하세요.`,
+      );
+    }
   } finally {
     await client.end().catch(() => {});
   }
