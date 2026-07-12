@@ -19,6 +19,7 @@ import {
   DUEL_ACTIVE_TTL,
   DUEL_REQUEST_TTL,
   DUEL_RESULT_TTL,
+  DUEL_SWEEP_GRACE,
   ENCOUNTER_RADIUS_M,
   PENALTY_TTL,
 } from './constants';
@@ -358,6 +359,56 @@ export class DuelsService {
     duel.allyBonusApplied = allyBonus;
     duel.completedAt = new Date();
     return this.duelRepo.save(duel);
+  }
+
+  /**
+   * 시간 기반 상태 전이를 강제할 durable한 백스톱 (주기 잡에서 호출).
+   * - PENDING이 DUEL_REQUEST_TTL을 넘겨 방치됨 → EXPIRED
+   *   (게이트웨이의 setTimeout은 프로세스 메모리라 서버 재시작 시 유실되고,
+   *    requestDuel의 저장~락 획득 사이 크래시로 남은 고아 row도 여기서 함께 정리된다)
+   * - ACCEPTED가 DUEL_ACTIVE_TTL을 넘겨 결과 미확정 → VOID
+   *   (한쪽이 결과를 제출하지 않고 잠수해 패배를 회피하는 것을 차단)
+   *
+   * 각 컷오프는 해당 락 TTL + 여유(grace)보다 뒤이므로, 이 시점에 Redis 페어 락은 이미
+   * 자연 만료되어 별도 락 해제가 필요 없다. 상태 전이는 respondDuel/resolveDuel과 동일한
+   * 조건부 UPDATE라 진행 중인 정상 처리와 경합해도 한쪽만 반영된다.
+   */
+  async sweepStaleDuels(): Promise<{
+    expiredPending: number;
+    voidedAccepted: number;
+  }> {
+    const now = Date.now();
+    const pendingCutoff = new Date(
+      now - (DUEL_REQUEST_TTL + DUEL_SWEEP_GRACE) * 1000,
+    );
+    const acceptedCutoff = new Date(
+      now - (DUEL_ACTIVE_TTL + DUEL_SWEEP_GRACE) * 1000,
+    );
+
+    const expired = await this.duelRepo
+      .createQueryBuilder()
+      .update(Duel)
+      .set({ status: DuelStatus.EXPIRED })
+      .where('status = :pending AND "requestedAt" < :cutoff', {
+        pending: DuelStatus.PENDING,
+        cutoff: pendingCutoff,
+      })
+      .execute();
+
+    const voided = await this.duelRepo
+      .createQueryBuilder()
+      .update(Duel)
+      .set({ status: DuelStatus.VOID, completedAt: new Date() })
+      .where('status = :accepted AND "respondedAt" < :cutoff', {
+        accepted: DuelStatus.ACCEPTED,
+        cutoff: acceptedCutoff,
+      })
+      .execute();
+
+    return {
+      expiredPending: expired.affected ?? 0,
+      voidedAccepted: voided.affected ?? 0,
+    };
   }
 
   /** 승자 기준 반경 100m 내 같은 팀 인원이 2명 이상(본인 제외)인지 확인 */

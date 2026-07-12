@@ -359,4 +359,42 @@ describe('DuelsService', () => {
       expect(redis.setPenalty).not.toHaveBeenCalled();
     });
   });
+
+  describe('sweepStaleDuels', () => {
+    it('오래된 PENDING은 EXPIRED로, 오래된 ACCEPTED는 VOID로 전이하고 건수를 반환한다', async () => {
+      const pendingQb = createQueryBuilderMock(2);
+      const acceptedQb = createQueryBuilderMock(3);
+      (duelRepo.createQueryBuilder as jest.Mock)
+        .mockReturnValueOnce(pendingQb)
+        .mockReturnValueOnce(acceptedQb);
+
+      const result = await service.sweepStaleDuels();
+
+      expect(result).toEqual({ expiredPending: 2, voidedAccepted: 3 });
+      expect(pendingQb.set).toHaveBeenCalledWith({
+        status: DuelStatus.EXPIRED,
+      });
+      expect(pendingQb.where).toHaveBeenCalledWith(
+        expect.stringContaining('requestedAt'),
+        expect.objectContaining({ pending: DuelStatus.PENDING }),
+      );
+      expect(acceptedQb.set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: DuelStatus.VOID }),
+      );
+      expect(acceptedQb.where).toHaveBeenCalledWith(
+        expect.stringContaining('respondedAt'),
+        expect.objectContaining({ accepted: DuelStatus.ACCEPTED }),
+      );
+    });
+
+    it('방치된 결투가 없으면 0건을 반환한다', async () => {
+      (duelRepo.createQueryBuilder as jest.Mock)
+        .mockReturnValueOnce(createQueryBuilderMock(0))
+        .mockReturnValueOnce(createQueryBuilderMock(0));
+
+      const result = await service.sweepStaleDuels();
+
+      expect(result).toEqual({ expiredPending: 0, voidedAccepted: 0 });
+    });
+  });
 });

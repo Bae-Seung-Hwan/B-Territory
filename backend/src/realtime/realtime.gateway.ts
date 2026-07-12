@@ -119,7 +119,12 @@ export class RealtimeGateway
 
   async handleDisconnect(client: Socket): Promise<void> {
     const user = (client.data as SocketData).user;
-    if (user) await this.redis.geoRemove(user.id);
+    if (!user) return;
+    // 멀티 디바이스 대응: 메타에 등록된 최신 소켓이 아니면(다른 기기가 이후에 접속) 위치를 지우지 않는다.
+    // 메타가 이미 만료된 경우에는 남은 geo 좌표만 정리한다.
+    const meta = await this.redis.getUserMeta(user.id);
+    if (meta && meta.socketId !== client.id) return;
+    await this.redis.geoRemove(user.id);
   }
 
   @SubscribeMessage('location:update')

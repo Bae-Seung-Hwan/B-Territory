@@ -9,4 +9,6 @@ export const ALLY_BONUS_MULTIPLIER = 1.5;
 export const ALLY_BONUS_MIN_COUNT = 2; // 승자 포함하지 않은 순수 아군 인원 수 기준
 export const GEO_STALE_TTL = 600; // geo:users에서 유령 좌표로 간주해 정리하는 기준 (초, 10분)
 export const GEO_PRUNE_INTERVAL_MS = 5 * 60 * 1000; // 유령 좌표 정리 주기 (5분)
+export const DUEL_SWEEP_GRACE = 60; // 인메모리 만료 타이머·진행 중인 결과 처리와 경합하지 않도록 두는 여유 (초)
+export const DUEL_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 방치된 결투(PENDING/ACCEPTED) 정리 주기 (5분)
 export const NOTIFICATION_QUEUE_TTL = PENALTY_TTL; // 오프라인 상대에게 큐잉해두는 알림 보관 시간 (초)
