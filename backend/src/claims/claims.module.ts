@@ -1,5 +1,3 @@
-// NOTE: feature/Bae/territory-claim에서 복사해온 파일(claims.service.ts는 penalty 체크 추가됨).
-// territory-claim이 develop에 머지되면 이 브랜치를 develop 기준으로 rebase하면서 중복 정의를 정리할 것.
 import { Logger, Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule, InjectQueue } from '@nestjs/bull';
@@ -43,15 +41,11 @@ export class ClaimsModule implements OnModuleInit {
         attempts: 3,
         backoff: { type: 'exponential', delay: 60000 },
       };
+      // tz 미지정 시 서버 로컬 시간(컨테이너 기본 UTC) 기준으로 실행되므로 KST 고정
       await this.queue.add(
         'aggregate',
         {},
-        { repeat: { cron: '0 0 * * *' }, ...jobOptions },
-      );
-      await this.queue.add(
-        'aggregate',
-        {},
-        { repeat: { cron: '0 12 * * *' }, ...jobOptions },
+        { repeat: { cron: '0 0,12 * * *', tz: 'Asia/Seoul' }, ...jobOptions },
       );
     } catch (err) {
       this.logger.error(

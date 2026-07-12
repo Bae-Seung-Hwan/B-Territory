@@ -100,24 +100,35 @@ export class ClaimsService {
     // 최종 재확인: 위 관광지 조회·방어 타이머 확인 사이(비동기 구간)에 결투 패배로 페널티가
     // 새로 걸렸을 수 있으므로, 실제 커밋(upsert) 직전에 한 번 더 확인해 TOCTOU 창을 최소화한다.
     if (await this.redis.hasPenalty(userId)) {
-      await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
-        this.logger.error(`Redis 방어 키 롤백 실패 spotId=${spotId}`, redisErr);
-      });
+      if (defense.created) {
+        await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+          this.logger.error(
+            `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+            redisErr,
+          );
+        });
+      }
       throw new ForbiddenException(
         '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
       );
     }
 
-    // 점령 처리 (upsert) — 실패 시 Redis 방어 키 롤백
+    // 점령 처리 (upsert) — 실패 시 이번 요청에서 새로 만든 방어 키만 롤백
+    // (같은 팀 재방문 시 기존 방어 타이머를 지우면 진행 중이던 방어가 무효화됨)
     try {
       await this.spotClaimRepo.upsert(
         { spotId, team, userId },
         { conflictPaths: ['spotId'] },
       );
     } catch (err) {
-      await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
-        this.logger.error(`Redis 방어 키 롤백 실패 spotId=${spotId}`, redisErr);
-      });
+      if (defense.created) {
+        await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+          this.logger.error(
+            `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+            redisErr,
+          );
+        });
+      }
       throw err;
     }
 

@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "prepare": "husky"
+    "prepare": "husky",
+    "validate:data": "node scripts/validate-data.js"
   },
   "devDependencies": {
     "husky": "^9.0.0"

@@ -41,6 +41,7 @@ import { RealtimeModule } from './realtime/realtime.module';
         redis: {
           host: config.get<string>('REDIS_HOST', 'localhost'),
           port: config.get<number>('REDIS_PORT', 6379),
+          db: config.get<number>('REDIS_DB', 0),
         },
       }),
     }),

@@ -49,7 +49,9 @@ describe('DuelsService', () => {
     duelRepo = {
       findOne: jest.fn(),
       create: jest.fn((data: Partial<Duel>) => data as Duel),
-      save: jest.fn((duel: Duel) => Promise.resolve({ id: 1, ...duel })),
+      save: jest.fn((duel: Duel) =>
+        Promise.resolve({ ...duel, id: duel.id ?? 1 }),
+      ),
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
       createQueryBuilder: jest.fn(() => createQueryBuilderMock(1)),
     } as unknown as jest.Mocked<Repository<Duel>>;
