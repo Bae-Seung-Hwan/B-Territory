@@ -1,10 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { configureApp } from '../src/app-setup';
 import { FirebaseService } from '../src/common/firebase/firebase.service';
 import { User } from '../src/users/entities/user.entity';
 import { Spot } from '../src/spots/entities/spot.entity';
@@ -64,15 +65,7 @@ describe('Claims (e2e)', () => {
       .useValue(mockFirebaseService)
       .compile();
 
-    app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
+    app = configureApp(moduleFixture.createNestApplication());
     await app.init();
 
     userRepo = moduleFixture.get(getRepositoryToken(User));
