@@ -57,6 +57,10 @@ export class Duel {
   @Column({ type: 'timestamp', nullable: true })
   respondedAt: Date | null;
 
+  /** 마지막 결과 신고 접수 시각 (DB 시계) — 신고 진행 중인 결투를 스윕이 VOID로 선점하지 않도록 유예 판단에 사용 */
+  @Column({ type: 'timestamp', nullable: true })
+  resultReportedAt: Date | null;
+
   @Column({ type: 'timestamp', nullable: true })
   completedAt: Date | null;
 }

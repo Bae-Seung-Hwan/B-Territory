@@ -10,7 +10,12 @@ import { DuelsService } from './duels.service';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
-import { BASE_DUEL_SCORE, ALLY_BONUS_MULTIPLIER } from './constants';
+import {
+  BASE_DUEL_SCORE,
+  ALLY_BONUS_MULTIPLIER,
+  DUEL_RESULT_TTL,
+  DUEL_SWEEP_GRACE,
+} from './constants';
 
 const createQueryBuilderMock = (affected: number, raw: unknown[] = []) => ({
   update: jest.fn().mockReturnThis(),
@@ -23,7 +28,13 @@ const createQueryBuilderMock = (affected: number, raw: unknown[] = []) => ({
 describe('DuelsService', () => {
   let service: DuelsService;
   let duelRepo: jest.Mocked<Repository<Duel>>;
-  let dataSource: { query: jest.Mock };
+  let dataSource: { query: jest.Mock; transaction: jest.Mock };
+  let txManager: {
+    query: jest.Mock;
+    exists: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+  };
   let redis: jest.Mocked<
     Pick<
       RedisService,
@@ -49,8 +60,6 @@ describe('DuelsService', () => {
   beforeEach(async () => {
     duelRepo = {
       findOne: jest.fn(),
-      existsBy: jest.fn().mockResolvedValue(false),
-      create: jest.fn((data: Partial<Duel>) => data as Duel),
       save: jest.fn((duel: Duel) =>
         Promise.resolve({ ...duel, id: duel.id ?? 1 }),
       ),
@@ -58,8 +67,20 @@ describe('DuelsService', () => {
       createQueryBuilder: jest.fn(() => createQueryBuilderMock(1)),
     } as unknown as jest.Mocked<Repository<Duel>>;
 
+    txManager = {
+      query: jest.fn().mockResolvedValue(undefined),
+      exists: jest.fn().mockResolvedValue(false),
+      create: jest.fn((_entity: unknown, data: Partial<Duel>) => data as Duel),
+      save: jest.fn((duel: Duel) =>
+        Promise.resolve({ ...duel, id: duel.id ?? 1 }),
+      ),
+    };
+
     dataSource = {
       query: jest.fn().mockResolvedValue([{ id: opponentId, within: true }]),
+      transaction: jest.fn((cb: (manager: unknown) => unknown) =>
+        Promise.resolve(cb(txManager)),
+      ),
     };
 
     redis = {
@@ -125,13 +146,25 @@ describe('DuelsService', () => {
     });
 
     it('참가자 중 누군가 이미 진행 중인 결투가 있으면 신청할 수 없다', async () => {
-      (duelRepo.existsBy as jest.Mock).mockResolvedValue(true);
+      txManager.exists.mockResolvedValue(true);
 
       await expect(service.requestDuel(challenger, opponentId)).rejects.toThrow(
         ConflictException,
       );
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock 대상이라 바인딩 문제 없음
-      expect(duelRepo.save).not.toHaveBeenCalled();
+      expect(txManager.save).not.toHaveBeenCalled();
+    });
+
+    it('배타성 확인 전에 참가자별 advisory lock을 id 정렬 순서로 획득한다 (TOCTOU 차단)', async () => {
+      await service.requestDuel(challenger, opponentId);
+
+      const queryCalls = txManager.query.mock.calls as [string, string[]][];
+      const lockKeys = queryCalls.map(([, params]) => params[0]);
+      expect(lockKeys).toEqual(['duel:user:user-a', 'duel:user:user-b']);
+      expect(queryCalls[0][0]).toContain('pg_advisory_xact_lock');
+      // 락 획득이 존재 확인보다 먼저 실행되어야 확인~저장 창이 직렬화된다
+      expect(txManager.query.mock.invocationCallOrder[1]).toBeLessThan(
+        txManager.exists.mock.invocationCallOrder[0],
+      );
     });
 
     it('100m 밖이면 결투를 신청할 수 없다', async () => {
@@ -355,10 +388,10 @@ describe('DuelsService', () => {
         status: 'confirmed',
         winnerId: challenger.id,
       });
-      // 다른 요청이 이미 ACCEPTED -> COMPLETED 전환을 선점 (CAS 실패)
-      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
-        createQueryBuilderMock(0),
-      );
+      // 신고 스탬프는 성공, 다른 요청이 이미 ACCEPTED -> COMPLETED 전환을 선점 (CAS 실패)
+      (duelRepo.createQueryBuilder as jest.Mock)
+        .mockReturnValueOnce(createQueryBuilderMock(1))
+        .mockReturnValueOnce(createQueryBuilderMock(0));
 
       const outcome = await service.submitResult(
         1,
@@ -387,10 +420,10 @@ describe('DuelsService', () => {
         status: 'confirmed',
         winnerId: challenger.id,
       });
-      // 스윕이 이미 ACCEPTED -> VOID 전환을 선점 (CAS 실패)
-      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
-        createQueryBuilderMock(0),
-      );
+      // 신고 스탬프는 성공, 스윕이 이미 ACCEPTED -> VOID 전환을 선점 (CAS 실패)
+      (duelRepo.createQueryBuilder as jest.Mock)
+        .mockReturnValueOnce(createQueryBuilderMock(1))
+        .mockReturnValueOnce(createQueryBuilderMock(0));
 
       const outcome = await service.submitResult(
         1,
@@ -400,6 +433,19 @@ describe('DuelsService', () => {
 
       expect(outcome.status).toBe('conflict');
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+    });
+
+    it('신고 접수 스탬프(CAS)가 실패하면(스윕이 이미 VOID 커밋) Redis에 신고를 기록하지 않고 거부한다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      // findOne 이후 스윕이 ACCEPTED -> VOID를 커밋해 스탬프 UPDATE가 affected=0
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).rejects.toThrow(ConflictException);
+      expect(redis.submitDuelResult).not.toHaveBeenCalled();
     });
   });
 
@@ -427,6 +473,13 @@ describe('DuelsService', () => {
       expect(acceptedQb.where).toHaveBeenCalledWith(
         expect.stringContaining('respondedAt'),
         expect.objectContaining({ accepted: DuelStatus.ACCEPTED }),
+      );
+      // 결과 신고가 진행 중인 결투(resultReportedAt 신선)는 VOID 컷오프에서 제외되어야 한다
+      expect(acceptedQb.where).toHaveBeenCalledWith(
+        expect.stringContaining('"resultReportedAt" IS NULL OR'),
+        expect.objectContaining({
+          resultSec: DUEL_RESULT_TTL + DUEL_SWEEP_GRACE,
+        }),
       );
     });
 

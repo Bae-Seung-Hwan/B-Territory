@@ -28,8 +28,14 @@ export class UsersService {
     return this.userRepository.save(user);
   }
 
-  /** 원자적 점수 증감 (동시 결투 결과 반영 시 레이스 방지) */
+  /** 원자적 점수 증감 (동시 결투 결과 반영 시 레이스 방지) — 하한 0, 감점으로 마이너스가 되지 않는다 */
   async applyScoreDelta(userId: string, delta: number): Promise<void> {
-    await this.userRepository.increment({ id: userId }, 'score', delta);
+    await this.userRepository
+      .createQueryBuilder()
+      .update(User)
+      .set({ score: () => 'GREATEST(0, score + :delta)' })
+      .where('id = :id', { id: userId })
+      .setParameters({ delta })
+      .execute();
   }
 }

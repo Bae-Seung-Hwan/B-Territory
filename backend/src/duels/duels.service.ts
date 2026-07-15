@@ -192,28 +192,41 @@ export class DuelsService {
     }
 
     // 유저 단위 배타성: 페어 락은 같은 두 유저 조합만 막으므로, 서로 다른 상대와의
-    // 동시 결투는 여기서 차단한다. 체크~저장 사이의 레이스로 드물게 중복이 생겨도
-    // 방치되면 sweepStaleDuels가 정리하므로 best-effort 체크로 충분하다.
+    // 동시 결투는 여기서 차단한다. 확인~저장 사이 레이스로 같은 유저의 활성 결투가 2개
+    // 생기지 않도록(스윕은 시간 기반이라 이런 중복을 감지하지 못한다), 참가자 id별
+    // advisory lock으로 확인과 저장을 직렬화한다. 부분 유니크 인덱스는 한 유저가
+    // challenger와 opponent로 엇갈려 등장하는 동시 신청을 막지 못해 이 방식을 쓴다.
     const participantIds = [challenger.id, targetUserId];
-    const hasActiveDuel = await this.duelRepo.existsBy([
-      { challengerId: In(participantIds), status: In(ACTIVE_STATUSES) },
-      { opponentId: In(participantIds), status: In(ACTIVE_STATUSES) },
-    ]);
-    if (hasActiveDuel) {
-      throw new ConflictException(
-        '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
-      );
-    }
+    const duel = await this.dataSource.transaction(async (manager) => {
+      // 트랜잭션 종료 시 자동 해제. id 정렬로 락 획득 순서를 고정해 교차 신청 간 데드락 방지.
+      for (const id of [...participantIds].sort()) {
+        await manager.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`duel:user:${id}`],
+        );
+      }
+      const hasActiveDuel = await manager.exists(Duel, {
+        where: [
+          { challengerId: In(participantIds), status: In(ACTIVE_STATUSES) },
+          { opponentId: In(participantIds), status: In(ACTIVE_STATUSES) },
+        ],
+      });
+      if (hasActiveDuel) {
+        throw new ConflictException(
+          '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+        );
+      }
 
-    // 락보다 DB row를 먼저 만들어, row의 id를 락의 소유권 토큰으로 사용한다.
-    // (락 획득 실패 시 방금 만든 row만 지우면 되므로 롤백이 단순해진다)
-    const duel = await this.duelRepo.save(
-      this.duelRepo.create({
-        challengerId: challenger.id,
-        opponentId: targetUserId,
-        status: DuelStatus.PENDING,
-      }),
-    );
+      // 락보다 DB row를 먼저 만들어, row의 id를 락의 소유권 토큰으로 사용한다.
+      // (락 획득 실패 시 방금 만든 row만 지우면 되므로 롤백이 단순해진다)
+      return manager.save(
+        manager.create(Duel, {
+          challengerId: challenger.id,
+          opponentId: targetUserId,
+          status: DuelStatus.PENDING,
+        }),
+      );
+    });
 
     const acquired = await this.redis.tryAcquireLock(
       this.lockKey(challenger.id, targetUserId),
@@ -319,6 +332,24 @@ export class DuelsService {
     }
     if (!participants.includes(winnerId)) {
       throw new BadRequestException('승자는 결투 참가자여야 합니다.');
+    }
+
+    // 신고 접수 시각을 DB 시계로 스탬프하는 조건부 UPDATE — 두 역할을 겸한다:
+    // 1) sweepStaleDuels가 이 스탬프가 신선한 동안 VOID를 유예하므로, 양측이 실제로
+    //    신고를 진행 중인 결투가 타이밍상 스윕에 선점되어 결과가 버려지지 않는다
+    // 2) 스윕이 이미 VOID를 커밋한 뒤라면 affected=0으로 즉시 거부되어, 신고가
+    //    Redis에만 기록된 채 유실되는 일이 없다 (위의 status 확인과 달리 원자적)
+    const stamped = await this.duelRepo
+      .createQueryBuilder()
+      .update(Duel)
+      .set({ resultReportedAt: () => 'CURRENT_TIMESTAMP' })
+      .where('id = :id AND status = :accepted', {
+        id: duelId,
+        accepted: DuelStatus.ACCEPTED,
+      })
+      .execute();
+    if (stamped.affected === 0) {
+      throw new ConflictException('수락된 결투만 결과를 제출할 수 있습니다.');
     }
 
     const result = await this.redis.submitDuelResult(
@@ -432,6 +463,10 @@ export class DuelsService {
       .returning('id, "challengerId", "opponentId"')
       .execute();
 
+    // 결과 신고가 진행 중인 결투(resultReportedAt이 신선함)는 VOID 대상에서 제외한다 —
+    // 양측이 실제로 합의된 결과를 신고하는 도중 스윕이 먼저 VOID를 커밋해 결과가
+    // 버려지는 것을 방지. 신고 후 합의가 끝내 안 되면(상대 미신고/Redis 키 만료)
+    // 스탬프가 DUEL_RESULT_TTL + grace를 넘긴 뒤에야 VOID로 넘어간다.
     const voided = await this.duelRepo
       .createQueryBuilder()
       .update(Duel)
@@ -440,10 +475,12 @@ export class DuelsService {
         completedAt: () => 'CURRENT_TIMESTAMP',
       })
       .where(
-        'status = :accepted AND "respondedAt" < now() - make_interval(secs => :sec)',
+        'status = :accepted AND "respondedAt" < now() - make_interval(secs => :sec)' +
+          ' AND ("resultReportedAt" IS NULL OR "resultReportedAt" < now() - make_interval(secs => :resultSec))',
         {
           accepted: DuelStatus.ACCEPTED,
           sec: DUEL_ACTIVE_TTL + DUEL_SWEEP_GRACE,
+          resultSec: DUEL_RESULT_TTL + DUEL_SWEEP_GRACE,
         },
       )
       .returning('id, "challengerId", "opponentId"')
