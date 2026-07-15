@@ -144,6 +144,28 @@ async function main() {
   const missions = loadMissionRows(CSV_PATH);
   console.log(`CSV 로드: ${missions.length}건`);
 
+  // mission_id는 PK 성격의 contentId로 그대로 들어가므로, CSV 갱신 과정에서 중복이
+  // 생기면 ON CONFLICT("contentId")가 서로 다른 두 장소를 한 행으로 조용히 뭉갠다.
+  // 삽입 전에 전수 검증해 시딩 시점에 바로 실패시킨다. (빈 값은 삽입 루프에서 스킵)
+  const titleByMissionId = new Map<string, string>();
+  const duplicateIds: string[] = [];
+  for (const m of missions) {
+    const id = m.mission_id?.trim();
+    if (!id) continue;
+    const existingTitle = titleByMissionId.get(id);
+    if (existingTitle !== undefined) {
+      duplicateIds.push(`${id} ("${existingTitle}" / "${m.title}")`);
+    } else {
+      titleByMissionId.set(id, m.title);
+    }
+  }
+  if (duplicateIds.length > 0) {
+    throw new Error(
+      `CSV에 중복된 mission_id ${duplicateIds.length}건이 있습니다 — 서로 다른 장소가 한 행으로 병합되므로 CSV를 먼저 보정하세요:\n` +
+        duplicateIds.map((d) => `  - ${d}`).join('\n'),
+    );
+  }
+
   const client = new Client({
     host: process.env.DB_HOST,
     port: Number(process.env.DB_PORT ?? 5432),
@@ -164,8 +186,14 @@ async function main() {
     await client.query('BEGIN');
     try {
       for (const m of missions) {
+        const missionId = m.mission_id?.trim();
+        if (!missionId) {
+          console.warn(`mission_id 없음, 스킵: title=${m.title}`);
+          skipped++;
+          continue;
+        }
         if (!m.title?.trim()) {
-          console.warn(`title 없음, 스킵: mission_id=${m.mission_id}`);
+          console.warn(`title 없음, 스킵: mission_id=${missionId}`);
           skipped++;
           continue;
         }
@@ -198,7 +226,7 @@ async function main() {
                   EXCLUDED.sigungucode, EXCLUDED.overview, EXCLUDED.homepage)
            RETURNING (xmax = 0) AS inserted`,
           [
-            m.mission_id,
+            missionId,
             m.title,
             m.address || null,
             parseCoord(m.map_x),
@@ -206,7 +234,7 @@ async function main() {
             m.image_url || null,
             m.content_type_id || null,
             AREA_CODE,
-            normalizeSigunguCode(m.sigungu_code ?? '', m.mission_id),
+            normalizeSigunguCode(m.sigungu_code ?? '', missionId),
             m.description || null,
             m.homepage || null,
           ],
@@ -222,7 +250,7 @@ async function main() {
     }
 
     console.log(
-      `완료: 신규 ${inserted}건, 갱신 ${updated}건, 변경 없음 ${unchanged}건, 스킵 ${skipped}건(title 없음)`,
+      `완료: 신규 ${inserted}건, 갱신 ${updated}건, 변경 없음 ${unchanged}건, 스킵 ${skipped}건(mission_id/title 없음)`,
     );
 
     // 구 KTO 동기화(seed-spots.ts, 제거됨)가 넣어둔 행이 남아 있으면 같은 장소가
@@ -247,7 +275,7 @@ async function main() {
       `SELECT "contentId", title FROM spots
        WHERE "contentId" LIKE 'MISSION%' AND NOT ("contentId" = ANY($1))
        ORDER BY "contentId"`,
-      [missions.map((m) => m.mission_id).filter(Boolean)],
+      [[...titleByMissionId.keys()]],
     );
     if ((removedFromCsv.rowCount ?? 0) > 0) {
       console.warn(
