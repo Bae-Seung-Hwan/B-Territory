@@ -13,6 +13,7 @@ import { RedisModule } from './common/redis/redis.module';
 import { ClaimsModule } from './claims/claims.module';
 import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { ScoresModule } from './scores/scores.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ClaimsModule,
     DuelsModule,
     RealtimeModule,
+    ScoresModule,
   ],
   controllers: [AppController],
   providers: [AppService],

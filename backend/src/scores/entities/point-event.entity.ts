@@ -1,0 +1,49 @@
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  Index,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
+import { User } from '../../users/entities/user.entity';
+
+/** 포인트 획득 경로 — 결투는 포인트를 지급하지 않는다 (2026-07-16 기획 확정) */
+export enum PointSource {
+  CLAIM = 'CLAIM', // 관광지 점령
+  IAP = 'IAP', // 인앱 결제 (현질)
+  AD = 'AD', // 광고 시청
+}
+
+/**
+ * 포인트 이벤트 원장 (append-only). 점수(score, 경쟁용)와 별개의 소비성 재화.
+ * 잔액 = SUM(amount) — 이후 소비 기능은 음수 amount 이벤트로 기록한다.
+ * IAP 기록은 결제 분쟁 대응을 위해 유저 탈퇴 후에도 보존한다 (SET NULL).
+ */
+@Entity('point_events')
+@Index(['userId', 'createdAt'])
+export class PointEvent {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
+
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'userId' })
+  user: User;
+
+  @Column({ type: 'enum', enum: PointSource })
+  source: PointSource;
+
+  @Column({ type: 'int' })
+  amount: number;
+
+  // 근거 참조 — CLAIM: spotId, IAP: 스토어 영수증/주문 ID, AD: 광고 네트워크 트랜잭션 ID
+  @Column({ type: 'varchar', nullable: true })
+  refId: string | null;
+
+  @CreateDateColumn()
+  createdAt: Date;
+}
