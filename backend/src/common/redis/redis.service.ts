@@ -255,8 +255,32 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return Number(result) === 1;
   }
 
-  async setPenalty(userId: string, ttlSeconds: number): Promise<void> {
-    await this.client.set(`penalty:${userId}`, '1', 'EX', ttlSeconds);
+  /**
+   * created=true면 이번 호출로 새로 생성된 페널티(기존 키 없음) — 호출측이 후속 커밋 실패 시
+   * 자신이 만든 페널티만 롤백할 수 있도록 구분한다 (claimDefense의 created와 같은 용도).
+   * 기존 페널티가 있으면 TTL만 새로 부여한다.
+   */
+  async setPenalty(
+    userId: string,
+    ttlSeconds: number,
+  ): Promise<{ created: boolean }> {
+    const lua = `
+      local created = redis.call('SET', KEYS[1], '1', 'EX', tonumber(ARGV[1]), 'NX')
+      if created then return 1 end
+      redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+      return 0
+    `;
+    const result = await this.client.eval(
+      lua,
+      1,
+      `penalty:${userId}`,
+      String(ttlSeconds),
+    );
+    return { created: Number(result) === 1 };
+  }
+
+  async clearPenalty(userId: string): Promise<void> {
+    await this.client.del(`penalty:${userId}`);
   }
 
   async hasPenalty(userId: string): Promise<boolean> {

@@ -34,12 +34,14 @@ describe('DuelsService', () => {
     exists: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    createQueryBuilder: jest.Mock;
   };
   let redis: jest.Mocked<
     Pick<
       RedisService,
       | 'hasPenalty'
       | 'setPenalty'
+      | 'clearPenalty'
       | 'tryAcquireLock'
       | 'releaseLock'
       | 'extendLock'
@@ -74,6 +76,7 @@ describe('DuelsService', () => {
       save: jest.fn((duel: Duel) =>
         Promise.resolve({ ...duel, id: duel.id ?? 1 }),
       ),
+      createQueryBuilder: jest.fn(() => createQueryBuilderMock(1)),
     };
 
     dataSource = {
@@ -85,7 +88,8 @@ describe('DuelsService', () => {
 
     redis = {
       hasPenalty: jest.fn().mockResolvedValue(false),
-      setPenalty: jest.fn().mockResolvedValue(undefined),
+      setPenalty: jest.fn().mockResolvedValue({ created: true }),
+      clearPenalty: jest.fn().mockResolvedValue(undefined),
       tryAcquireLock: jest.fn().mockResolvedValue(true),
       releaseLock: jest.fn().mockResolvedValue(undefined),
       extendLock: jest.fn().mockResolvedValue(true),
@@ -306,18 +310,22 @@ describe('DuelsService', () => {
         expect(outcome.duel.scoreDelta).toBe(BASE_DUEL_SCORE);
         expect(outcome.duel.allyBonusApplied).toBe(false);
       }
+      // 점수 반영은 상태 확정 CAS와 같은 트랜잭션(manager)에서 실행되어야 한다
       expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
         challenger.id,
         BASE_DUEL_SCORE,
+        txManager,
       );
       expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
         opponentId,
         -BASE_DUEL_SCORE,
+        txManager,
       );
       expect(redis.setPenalty).toHaveBeenCalledWith(
         opponentId,
         expect.any(Number),
       );
+      expect(redis.clearPenalty).not.toHaveBeenCalled();
     });
 
     it('승자 주변에 아군이 2명 이상이면 1.5배 점수를 적용한다', async () => {
@@ -362,10 +370,12 @@ describe('DuelsService', () => {
       expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
         challenger.id,
         expectedDelta,
+        txManager,
       );
       expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
         opponentId,
         -expectedDelta,
+        txManager,
       );
     });
 
@@ -388,10 +398,11 @@ describe('DuelsService', () => {
         status: 'confirmed',
         winnerId: challenger.id,
       });
-      // 신고 스탬프는 성공, 다른 요청이 이미 ACCEPTED -> COMPLETED 전환을 선점 (CAS 실패)
-      (duelRepo.createQueryBuilder as jest.Mock)
-        .mockReturnValueOnce(createQueryBuilderMock(1))
-        .mockReturnValueOnce(createQueryBuilderMock(0));
+      // 신고 스탬프는 성공(duelRepo QB 기본값), 다른 요청이 이미
+      // ACCEPTED -> COMPLETED 전환을 선점해 트랜잭션 내 CAS가 실패 (affected=0)
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
 
       const outcome = await service.submitResult(
         1,
@@ -401,7 +412,8 @@ describe('DuelsService', () => {
 
       expect(outcome.status).toBe('confirmed');
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
-      expect(redis.setPenalty).not.toHaveBeenCalled();
+      // 선점한 처리가 COMPLETED를 커밋했으므로 패자 페널티는 정당 — 되돌리지 않는다
+      expect(redis.clearPenalty).not.toHaveBeenCalled();
     });
 
     it('정리 잡이 먼저 VOID 처리한 결투는 confirmed 대신 conflict로 반환한다', async () => {
@@ -420,10 +432,11 @@ describe('DuelsService', () => {
         status: 'confirmed',
         winnerId: challenger.id,
       });
-      // 신고 스탬프는 성공, 스윕이 이미 ACCEPTED -> VOID 전환을 선점 (CAS 실패)
-      (duelRepo.createQueryBuilder as jest.Mock)
-        .mockReturnValueOnce(createQueryBuilderMock(1))
-        .mockReturnValueOnce(createQueryBuilderMock(0));
+      // 신고 스탬프는 성공(duelRepo QB 기본값), 스윕이 이미
+      // ACCEPTED -> VOID 전환을 선점해 트랜잭션 내 CAS가 실패 (affected=0)
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
 
       const outcome = await service.submitResult(
         1,
@@ -433,6 +446,8 @@ describe('DuelsService', () => {
 
       expect(outcome.status).toBe('conflict');
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      // VOID로 끝났으니 승패 미확정 — 이번 호출이 새로 만든 페널티는 되돌린다
+      expect(redis.clearPenalty).toHaveBeenCalledWith(opponentId);
     });
 
     it('신고 접수 스탬프(CAS)가 실패하면(스윕이 이미 VOID 커밋) Redis에 신고를 기록하지 않고 거부한다', async () => {
@@ -446,6 +461,63 @@ describe('DuelsService', () => {
         service.submitResult(1, challenger.id, challenger.id),
       ).rejects.toThrow(ConflictException);
       expect(redis.submitDuelResult).not.toHaveBeenCalled();
+    });
+
+    it('점수 반영이 실패하면 상태 확정도 함께 롤백되고, 새로 만든 페널티를 되돌린다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+      usersService.applyScoreDelta.mockRejectedValue(
+        new Error('DB connection lost'),
+      );
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).rejects.toThrow('DB connection lost');
+
+      // CAS와 점수 반영이 같은 트랜잭션이므로 에러 전파 = 전체 롤백(결투는 ACCEPTED 유지,
+      // 신고 스탬프가 신선해 스윕도 유예됨) — 재시도가 가능한 상태로 남아야 한다
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(redis.clearPenalty).toHaveBeenCalledWith(opponentId);
+    });
+
+    it('트랜잭션 실패 시 기존에 있던 페널티(created=false)는 건드리지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+      redis.setPenalty.mockResolvedValue({ created: false });
+      usersService.applyScoreDelta.mockRejectedValue(
+        new Error('DB connection lost'),
+      );
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).rejects.toThrow('DB connection lost');
+      expect(redis.clearPenalty).not.toHaveBeenCalled();
+    });
+
+    it('아군 보너스 판정(Redis)이 실패하면 상태 커밋·페널티 전에 중단되어 재시도 가능하다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoPos.mockRejectedValue(new Error('Redis down'));
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).rejects.toThrow('Redis down');
+
+      // 아직 아무것도 커밋되지 않았어야 한다 (결투는 ACCEPTED 유지 → 재시도로 복구)
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(redis.setPenalty).not.toHaveBeenCalled();
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
     });
   });
 

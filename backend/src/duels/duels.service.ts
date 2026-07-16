@@ -381,53 +381,95 @@ export class DuelsService {
   }
 
   /**
-   * 점수/페널티 적용 전에 ACCEPTED -> COMPLETED로의 조건부 UPDATE를 먼저 커밋해 "처리할 권리"를
-   * 단 한 번만 획득하도록 한다. 크래시/재시도로 동일 결투에 대해 이 메서드가 두 번 호출되어도
-   * (Redis의 자가신고 합의는 멱등이라 재시도가 다시 'confirmed'를 반환할 수 있다) 두 번째 호출은
+   * 상태 확정과 부수효과의 원자성:
+   * - 아군 보너스 판정(Redis 읽기)은 어떤 커밋보다 먼저 수행한다 — 여기서 실패하면 결투가
+   *   ACCEPTED로 남고 신고 스탬프가 신선해 스윕도 유예되므로, 재시도(합의는 멱등)로 복구된다
+   * - 페널티(Redis)는 ClaimsService.visit()과 같은 순서로 DB 커밋 전에 걸고, 커밋 실패 시
+   *   이번 호출이 새로 만든 것일 때만 롤백한다
+   * - ACCEPTED -> COMPLETED CAS("처리할 권리"의 단일 획득)와 승패·점수 기록, 양측 점수 반영을
+   *   한 트랜잭션으로 묶어, COMPLETED로 고정된 row에 winnerId/scoreDelta가 null로 남거나
+   *   점수가 부분 반영된 채 복구 불능이 되는 일이 없게 한다 (전부 커밋 또는 전부 롤백)
+   *
+   * 크래시/재시도로 동일 결투에 대해 이 메서드가 두 번 호출되어도 두 번째 호출은
    * affected=0을 보고 그대로 반환하므로 점수가 중복 반영되지 않는다.
    */
   private async resolveDuel(duel: Duel, winnerId: string): Promise<Duel> {
     const loserId =
       winnerId === duel.challengerId ? duel.opponentId : duel.challengerId;
 
-    const claimResult = await this.duelRepo
-      .createQueryBuilder()
-      .update(Duel)
-      .set({ status: DuelStatus.COMPLETED, completedAt: new Date() })
-      .where('id = :id AND status = :accepted', {
-        id: duel.id,
-        accepted: DuelStatus.ACCEPTED,
-      })
-      .execute();
+    const allyBonus = await this.hasAllyBonus(winnerId);
+    const scoreDelta = Math.round(
+      BASE_DUEL_SCORE * (allyBonus ? ALLY_BONUS_MULTIPLIER : 1),
+    );
 
-    if (claimResult.affected === 0) {
+    const penalty = await this.redis.setPenalty(loserId, PENALTY_TTL);
+
+    let claimed: boolean;
+    try {
+      claimed = await this.dataSource.transaction(async (manager) => {
+        const claimResult = await manager
+          .createQueryBuilder()
+          .update(Duel)
+          .set({
+            status: DuelStatus.COMPLETED,
+            winnerId,
+            loserId,
+            scoreDelta,
+            allyBonusApplied: allyBonus,
+            completedAt: () => 'CURRENT_TIMESTAMP',
+          })
+          .where('id = :id AND status = :accepted', {
+            id: duel.id,
+            accepted: DuelStatus.ACCEPTED,
+          })
+          .execute();
+        if (claimResult.affected === 0) return false;
+
+        await this.usersService.applyScoreDelta(winnerId, scoreDelta, manager);
+        await this.usersService.applyScoreDelta(loserId, -scoreDelta, manager);
+        return true;
+      });
+    } catch (err) {
+      // 트랜잭션 실패 — 결투는 ACCEPTED로 남아 재시도 가능하므로, 미리 걸어둔 페널티만 되돌린다
+      if (penalty.created) {
+        await this.redis.clearPenalty(loserId).catch((redisErr) => {
+          this.logger.error(
+            `페널티 롤백 실패 duelId=${duel.id} loserId=${loserId}`,
+            redisErr,
+          );
+        });
+      }
+      throw err;
+    }
+
+    if (!claimed) {
       this.logger.warn(
         `결투 이미 처리됨, 부수효과 재적용 생략 duelId=${duel.id}`,
       );
       const existing = await this.duelRepo.findOne({
         where: { id: duel.id },
       });
+      // 선점한 처리가 COMPLETED를 커밋했다면 패자 페널티는 정당하므로 그대로 둔다
+      // (이번 호출의 setPenalty는 만료/유실된 페널티의 복구가 된다). COMPLETED가
+      // 아니라면(스윕 VOID 선점) 승패가 확정되지 않았으니 새로 만든 페널티를 되돌린다.
+      if (existing?.status !== DuelStatus.COMPLETED && penalty.created) {
+        await this.redis.clearPenalty(loserId).catch((redisErr) => {
+          this.logger.error(
+            `페널티 롤백 실패 duelId=${duel.id} loserId=${loserId}`,
+            redisErr,
+          );
+        });
+      }
       return existing ?? duel;
     }
-
-    const allyBonus = await this.hasAllyBonus(winnerId);
-    const scoreDelta = Math.round(
-      BASE_DUEL_SCORE * (allyBonus ? ALLY_BONUS_MULTIPLIER : 1),
-    );
-
-    await Promise.all([
-      this.usersService.applyScoreDelta(winnerId, scoreDelta),
-      this.usersService.applyScoreDelta(loserId, -scoreDelta),
-      this.redis.setPenalty(loserId, PENALTY_TTL),
-    ]);
 
     duel.status = DuelStatus.COMPLETED;
     duel.winnerId = winnerId;
     duel.loserId = loserId;
     duel.scoreDelta = scoreDelta;
     duel.allyBonusApplied = allyBonus;
-    duel.completedAt = new Date();
-    return this.duelRepo.save(duel);
+    duel.completedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
+    return duel;
   }
 
   /**
