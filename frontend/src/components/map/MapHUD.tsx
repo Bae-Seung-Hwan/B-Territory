@@ -1,11 +1,11 @@
 import { View, Text, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useGameStore } from '@/store/useGameStore';
+import { useGameStore, getTopTeam } from '@/store/useGameStore';
 import { useTranslation } from '@/i18n';
 
 export function MapHUD() {
   const insets = useSafeAreaInsets();
-  const topTeam = useGameStore((s) => s.topTeam);
+  const topTeam = useGameStore((s) => getTopTeam(s.teamScores));
   const capitalDistrict = useGameStore((s) => s.capitalDistrict);
   const { t } = useTranslation();
 
