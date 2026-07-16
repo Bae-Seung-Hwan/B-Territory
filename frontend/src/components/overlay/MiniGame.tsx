@@ -1,6 +1,7 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 export function MiniGame() {
   const showMiniGame = useOverlayStore((s) => s.showMiniGame);
@@ -32,7 +33,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#0A0A0F',
+    backgroundColor: BrandColors.background,
     gap: 24,
   },
   title: { fontSize: 28, fontWeight: 'bold', color: '#fff' },

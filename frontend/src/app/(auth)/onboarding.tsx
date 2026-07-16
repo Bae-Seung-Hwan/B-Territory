@@ -1,6 +1,7 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 export default function OnboardingScreen() {
   const router = useRouter();
@@ -22,7 +23,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#0A0A0F',
+    backgroundColor: BrandColors.background,
     gap: 16,
   },
   title: { fontSize: 36, fontWeight: 'bold', color: '#fff' },
@@ -31,7 +32,7 @@ const styles = StyleSheet.create({
     marginTop: 32,
     paddingHorizontal: 32,
     paddingVertical: 14,
-    backgroundColor: '#208AEF',
+    backgroundColor: BrandColors.accent,
     borderRadius: 12,
   },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },

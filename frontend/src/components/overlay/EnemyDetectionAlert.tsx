@@ -1,6 +1,7 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 export function EnemyDetectionAlert() {
   const showEnemyAlert = useOverlayStore((s) => s.showEnemyAlert);
@@ -51,16 +52,16 @@ const styles = StyleSheet.create({
   },
   card: {
     width: 300,
-    backgroundColor: '#1A1A2E',
+    backgroundColor: BrandColors.surface,
     borderRadius: 16,
     padding: 24,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#FF4444',
+    borderColor: BrandColors.danger,
     gap: 12,
   },
   icon: { fontSize: 40 },
-  title: { fontSize: 22, fontWeight: 'bold', color: '#FF4444' },
+  title: { fontSize: 22, fontWeight: 'bold', color: BrandColors.danger },
   body: { fontSize: 14, color: '#ccc', textAlign: 'center' },
   actions: { flexDirection: 'row', gap: 12, marginTop: 8 },
   btnSecondary: {
@@ -76,7 +77,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 12,
     borderRadius: 8,
-    backgroundColor: '#208AEF',
+    backgroundColor: BrandColors.accent,
     alignItems: 'center',
   },
   btnPrimaryText: { color: '#fff', fontWeight: '600' },

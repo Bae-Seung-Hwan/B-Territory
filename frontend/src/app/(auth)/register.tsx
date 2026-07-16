@@ -11,6 +11,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useUserStore } from '@/store/useUserStore';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 const NATIONALITIES = [
   { code: 'KR', flag: '🇰🇷' },
@@ -87,7 +88,7 @@ export default function RegisterScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0A0A0F' },
+  container: { flex: 1, backgroundColor: BrandColors.background },
   content: {
     alignItems: 'center',
     paddingTop: 80,
@@ -100,10 +101,10 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: '#1A1A2E',
+    backgroundColor: BrandColors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#2A2A3E',
+    borderColor: BrandColors.border,
     color: '#fff',
     fontSize: 16,
     marginBottom: 24,
@@ -125,22 +126,22 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingVertical: 16,
     paddingHorizontal: 20,
-    backgroundColor: '#1A1A2E',
+    backgroundColor: BrandColors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#2A2A3E',
+    borderColor: BrandColors.border,
     marginBottom: 12,
   },
-  itemSelected: { borderColor: '#208AEF', backgroundColor: '#16233A' },
+  itemSelected: { borderColor: BrandColors.accent, backgroundColor: '#16233A' },
   itemText: { fontSize: 18, color: '#fff', textAlign: 'center' },
   submitButton: {
     width: '100%',
     paddingVertical: 16,
-    backgroundColor: '#208AEF',
+    backgroundColor: BrandColors.accent,
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 8,
   },
-  submitButtonDisabled: { backgroundColor: '#2A2A3E' },
+  submitButtonDisabled: { backgroundColor: BrandColors.border },
   submitButtonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
 });

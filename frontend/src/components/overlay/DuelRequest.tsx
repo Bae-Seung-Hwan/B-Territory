@@ -1,6 +1,7 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 export function DuelRequest() {
   const showDuelRequest = useOverlayStore((s) => s.showDuelRequest);
@@ -46,14 +47,14 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   card: {
-    backgroundColor: '#1A1A2E',
+    backgroundColor: BrandColors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 32,
     alignItems: 'center',
     gap: 12,
     borderTopWidth: 1,
-    borderColor: '#2A2A3E',
+    borderColor: BrandColors.border,
   },
   title: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
   body: { fontSize: 15, color: '#ccc' },
@@ -72,7 +73,7 @@ const styles = StyleSheet.create({
     flex: 2,
     paddingVertical: 14,
     borderRadius: 10,
-    backgroundColor: '#208AEF',
+    backgroundColor: BrandColors.accent,
     alignItems: 'center',
   },
   btnAcceptText: { color: '#fff', fontWeight: '700', fontSize: 16 },

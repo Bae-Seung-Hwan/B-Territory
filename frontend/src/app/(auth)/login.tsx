@@ -12,6 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useUserStore } from '@/store/useUserStore';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -94,7 +95,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: 'center',
-    backgroundColor: '#0A0A0F',
+    backgroundColor: BrandColors.background,
     paddingHorizontal: 24,
   },
   title: { fontSize: 28, fontWeight: 'bold', color: '#fff', textAlign: 'center' },
@@ -109,10 +110,10 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: '#1A1A2E',
+    backgroundColor: BrandColors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#2A2A3E',
+    borderColor: BrandColors.border,
     color: '#fff',
     fontSize: 16,
     marginBottom: 12,
@@ -120,27 +121,27 @@ const styles = StyleSheet.create({
   button: {
     width: '100%',
     paddingVertical: 16,
-    backgroundColor: '#208AEF',
+    backgroundColor: BrandColors.accent,
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 8,
   },
-  buttonDisabled: { backgroundColor: '#2A2A3E' },
+  buttonDisabled: { backgroundColor: BrandColors.border },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 24 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: '#2A2A3E' },
+  dividerLine: { flex: 1, height: 1, backgroundColor: BrandColors.border },
   dividerText: { color: '#666', fontSize: 12, marginHorizontal: 12 },
   googleButton: {
     width: '100%',
     paddingVertical: 16,
-    backgroundColor: '#1A1A2E',
+    backgroundColor: BrandColors.surface,
     borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#2A2A3E',
+    borderColor: BrandColors.border,
   },
   googleButtonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   registerLink: { marginTop: 24, alignItems: 'center' },
   registerLinkText: { color: '#888', fontSize: 14 },
-  registerLinkAccent: { color: '#208AEF', fontWeight: '600' },
+  registerLinkAccent: { color: BrandColors.accent, fontWeight: '600' },
 });

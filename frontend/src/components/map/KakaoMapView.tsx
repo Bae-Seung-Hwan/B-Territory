@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { StyleProp, ViewStyle } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
+import { BrandColors } from '@/constants/theme';
 
 const KAKAO_KEY = process.env.EXPO_PUBLIC_KAKAO_MAP_KEY ?? '';
 
@@ -15,7 +16,7 @@ const MAP_HTML = `
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; background: #0a0a0f; }
+    html, body { width: 100%; height: 100%; background: ${BrandColors.background}; }
     #map { width: 100%; height: 100vh; }
     #debug {
       position: fixed; bottom: 0; left: 0; right: 0;
@@ -89,6 +90,10 @@ const MAP_HTML = `
 </html>
 `;
 
+// 렌더마다 새 객체가 만들어지면 WebView가 source identity 변경을 리로드 트리거로 취급할 수 있어
+// (지도 SDK 전체 재주입 비용 발생) 모듈 레벨 상수로 고정한다.
+const MAP_SOURCE = { html: MAP_HTML, baseUrl: 'http://localhost' } as const;
+
 interface KakaoMapViewProps {
   style?: StyleProp<ViewStyle>;
   onReady?: () => void;
@@ -119,7 +124,7 @@ export function KakaoMapView({ style, onReady, onError }: KakaoMapViewProps) {
     <WebView
       ref={webViewRef}
       style={style}
-      source={{ html: MAP_HTML, baseUrl: 'http://localhost' }}
+      source={MAP_SOURCE}
       originWhitelist={['*']}
       javaScriptEnabled
       domStorageEnabled

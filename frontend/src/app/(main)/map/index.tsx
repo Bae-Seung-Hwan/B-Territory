@@ -1,6 +1,7 @@
 import { View, StyleSheet } from 'react-native';
 import { KakaoMapView } from '@/components/map/KakaoMapView';
 import { MapHUD } from '@/components/map/MapHUD';
+import { BrandColors } from '@/constants/theme';
 
 export default function MapScreen() {
   // TODO: useLocation()이 아직 이 화면에 연결되지 않음 — 좌표를 소켓 location:update로
@@ -14,5 +15,5 @@ export default function MapScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0A0A0F' },
+  container: { flex: 1, backgroundColor: BrandColors.background },
 });

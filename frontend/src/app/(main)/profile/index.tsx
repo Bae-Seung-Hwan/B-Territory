@@ -1,6 +1,7 @@
 import { Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 export default function ProfileScreen() {
   const { t } = useTranslation();
@@ -14,7 +15,7 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0A0A0F' },
+  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: BrandColors.background },
   title: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 8 },
   placeholder: { color: '#555', fontSize: 14 },
 });
