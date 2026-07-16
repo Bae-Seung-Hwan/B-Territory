@@ -46,24 +46,33 @@
 
 ## Firebase Authentication
 
-> ⚠️ 2026-07-01 기준 frontend에 Firebase SDK가 아직 설치/연동되어 있지 않음 (구현 예정)
+> ⚠️ 2026-07-16 기준 `firebase` JS SDK는 설치만 된 상태 (`package.json`) — 초기화 코드(`src/lib/firebase.ts`)와 로그인/회원가입 화면 연동은 아직 구현 전
 
 ### 인증 흐름
 
 1. **로그인**: Firebase Authentication SDK(이메일/비밀번호, 소셜 로그인 등)로 로그인 → Firebase가 **ID Token** 발급
-2. **보관**: 발급받은 ID Token을 클라이언트에서 보관 (예: `useUserStore`)
-3. **요청 시 첨부**: 인증이 필요한 API 호출 시 `Authorization: Bearer <idToken>` 헤더로 전송
-4. **갱신**: ID Token은 약 1시간 후 만료되므로, Firebase SDK의 갱신 함수로 주기적으로 재발급 필요
+2. **가입 여부 확인**: 발급받은 ID Token으로 `GET /api/auth/me` 호출
+   - `200` → 이미 가입된 사용자. 응답 프로필(`id`/`email`/`nickname`/`nationality`/`team`)을 `useUserStore`에 채우고 바로 메인 화면 진입
+   - `404` → 미가입. 회원가입 화면으로 이동 후 `POST /api/auth/register` 호출 (최초 1회만; 재호출 시 `409`)
+3. **보관**: ID Token과 위에서 받은 프로필 값들을 클라이언트에 보관 (예: `useUserStore`)
+4. **요청 시 첨부**: 인증이 필요한 API 호출 시 `Authorization: Bearer <idToken>` 헤더로 전송
+5. **갱신**: ID Token은 약 1시간 후 만료되므로, Firebase SDK의 갱신 함수로 주기적으로 재발급 필요
 
 ### 백엔드와의 관계
 
-- 백엔드는 `FirebaseAuthGuard`로 이 ID Token을 검증하고, 통과 시 `req.user = { uid, email }`을 주입 ([api.txt](./api.txt) 참고)
-- 현재 인증이 필요한 API는 `POST /api/auth/register` 하나뿐
+- 백엔드는 `FirebaseAuthGuard`로 이 ID Token을 검증하고, 통과 시 `req.user = { uid, email }`을 주입 ([backend/docs/API.md](../../backend/docs/API.md) 참고)
+- 인증이 필요한 API 2개, 응답 형태 동일(`{ id, email, nickname, nationality, team }`, `team`은 가입 시 `nationality`와 자동 동일하게 설정):
+  - `POST /api/auth/register` — 회원가입(최초 1회). Firebase 계정에 이메일이 없으면(전화번호/익명 로그인 등) `400`, 이미 가입된 사용자면 `409`
+  - `GET /api/auth/me` — 가입 여부 확인 + 프로필 조회. 로그인 직후 항상 먼저 호출해야 함. 미가입 시 `404`
 - 백엔드 코드에 `JwtStrategy`(자체 발급 JWT)도 존재하지만 어떤 API에도 연결되어 있지 않음 → 프론트는 자체 JWT를 신경 쓸 필요 없이 **Firebase ID Token만** 다루면 됨
 
 ### 필요 작업 (TODO)
 
-- [ ] frontend에 Firebase SDK 설치 (Expo 환경이므로 `@react-native-firebase/*` 또는 Firebase JS SDK 중 선택 필요)
-- [ ] Firebase 프로젝트 설정값(webApiKey 등) 확보 — 백엔드 `.env`의 `FIREBASE_PROJECT_ID`와 동일한 Firebase 프로젝트 사용
-- [ ] 로그인 → ID Token 저장 → API 요청 헤더 첨부까지 이어지는 로직을 `useUserStore` / API 클라이언트에 구현
-- [ ] 토큰 만료 시 자동 갱신 처리
+- [x] frontend에 Firebase SDK 설치 — `firebase`(JS SDK) + `@react-native-async-storage/async-storage`. Expo Go 유지 중이라 네이티브 모듈이 필요 없는 JS SDK를 선택했고, Dev Build 전환 후에도 그대로 사용 가능 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고)
+- [ ] Firebase 프로젝트 설정값(`apiKey`/`authDomain`/`projectId`/`appId`) 확보 — 백엔드 `.env`의 `FIREBASE_PROJECT_ID`와 동일한 Firebase 프로젝트 사용, `EXPO_PUBLIC_FIREBASE_*`로 `.env`/`.env.example`에 추가
+- [ ] `src/lib/firebase.ts` 작성 — `initializeAuth(app, { persistence: getReactNativePersistence(AsyncStorage) })`로 세션 유지 설정
+- [ ] `login.tsx`의 `handleLogin` TODO를 `signInWithEmailAndPassword` → ID Token 발급 → `GET /api/auth/me` 호출 → 200/404 분기로 교체
+- [ ] `register.tsx`의 `handleSubmit` TODO를 `createUserWithEmailAndPassword` → ID Token 발급 → `POST /api/auth/register` 호출로 교체 (현재는 백엔드 호출 없이 `useUserStore`만 채우고 바로 진입하는 임시 코드)
+- [ ] 위 두 응답의 `id`/`nickname`/`nationality`/`team`을 `useUserStore`에 저장하는 로직 구현
+- [ ] 토큰 만료 시 자동 갱신 처리 — API 클라이언트에서 매 요청 전 `getIdToken()` 호출로 충분 (SDK가 내부적으로 만료 임박 시 자동 갱신)
+- [ ] 구글 로그인(`login.tsx`의 `handleGoogleLogin`)은 Firebase JS SDK의 `signInWithPopup`이 RN에서 동작하지 않아 별도 처리 필요 — `expo-auth-session` + `GoogleAuthProvider.credential(...)` 조사 필요
