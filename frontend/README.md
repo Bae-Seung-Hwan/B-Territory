@@ -13,6 +13,7 @@ Expo SDK 56 기반 React Native 앱.
 | `expo-location` | GPS 위치 추적 |
 | `react-native-webview` | 카카오맵 렌더링 |
 | `@expo/vector-icons` | 탭 아이콘 |
+| `i18n-js` + `expo-localization` | 다국어(ko/en) |
 
 ## 빠른 시작
 
