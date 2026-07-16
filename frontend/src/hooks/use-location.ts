@@ -17,14 +17,16 @@ export function useLocation(): LocationState {
 
   useEffect(() => {
     let subscription: Location.LocationSubscription | null = null;
+    let cancelled = false;
 
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
+      if (cancelled) return;
       if (status !== 'granted') {
         setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
         return;
       }
-      subscription = await Location.watchPositionAsync(
+      const sub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
         (loc) => {
           setState({
@@ -34,9 +36,17 @@ export function useLocation(): LocationState {
           });
         },
       );
+      // watchPositionAsync 대기 중 언마운트되면 subscription 변수가 아직 비어 있어
+      // 아래 cleanup의 subscription?.remove()가 이 구독을 잡지 못한다 — 즉시 정리한다.
+      if (cancelled) {
+        sub.remove();
+        return;
+      }
+      subscription = sub;
     })();
 
     return () => {
+      cancelled = true;
       subscription?.remove();
     };
   }, []);
