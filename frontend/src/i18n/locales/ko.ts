@@ -32,6 +32,17 @@ export const ko = {
         FR: '프랑스',
       },
     },
+    errors: {
+      title: '오류',
+      invalidCredential: '이메일 또는 비밀번호가 올바르지 않습니다',
+      tooManyRequests: '너무 많이 시도했습니다. 잠시 후 다시 시도해주세요',
+      networkError: '네트워크 연결을 확인해주세요',
+      emailAlreadyInUse: '이미 가입된 이메일입니다',
+      weakPassword: '비밀번호는 6자 이상이어야 합니다',
+      invalidEmail: '올바른 이메일 형식이 아닙니다',
+      loginFailed: '로그인에 실패했습니다',
+      registerFailed: '가입에 실패했습니다',
+    },
   },
   tabs: {
     spots: '관광지',

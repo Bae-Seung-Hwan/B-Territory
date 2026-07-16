@@ -34,6 +34,17 @@ export const en: Translations = {
         FR: 'France',
       },
     },
+    errors: {
+      title: 'Error',
+      invalidCredential: 'Incorrect email or password',
+      tooManyRequests: 'Too many attempts. Please try again later',
+      networkError: 'Please check your network connection',
+      emailAlreadyInUse: 'This email is already registered',
+      weakPassword: 'Password must be at least 6 characters',
+      invalidEmail: 'Please enter a valid email address',
+      loginFailed: 'Login failed',
+      registerFailed: 'Sign up failed',
+    },
   },
   tabs: {
     spots: 'Spots',

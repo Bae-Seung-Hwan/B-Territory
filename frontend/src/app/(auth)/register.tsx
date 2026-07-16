@@ -7,11 +7,17 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import { getAuthErrorMessage } from '@/lib/firebase-errors';
 import { useUserStore } from '@/store/useUserStore';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 const NATIONALITIES = [
   { code: 'KR', flag: '🇰🇷' },
@@ -23,20 +29,49 @@ const NATIONALITIES = [
 
 export default function RegisterScreen() {
   const router = useRouter();
-  const { setNickname, setNationality, setAuthenticated } = useUserStore();
+  const { setUserId, setNickname, setNationality, setAuthenticated } = useUserStore();
   const { t } = useTranslation();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [nickname, setNicknameInput] = useState('');
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const canSubmit = nickname.trim().length >= 2 && selectedCode !== null;
+  const canSubmit =
+    email.trim().length > 0 &&
+    password.length > 0 &&
+    nickname.trim().length >= 2 &&
+    selectedCode !== null &&
+    !loading;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
-    // TODO: Firebase Auth 연동 후 POST /api/auth/register 호출로 교체
-    setNickname(nickname.trim());
-    setNationality(selectedCode);
-    setAuthenticated(true);
-    router.replace('/(main)/map');
+    setLoading(true);
+    try {
+      const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const idToken = await credential.user.getIdToken();
+
+      const res = await fetch(`${API_URL}/api/auth/register`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nickname.trim(), nationality: selectedCode }),
+      });
+      if (!res.ok) throw new Error(`register failed: ${res.status}`);
+
+      const profile = await res.json();
+      setUserId(profile.id);
+      setNickname(profile.nickname);
+      setNationality(profile.nationality);
+      setAuthenticated(true);
+      router.replace('/(main)/map');
+    } catch (err) {
+      Alert.alert(
+        t('auth.errors.title'),
+        getAuthErrorMessage(err, t, 'auth.errors.registerFailed'),
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -53,11 +88,31 @@ export default function RegisterScreen() {
 
         <TextInput
           style={styles.input}
+          placeholder={t('auth.login.emailPlaceholder')}
+          placeholderTextColor="#666"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
+          editable={!loading}
+        />
+        <TextInput
+          style={styles.input}
+          placeholder={t('auth.login.passwordPlaceholder')}
+          placeholderTextColor="#666"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          editable={!loading}
+        />
+        <TextInput
+          style={styles.input}
           placeholder={t('auth.register.nicknamePlaceholder')}
           placeholderTextColor="#666"
           value={nickname}
           onChangeText={setNicknameInput}
           maxLength={20}
+          editable={!loading}
         />
 
         <Text style={styles.sectionLabel}>{t('auth.register.nationalityLabel')}</Text>
@@ -68,6 +123,7 @@ export default function RegisterScreen() {
             key={item.code}
             style={[styles.item, selectedCode === item.code && styles.itemSelected]}
             onPress={() => setSelectedCode(item.code)}
+            disabled={loading}
           >
             <Text style={styles.itemText}>
               {item.flag} {t(`auth.register.nationalities.${item.code}`)}
@@ -107,13 +163,14 @@ const styles = StyleSheet.create({
     borderColor: BrandColors.border,
     color: '#fff',
     fontSize: 16,
-    marginBottom: 24,
+    marginBottom: 12,
   },
   sectionLabel: {
     alignSelf: 'flex-start',
     fontSize: 14,
     color: '#fff',
     fontWeight: '600',
+    marginTop: 12,
   },
   sectionHint: {
     alignSelf: 'flex-start',

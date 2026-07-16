@@ -10,24 +10,54 @@ import {
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import { getAuthErrorMessage } from '@/lib/firebase-errors';
 import { useUserStore } from '@/store/useUserStore';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
+
 export default function LoginScreen() {
   const router = useRouter();
-  const setAuthenticated = useUserStore((s) => s.setAuthenticated);
+  const { setAuthenticated, setUserId, setNickname, setNationality } = useUserStore();
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const canSubmit = email.trim().length > 0 && password.length > 0;
+  const canSubmit = email.trim().length > 0 && password.length > 0 && !loading;
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (!canSubmit) return;
-    // TODO: Firebase Auth 연동 후 실제 로그인 요청으로 교체
-    setAuthenticated(true);
-    router.replace('/(main)/map');
+    setLoading(true);
+    try {
+      const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const idToken = await credential.user.getIdToken();
+
+      const res = await fetch(`${API_URL}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+
+      if (res.status === 404) {
+        // Firebase 계정은 있지만 백엔드 프로필이 없음 (가입 미완료)
+        router.replace('/(auth)/register');
+        return;
+      }
+      if (!res.ok) throw new Error(`me failed: ${res.status}`);
+
+      const profile = await res.json();
+      setUserId(profile.id);
+      setNickname(profile.nickname);
+      setNationality(profile.nationality);
+      setAuthenticated(true);
+      router.replace('/(main)/map');
+    } catch (err) {
+      Alert.alert(t('auth.errors.title'), getAuthErrorMessage(err, t, 'auth.errors.loginFailed'));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleGoogleLogin = () => {
@@ -50,6 +80,7 @@ export default function LoginScreen() {
         onChangeText={setEmail}
         autoCapitalize="none"
         keyboardType="email-address"
+        editable={!loading}
       />
       <TextInput
         style={styles.input}
@@ -58,6 +89,7 @@ export default function LoginScreen() {
         value={password}
         onChangeText={setPassword}
         secureTextEntry
+        editable={!loading}
       />
 
       <TouchableOpacity
