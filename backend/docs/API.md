@@ -250,7 +250,7 @@ curl http://localhost:3000/api/spots/1
 
 | API | 브랜치 / PR | 설명 |
 |---|---|---|
-| `POST /api/claims/visit` | `feature/Bae/territory-claim` (PR #9) | GPS 방문 인증 + 관광지 점령 (반경 50m) |
-| `GET /api/claims/spots/:spotId` | 〃 | 관광지 현재 점령 팀 조회 |
-| `GET /api/claims/districts/:sigungucode` | 〃 | 구 단위 점령 현황 조회 |
+| `POST /api/claims/visit` | develop 병합됨 (PR #9) | GPS 방문 인증 + 관광지 점령 (반경 50m). 관광지별 인당 하루 1회 제한(KST 자정 초기화) — 초과 시 `409 {"message":"이 관광지는 오늘 이미 점령했습니다. (KST 자정에 초기화)"}` |
+| `GET /api/claims/spots/:spotId` | develop 병합됨 (PR #9) | 관광지 현재 점령 팀 조회 |
+| `GET /api/claims/districts/:sigungucode` | develop 병합됨 (PR #9) | 구 단위 점령 현황 조회 |
 | WebSocket `location:update` / `duel:*` | `feature/Bae/realtime-duel` (PR #13) | 실시간 조우 탐지, 결투 신청/수락/거절/결과 |

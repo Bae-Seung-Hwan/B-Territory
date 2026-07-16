@@ -54,6 +54,31 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * 유저별 관광지 일일 점령 마킹 (SET NX — 확인과 기록을 단일 원자 연산으로 처리해
+   * 동시 요청도 하나만 통과). created=false면 오늘(KST) 이미 점령한 관광지.
+   * 이후 단계가 실패하면 호출측이 clearDailyClaim으로 이번에 만든 키만 롤백해
+   * 점령이 확정되지 않은 시도가 일일 횟수를 소진하지 않게 한다.
+   */
+  async markDailyClaim(
+    userId: string,
+    spotId: number,
+    ttlSeconds: number,
+  ): Promise<{ created: boolean }> {
+    const result = await this.client.set(
+      `claim:daily:${userId}:${spotId}`,
+      '1',
+      'EX',
+      ttlSeconds,
+      'NX',
+    );
+    return { created: result === 'OK' };
+  }
+
+  async clearDailyClaim(userId: string, spotId: number): Promise<void> {
+    await this.client.del(`claim:daily:${userId}:${spotId}`);
+  }
+
+  /**
    * 방어 타이머 원자 연산 (Lua 스크립트)
    * - 키 없음: 타이머 신규 설정 후 'ok' (created: true)
    * - 같은 팀:  타이머 리셋 없이 'ok' (무한 리셋 방지, created: false)
