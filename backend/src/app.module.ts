@@ -1,3 +1,4 @@
+import { join } from 'path';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -30,7 +31,12 @@ import { RealtimeModule } from './realtime/realtime.module';
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
+        // dev/test: 엔티티 변경이 스키마에 자동 반영 (기존 팀 워크플로 유지)
+        // production: synchronize가 꺼지는 대신 부팅 시 pending 마이그레이션을 자동 실행
+        //   (스키마 변경 시 마이그레이션 생성 필수 — docs/MIGRATIONS.md 참고)
         synchronize: config.get<string>('NODE_ENV') !== 'production',
+        migrations: [join(__dirname, 'migrations', '*{.ts,.js}')],
+        migrationsRun: config.get<string>('NODE_ENV') === 'production',
         logging: config.get<string>('NODE_ENV') === 'development',
       }),
     }),
