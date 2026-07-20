@@ -20,29 +20,35 @@ export function useLocation(): LocationState {
     let cancelled = false;
 
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (cancelled) return;
-      if (status !== 'granted') {
-        setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
-        return;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (cancelled) return;
+        if (status !== 'granted') {
+          setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
+          return;
+        }
+        const sub = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+          (loc) => {
+            setState({
+              coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
+              error: null,
+              loading: false,
+            });
+          },
+        );
+        // watchPositionAsync 대기 중 언마운트되면 subscription 변수가 아직 비어 있어
+        // 아래 cleanup의 subscription?.remove()가 이 구독을 잡지 못한다 — 즉시 정리한다.
+        if (cancelled) {
+          sub.remove();
+          return;
+        }
+        subscription = sub;
+      } catch (e) {
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : '위치 정보를 가져올 수 없습니다';
+        setState({ coords: null, error: message, loading: false });
       }
-      const sub = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
-        (loc) => {
-          setState({
-            coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
-            error: null,
-            loading: false,
-          });
-        },
-      );
-      // watchPositionAsync 대기 중 언마운트되면 subscription 변수가 아직 비어 있어
-      // 아래 cleanup의 subscription?.remove()가 이 구독을 잡지 못한다 — 즉시 정리한다.
-      if (cancelled) {
-        sub.remove();
-        return;
-      }
-      subscription = sub;
     })();
 
     return () => {

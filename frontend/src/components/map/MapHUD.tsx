@@ -2,6 +2,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useGameStore, getTopTeam } from '@/store/useGameStore';
 import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
 
 export function MapHUD() {
   const insets = useSafeAreaInsets();
@@ -37,7 +38,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(10,10,15,0.85)',
+    backgroundColor: `${BrandColors.background}D9`, // 0.85 alpha
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 8,
