@@ -45,10 +45,14 @@ const BUSAN_SIGUNGU_CODE_BY_NAME: Record<string, string> = {
 };
 const VALID_SIGUNGU_CODES = new Set(Object.values(BUSAN_SIGUNGU_CODE_BY_NAME));
 
-// 알 수 없는 값은 null로 조용히 넣으면 집계에서 해당 관광지가 증발하므로 시딩을 실패시킨다
-function normalizeSigunguCode(value: string, missionId: string): string | null {
+// 알 수 없는 값이나 빈 값을 null로 조용히 넣으면 집계에서 해당 관광지가 증발하므로 시딩을 실패시킨다
+function normalizeSigunguCode(value: string, missionId: string): string {
   const v = value.trim();
-  if (!v) return null;
+  if (!v) {
+    throw new Error(
+      `sigungu_code가 비어 있습니다 (mission_id=${missionId}) — 구 집계에서 누락되므로 CSV를 보정하세요`,
+    );
+  }
   if (VALID_SIGUNGU_CODES.has(v)) return v;
   const mapped = BUSAN_SIGUNGU_CODE_BY_NAME[v];
   if (mapped) return mapped;
