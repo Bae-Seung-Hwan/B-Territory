@@ -33,11 +33,13 @@ import { ScoresModule } from './scores/scores.module';
         database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
         // dev/test: 엔티티 변경이 스키마에 자동 반영 (기존 팀 워크플로 유지)
-        // production: synchronize가 꺼지는 대신 부팅 시 pending 마이그레이션을 자동 실행
+        // production: synchronize가 꺼지는 대신 마이그레이션으로 스키마를 반영
         //   (스키마 변경 시 마이그레이션 생성 필수 — docs/MIGRATIONS.md 참고)
+        // 부팅 시 자동 실행(migrationsRun)은 쓰지 않는다 — 인스턴스가 겹쳐 뜨는 순간(롤링
+        //   재배포 등) TypeORM의 migrations 북키핑 테이블 생성 단계에서 경쟁 상태가 재현되므로,
+        //   `npm run migration:run`을 배포 파이프라인의 별도 1회성 스텝으로 실행한다.
         synchronize: config.get<string>('NODE_ENV') !== 'production',
         migrations: [join(__dirname, 'migrations', '*{.ts,.js}')],
-        migrationsRun: config.get<string>('NODE_ENV') === 'production',
         logging: config.get<string>('NODE_ENV') === 'development',
       }),
     }),

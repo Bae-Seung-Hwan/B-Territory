@@ -23,6 +23,11 @@ export enum PointSource {
  */
 @Entity('point_events')
 @Index(['userId', 'createdAt'])
+// 동일 근거(영수증/트랜잭션 ID 등)의 이벤트 재전송을 DB 레벨에서 차단 (refId 없는 이벤트는 제외)
+@Index('UQ_point_events_source_ref_id', ['source', 'refId'], {
+  unique: true,
+  where: '"refId" IS NOT NULL',
+})
 export class PointEvent {
   @PrimaryGeneratedColumn()
   id: number;

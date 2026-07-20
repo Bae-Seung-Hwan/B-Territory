@@ -19,6 +19,10 @@ import { User } from '../../users/entities/user.entity';
  *
  * 결투 점수(User.score)는 개인 점수 전용으로 팀 점수에 포함되지 않으므로
  * 이 원장에 절대 기록하지 않는다 (2026-07-16 기획 확정).
+ *
+ * 중복 이벤트 방지용 유니크 제약은 아직 없다 — spot_claims는 점령 시점마다 claimedAt이
+ * 갱신되는 현재 상태 테이블이라, 이 원장의 특정 행을 어느 점령 발생과 매칭할지(idempotency
+ * key)는 점수 지급 서비스(후속 PR)가 확정한 뒤에 추가한다.
  */
 @Entity('claim_score_events')
 // 시즌 팀 점수 합산 (WHERE createdAt BETWEEN ... GROUP BY team)
