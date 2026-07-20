@@ -25,6 +25,9 @@ export class User {
   @Column({ length: 2 })
   team: string;
 
+  @Column({ type: 'int', default: 0 })
+  score: number;
+
   @CreateDateColumn()
   createdAt: Date;
 }

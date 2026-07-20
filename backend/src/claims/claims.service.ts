@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
   Logger,
 } from '@nestjs/common';
@@ -30,6 +31,14 @@ export class ClaimsService {
 
   async visit(dto: VisitDto, userId: string, team: string) {
     const { spotId, lat, lng } = dto;
+
+    // 결투 패배 페널티 중에는 스팟 점령 시도 자체를 차단 (realtime/duels 모듈에서 설정하는 penalty:{userId} 키 재사용)
+    // 사전 체크: 페널티 중인 유저의 요청을 빠르게 실패시켜 불필요한 방어 타이머 점유를 피한다.
+    if (await this.redis.hasPenalty(userId)) {
+      throw new ForbiddenException(
+        '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
+      );
+    }
 
     // NULL 좌표 대비 CASE WHEN으로 안전하게 처리
     const result = await this.dataSource.query<
@@ -85,6 +94,22 @@ export class ClaimsService {
     if (defense.status === 'blocked') {
       throw new ConflictException(
         `방어 시간 중: ${defense.defenseTeam} 팀이 ${Math.max(0, defense.remaining)}초 동안 방어 중입니다.`,
+      );
+    }
+
+    // 최종 재확인: 위 관광지 조회·방어 타이머 확인 사이(비동기 구간)에 결투 패배로 페널티가
+    // 새로 걸렸을 수 있으므로, 실제 커밋(upsert) 직전에 한 번 더 확인해 TOCTOU 창을 최소화한다.
+    if (await this.redis.hasPenalty(userId)) {
+      if (defense.created) {
+        await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+          this.logger.error(
+            `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+            redisErr,
+          );
+        });
+      }
+      throw new ForbiddenException(
+        '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
       );
     }
 

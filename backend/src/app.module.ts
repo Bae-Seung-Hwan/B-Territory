@@ -10,6 +10,8 @@ import { SpotsModule } from './spots/spots.module';
 import { FirebaseModule } from './common/firebase/firebase.module';
 import { RedisModule } from './common/redis/redis.module';
 import { ClaimsModule } from './claims/claims.module';
+import { DuelsModule } from './duels/duels.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -49,6 +51,8 @@ import { ClaimsModule } from './claims/claims.module';
     UsersModule,
     SpotsModule,
     ClaimsModule,
+    DuelsModule,
+    RealtimeModule,
   ],
   controllers: [AppController],
   providers: [AppService],

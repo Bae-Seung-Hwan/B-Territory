@@ -1,0 +1,14 @@
+export const ENCOUNTER_RADIUS_M = 100;
+export const ENCOUNTER_COOLDOWN_TTL = 60; // 같은 쌍에 대한 조우 알림 재발송 방지 (초)
+export const DUEL_REQUEST_TTL = 30; // 결투 신청 응답 대기 시간 (초)
+export const DUEL_ACTIVE_TTL = 300; // 수락~결과 신고까지 페어 락을 유지하는 시간 (초)
+export const DUEL_RESULT_TTL = 120; // 결과 자가신고 합의 대기 시간 (초)
+export const PENALTY_TTL = 1800; // 결투 패배 페널티 (30분, 초 단위)
+export const BASE_DUEL_SCORE = 10;
+export const ALLY_BONUS_MULTIPLIER = 1.5;
+export const ALLY_BONUS_MIN_COUNT = 2; // 승자 포함하지 않은 순수 아군 인원 수 기준
+export const GEO_STALE_TTL = 600; // geo:users에서 유령 좌표로 간주해 정리하는 기준 (초, 10분)
+export const GEO_PRUNE_INTERVAL_MS = 5 * 60 * 1000; // 유령 좌표 정리 주기 (5분)
+export const DUEL_SWEEP_GRACE = 60; // 인메모리 만료 타이머·진행 중인 결과 처리와 경합하지 않도록 두는 여유 (초)
+export const DUEL_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 방치된 결투(PENDING/ACCEPTED) 정리 주기 (5분)
+export const NOTIFICATION_QUEUE_TTL = PENALTY_TTL; // 오프라인 상대에게 큐잉해두는 알림 보관 시간 (초)
