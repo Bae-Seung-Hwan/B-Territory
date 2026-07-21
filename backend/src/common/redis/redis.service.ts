@@ -53,6 +53,16 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /** 원자적 GET 후 즉시 삭제 — 토큰 1회용 소비(매직 링크 등)에 사용해 재사용/경쟁 상태를 막는다 */
+  async consume(key: string): Promise<string | null> {
+    const lua = `
+      local v = redis.call('GET', KEYS[1])
+      if v then redis.call('DEL', KEYS[1]) end
+      return v
+    `;
+    return (await this.client.eval(lua, 1, key)) as string | null;
+  }
+
   /**
    * 방어 타이머 원자 연산 (Lua 스크립트)
    * - 키 없음: 타이머 신규 설정 후 'ok' (created: true)
