@@ -258,15 +258,33 @@ async function main() {
     );
 
     // 구 KTO 동기화(seed-spots.ts, 제거됨)가 넣어둔 행이 남아 있으면 같은 장소가
-    // CSV 행과 중복 노출된다. FK(spot_claims) 우려로 자동 삭제하지 않고 경고만 남긴다.
+    // CSV 행과 중복 노출될 뿐 아니라, legacy sigungucode 포맷(예: "6-2")이 신규 코드(예:
+    // "16")와 물리적으로 같은 구를 가리켜 구 점령 집계(aggregateDistricts GROUP BY
+    // sigungucode)가 쪼개지는, 이 PR이 애초에 고치려던 버그가 재발할 수 있다.
+    // spot_claims가 없는 잔여 행은 삭제해도 잃을 점령 기록이 없어 안전하므로 자동 삭제하고,
+    // 이미 점령된 행은 CASCADE 삭제로 점령 기록이 조용히 사라질 수 있어 수동 정리를 유도한다.
+    const deletedStale = await client.query<{ id: number }>(
+      `DELETE FROM spots s
+       WHERE s."contentId" NOT LIKE 'MISSION%'
+         AND NOT EXISTS (SELECT 1 FROM spot_claims sc WHERE sc."spotId" = s.id)
+       RETURNING s.id`,
+    );
+    if ((deletedStale.rowCount ?? 0) > 0) {
+      console.log(
+        `구 KTO 시딩 잔여 행 중 점령 기록이 없는 ${deletedStale.rowCount}건을 자동 삭제했습니다.`,
+      );
+    }
+
     const stale = await client.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM spots WHERE "contentId" NOT LIKE 'MISSION%'`,
     );
     const staleCount = Number(stale.rows[0].count);
     if (staleCount > 0) {
       console.warn(
-        `경고: CSV 출처가 아닌 기존 행 ${staleCount}건이 남아 있습니다 (구 KTO 시딩 잔여 데이터 추정). ` +
-          `같은 장소가 중복 노출될 수 있으니 점령 데이터(spot_claims) 확인 후 정리하세요.`,
+        `경고: 점령 기록이 있어 자동 삭제하지 못한 구 KTO 잔여 행 ${staleCount}건이 남아 있습니다. ` +
+          `같은 장소가 중복 노출되는 것뿐 아니라, legacy sigungucode가 신규 코드와 물리적으로 같은 구를 ` +
+          `가리켜 구 점령 집계(aggregateDistricts)가 쪼개지고 있을 수 있습니다. spot_claims를 이관/백업할 ` +
+          `방법을 검토한 뒤 정리하세요 (SpotClaim.spot FK는 CASCADE라 spots 행을 지우면 점령 기록도 함께 삭제됩니다).`,
       );
     }
 

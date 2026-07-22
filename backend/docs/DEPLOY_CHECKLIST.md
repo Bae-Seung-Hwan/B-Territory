@@ -4,13 +4,14 @@
 
 ## 관광지 시딩 (`npm run seed:spots`)
 
-- [ ] **구 KTO 시딩 잔여 행 정리 여부 확인** — CSV 시딩 전환(PR #16) 이전에 구 `seed-spots.ts`(제거됨)를 실행했던 환경(dev/staging 등)은 spots 테이블에 KTO 원본 행(약 813건, `contentId`가 `MISSION_` 형식이 아님)이 남아 CSV 행과 같은 장소가 중복 노출됩니다. `seed:spots` 실행 시 "CSV 출처가 아닌 기존 행" 경고가 뜨면, 삭제 전에 반드시 아래 쿼리로 점령 기록 존재 여부를 확인하세요.
+- [ ] **구 KTO 시딩 잔여 행 정리 여부 확인** — CSV 시딩 전환(PR #16) 이전에 구 `seed-spots.ts`(제거됨)를 실행했던 환경(dev/staging 등)은 spots 테이블에 KTO 원본 행(약 813건, `contentId`가 `MISSION_` 형식이 아님)이 남아 있을 수 있습니다. `seed:spots`는 이 중 **점령 기록(spot_claims)이 없는 행은 자동으로 삭제**합니다(로그: "점령 기록이 없는 N건을 자동 삭제했습니다"). 이미 점령된 행은 삭제해도 잃을 게 없다고 판단할 수 없어 자동 삭제하지 않고 경고만 남기니, 그 경우 아래 절차로 수동 정리하세요.
+  ⚠️ 이 잔여 행을 방치하면 단순 중복 노출에 그치지 않습니다 — legacy sigungucode 포맷(예: `"6-2"`)이 신규 KTO 코드(예: `"16"`)와 물리적으로 같은 구를 가리켜, 구 점령 집계(`aggregateDistricts`의 `GROUP BY sigungucode`)가 같은 구를 두 개로 쪼갭니다. 이 PR이 애초에 고치려던 버그가 재발하는 것이며, `GET /api/spots`·`POST /api/claims/visit` 어디에도 `MISSION_` 접두사 필터가 없어 사용자가 잔여 행 위치에서 정상적으로 방문 인증만 해도 새로 쪼개짐이 발생할 수 있습니다.
   ⚠️ `SpotClaim.spot` FK는 `onDelete: 'CASCADE'`입니다 — `spots` 행을 지우면 연결된 `spot_claims`(점령 기록)가 **에러도 경고도 없이 함께 삭제**됩니다.
   ```sql
   SELECT COUNT(*) FROM spot_claims
   WHERE "spotId" IN (SELECT id FROM spots WHERE "contentId" NOT LIKE 'MISSION%');
   ```
-  0건이 아니면 즉시 삭제하지 말고 점령 기록을 보존할 방법(이관/백업)을 먼저 검토한 뒤 정리하세요. 스크립트는 안전을 위해 자동 삭제하지 않습니다.
+  0건이 아니면 즉시 삭제하지 말고 점령 기록을 보존할 방법(이관/백업)을 먼저 검토한 뒤 정리하세요. 위 SQL로 확인한 개수가 시딩 로그의 "점령 기록이 있어 자동 삭제하지 못한 구 KTO 잔여 행" 경고 건수와 일치해야 합니다.
 - [ ] **시딩 로그의 경고 확인** — "현재 CSV에 없는 MISSION 행" 경고가 뜨면 데이터팀이 CSV에서 제거한 장소(폐업·오류 등)가 DB에 남은 것이므로, 마찬가지로 `spot_claims` 확인 후 정리합니다.
 - [ ] 시딩이 에러로 중단되면 CSV 자체 문제입니다 (알 수 없는 `sigungu_code`, 중복 `mission_id` 등 — 에러 메시지에 원인 표시). DB는 트랜잭션으로 보호되므로 CSV 보정 후 재실행하면 됩니다.
 
