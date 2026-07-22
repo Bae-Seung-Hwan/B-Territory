@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
+  FlatList,
   KeyboardAvoidingView,
   Platform,
   Alert,
@@ -16,26 +16,30 @@ import { getAuthErrorMessage } from '@/lib/firebase-errors';
 import { useUserStore } from '@/store/useUserStore';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
+import { getCountryList, type Country } from '@/constants/countries';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
-
-const NATIONALITIES = [
-  { code: 'KR', flag: '🇰🇷' },
-  { code: 'JP', flag: '🇯🇵' },
-  { code: 'US', flag: '🇺🇸' },
-  { code: 'CN', flag: '🇨🇳' },
-  { code: 'FR', flag: '🇫🇷' },
-] as const;
 
 export default function RegisterScreen() {
   const router = useRouter();
   const { setUserId, setNickname, setNationality, setAuthenticated } = useUserStore();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [nickname, setNicknameInput] = useState('');
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [countryQuery, setCountryQuery] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const countries = useMemo(() => getCountryList(locale), [locale]);
+  const filteredCountries = useMemo(() => {
+    const query = countryQuery.trim().toLowerCase();
+    if (!query) return countries;
+    return countries.filter(
+      (c) => c.name.toLowerCase().includes(query) || c.code.toLowerCase().includes(query),
+    );
+  }, [countries, countryQuery]);
+  const selectedCountry = countries.find((c) => c.code === selectedCode) ?? null;
 
   const canSubmit =
     email.trim().length > 0 &&
@@ -74,71 +78,94 @@ export default function RegisterScreen() {
     }
   };
 
+  const renderCountry = ({ item }: { item: Country }) => (
+    <TouchableOpacity
+      style={[styles.item, selectedCode === item.code && styles.itemSelected]}
+      onPress={() => setSelectedCode(item.code)}
+      disabled={loading}
+    >
+      <Text style={styles.itemText}>
+        {item.flag} {item.name}
+      </Text>
+    </TouchableOpacity>
+  );
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView
+      <FlatList
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
-      >
-        <Text style={styles.title}>{t('auth.register.title')}</Text>
-        <Text style={styles.subtitle}>{t('auth.register.subtitle')}</Text>
+        data={filteredCountries}
+        keyExtractor={(item) => item.code}
+        renderItem={renderCountry}
+        ListHeaderComponent={
+          <>
+            <Text style={styles.title}>{t('auth.register.title')}</Text>
+            <Text style={styles.subtitle}>{t('auth.register.subtitle')}</Text>
 
-        <TextInput
-          style={styles.input}
-          placeholder={t('auth.login.emailPlaceholder')}
-          placeholderTextColor="#666"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          editable={!loading}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder={t('auth.login.passwordPlaceholder')}
-          placeholderTextColor="#666"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          editable={!loading}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder={t('auth.register.nicknamePlaceholder')}
-          placeholderTextColor="#666"
-          value={nickname}
-          onChangeText={setNicknameInput}
-          maxLength={20}
-          editable={!loading}
-        />
+            <TextInput
+              style={styles.input}
+              placeholder={t('auth.login.emailPlaceholder')}
+              placeholderTextColor="#666"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              editable={!loading}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder={t('auth.login.passwordPlaceholder')}
+              placeholderTextColor="#666"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              editable={!loading}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder={t('auth.register.nicknamePlaceholder')}
+              placeholderTextColor="#666"
+              value={nickname}
+              onChangeText={setNicknameInput}
+              maxLength={20}
+              editable={!loading}
+            />
 
-        <Text style={styles.sectionLabel}>{t('auth.register.nationalityLabel')}</Text>
-        <Text style={styles.sectionHint}>{t('auth.register.nationalityHint')}</Text>
-
-        {NATIONALITIES.map((item) => (
+            <Text style={styles.sectionLabel}>{t('auth.register.nationalityLabel')}</Text>
+            <Text style={styles.sectionHint}>{t('auth.register.nationalityHint')}</Text>
+            {selectedCountry && (
+              <Text style={styles.selectedHint}>
+                {t('auth.register.nationalitySelected', {
+                  flag: selectedCountry.flag,
+                  name: selectedCountry.name,
+                })}
+              </Text>
+            )}
+            <TextInput
+              style={styles.input}
+              placeholder={t('auth.register.nationalitySearchPlaceholder')}
+              placeholderTextColor="#666"
+              value={countryQuery}
+              onChangeText={setCountryQuery}
+              autoCapitalize="none"
+              editable={!loading}
+            />
+          </>
+        }
+        ListFooterComponent={
           <TouchableOpacity
-            key={item.code}
-            style={[styles.item, selectedCode === item.code && styles.itemSelected]}
-            onPress={() => setSelectedCode(item.code)}
-            disabled={loading}
+            style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={!canSubmit}
           >
-            <Text style={styles.itemText}>
-              {item.flag} {t(`auth.register.nationalities.${item.code}`)}
-            </Text>
+            <Text style={styles.submitButtonText}>{t('auth.register.submit')}</Text>
           </TouchableOpacity>
-        ))}
-
-        <TouchableOpacity
-          style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
-          onPress={handleSubmit}
-          disabled={!canSubmit}
-        >
-          <Text style={styles.submitButtonText}>{t('auth.register.submit')}</Text>
-        </TouchableOpacity>
-      </ScrollView>
+        }
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -177,6 +204,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#888',
     marginTop: 2,
+    marginBottom: 12,
+  },
+  selectedHint: {
+    alignSelf: 'flex-start',
+    fontSize: 13,
+    color: BrandColors.accent,
     marginBottom: 12,
   },
   item: {

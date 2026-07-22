@@ -25,14 +25,9 @@ export const en: Translations = {
       nicknamePlaceholder: 'Nickname (2-20 characters)',
       nationalityLabel: 'Select nationality',
       nationalityHint: "You'll be teamed up with tourists of the same nationality",
+      nationalitySearchPlaceholder: 'Search country',
+      nationalitySelected: 'Selected: {{flag}} {{name}}',
       submit: 'Sign Up',
-      nationalities: {
-        KR: 'Korea',
-        JP: 'Japan',
-        US: 'United States',
-        CN: 'China',
-        FR: 'France',
-      },
     },
     errors: {
       title: 'Error',

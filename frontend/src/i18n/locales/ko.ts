@@ -23,14 +23,9 @@ export const ko = {
       nicknamePlaceholder: '닉네임 (2~20자)',
       nationalityLabel: '국적 선택',
       nationalityHint: '같은 국적 관광객과 팀이 됩니다',
+      nationalitySearchPlaceholder: '국가 검색',
+      nationalitySelected: '선택됨: {{flag}} {{name}}',
       submit: '가입하기',
-      nationalities: {
-        KR: '한국',
-        JP: '일본',
-        US: '미국',
-        CN: '중국',
-        FR: '프랑스',
-      },
     },
     errors: {
       title: '오류',
