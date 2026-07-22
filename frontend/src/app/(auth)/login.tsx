@@ -10,17 +10,23 @@ import {
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { getAuthErrorMessage } from '@/lib/firebase-errors';
+import { getApiErrorMessage } from '@/lib/api-errors';
+import { getMe } from '@/api/auth';
+import { queryKeys } from '@/lib/query-keys';
 import { useUserStore } from '@/store/useUserStore';
+import { useGoogleLogin } from '@/hooks/use-google-login';
+import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL;
-
 export default function LoginScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { setAuthenticated, setUserId, setNickname, setNationality } = useUserStore();
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
@@ -29,39 +35,55 @@ export default function LoginScreen() {
 
   const canSubmit = email.trim().length > 0 && password.length > 0 && !loading;
 
+  const finishLogin = async () => {
+    const profile = await queryClient.fetchQuery({ queryKey: queryKeys.auth.me, queryFn: getMe });
+
+    if (profile === null) {
+      // Firebase 계정은 있지만 백엔드 프로필이 없음 (가입 미완료)
+      router.replace('/(auth)/register');
+      return;
+    }
+
+    setUserId(profile.id);
+    setNickname(profile.nickname);
+    setNationality(profile.nationality);
+    setAuthenticated(true);
+    router.replace('/(main)/map');
+  };
+
+  const handleAuthError = (err: unknown, fallbackKey: string) => {
+    Alert.alert(
+      t('auth.errors.title'),
+      isAxiosError(err)
+        ? getApiErrorMessage(err, t, fallbackKey)
+        : getAuthErrorMessage(err, t, fallbackKey),
+    );
+  };
+
   const handleLogin = async () => {
     if (!canSubmit) return;
     setLoading(true);
     try {
-      const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const idToken = await credential.user.getIdToken();
-
-      const res = await fetch(`${API_URL}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-
-      if (res.status === 404) {
-        // Firebase 계정은 있지만 백엔드 프로필이 없음 (가입 미완료)
-        router.replace('/(auth)/register');
-        return;
-      }
-      if (!res.ok) throw new Error(`me failed: ${res.status}`);
-
-      const profile = await res.json();
-      setUserId(profile.id);
-      setNickname(profile.nickname);
-      setNationality(profile.nationality);
-      setAuthenticated(true);
-      router.replace('/(main)/map');
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      await finishLogin();
     } catch (err) {
-      Alert.alert(t('auth.errors.title'), getAuthErrorMessage(err, t, 'auth.errors.loginFailed'));
+      handleAuthError(err, 'auth.errors.loginFailed');
     } finally {
       setLoading(false);
     }
   };
 
+  const { request: googleRequest, promptGoogleLogin } = useGoogleLogin({
+    onSuccess: finishLogin,
+    onError: (err) => handleAuthError(err, 'auth.errors.loginFailed'),
+  });
+
   const handleGoogleLogin = () => {
-    Alert.alert(t('auth.login.googleComingSoonTitle'), t('auth.login.googleComingSoonMessage'));
+    if (!googleRequest) {
+      Alert.alert(t('auth.login.googleComingSoonTitle'), t('auth.login.googleComingSoonMessage'));
+      return;
+    }
+    promptGoogleLogin();
   };
 
   return (
@@ -109,6 +131,8 @@ export default function LoginScreen() {
       <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin}>
         <Text style={styles.googleButtonText}>{t('auth.login.google')}</Text>
       </TouchableOpacity>
+
+      <AppleSignInButton />
 
       <TouchableOpacity
         style={styles.registerLink}

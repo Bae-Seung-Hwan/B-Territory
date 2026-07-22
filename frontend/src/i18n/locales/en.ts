@@ -16,6 +16,9 @@ export const en: Translations = {
       google: 'Continue with Google',
       googleComingSoonTitle: 'Coming soon',
       googleComingSoonMessage: 'Google login will be supported after Firebase integration.',
+      apple: 'Continue with Apple',
+      appleComingSoonTitle: 'Coming soon',
+      appleComingSoonMessage: 'Apple login will be supported soon.',
       noAccount: "Don't have an account?",
       registerLink: 'Sign up',
     },
@@ -26,7 +29,7 @@ export const en: Translations = {
       nationalityLabel: 'Select nationality',
       nationalityHint: "You'll be teamed up with tourists of the same nationality",
       nationalitySearchPlaceholder: 'Search country',
-      nationalitySelected: 'Selected: {{flag}} {{name}}',
+      nationalityPlaceholder: 'Select a country',
       submit: 'Sign Up',
     },
     errors: {
@@ -39,6 +42,8 @@ export const en: Translations = {
       invalidEmail: 'Please enter a valid email address',
       loginFailed: 'Login failed',
       registerFailed: 'Sign up failed',
+      sessionExpired: 'Your session has expired. Please log in again',
+      alreadyRegistered: 'This account is already registered',
     },
   },
   tabs: {

@@ -14,6 +14,9 @@ export const ko = {
       google: 'Google로 계속하기',
       googleComingSoonTitle: '준비 중',
       googleComingSoonMessage: 'Google 로그인은 Firebase 연동 후 지원됩니다.',
+      apple: 'Apple로 계속하기',
+      appleComingSoonTitle: '준비 중',
+      appleComingSoonMessage: 'Apple 로그인은 곧 지원될 예정입니다.',
       noAccount: '아직 계정이 없으신가요?',
       registerLink: '회원가입 하기',
     },
@@ -24,7 +27,7 @@ export const ko = {
       nationalityLabel: '국적 선택',
       nationalityHint: '같은 국적 관광객과 팀이 됩니다',
       nationalitySearchPlaceholder: '국가 검색',
-      nationalitySelected: '선택됨: {{flag}} {{name}}',
+      nationalityPlaceholder: '국가를 선택하세요',
       submit: '가입하기',
     },
     errors: {
@@ -37,6 +40,8 @@ export const ko = {
       invalidEmail: '올바른 이메일 형식이 아닙니다',
       loginFailed: '로그인에 실패했습니다',
       registerFailed: '가입에 실패했습니다',
+      sessionExpired: '세션이 만료되었습니다. 다시 로그인해주세요',
+      alreadyRegistered: '이미 가입된 사용자입니다',
     },
   },
   tabs: {

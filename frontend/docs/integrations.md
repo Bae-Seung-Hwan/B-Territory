@@ -46,7 +46,7 @@
 
 ## Firebase Authentication
 
-> ⚠️ 2026-07-16 기준 `firebase` JS SDK는 설치만 된 상태 (`package.json`) — 초기화 코드(`src/lib/firebase.ts`)와 로그인/회원가입 화면 연동은 아직 구현 전
+이메일/비밀번호 로그인·가입, Google 로그인(Expo Go에서는 `expo start --web`으로만 검증 가능 — 아래 참고), Apple 로그인 골격까지 구현되어 있음.
 
 ### 인증 흐름
 
@@ -69,10 +69,31 @@
 ### 필요 작업 (TODO)
 
 - [x] frontend에 Firebase SDK 설치 — `firebase`(JS SDK) + `@react-native-async-storage/async-storage`. Expo Go 유지 중이라 네이티브 모듈이 필요 없는 JS SDK를 선택했고, Dev Build 전환 후에도 그대로 사용 가능 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고)
-- [ ] Firebase 프로젝트 설정값(`apiKey`/`authDomain`/`projectId`/`appId`) 확보 — 백엔드 `.env`의 `FIREBASE_PROJECT_ID`와 동일한 Firebase 프로젝트 사용, `EXPO_PUBLIC_FIREBASE_*`로 `.env`/`.env.example`에 추가
-- [ ] `src/lib/firebase.ts` 작성 — `initializeAuth(app, { persistence: getReactNativePersistence(AsyncStorage) })`로 세션 유지 설정
-- [ ] `login.tsx`의 `handleLogin` TODO를 `signInWithEmailAndPassword` → ID Token 발급 → `GET /api/auth/me` 호출 → 200/404 분기로 교체
-- [ ] `register.tsx`의 `handleSubmit` TODO를 `createUserWithEmailAndPassword` → ID Token 발급 → `POST /api/auth/register` 호출로 교체 (현재는 백엔드 호출 없이 `useUserStore`만 채우고 바로 진입하는 임시 코드)
-- [ ] 위 두 응답의 `id`/`nickname`/`nationality`/`team`을 `useUserStore`에 저장하는 로직 구현
-- [ ] 토큰 만료 시 자동 갱신 처리 — API 클라이언트에서 매 요청 전 `getIdToken()` 호출로 충분 (SDK가 내부적으로 만료 임박 시 자동 갱신)
-- [ ] 구글 로그인(`login.tsx`의 `handleGoogleLogin`)은 Firebase JS SDK의 `signInWithPopup`이 RN에서 동작하지 않아 별도 처리 필요 — `expo-auth-session` + `GoogleAuthProvider.credential(...)` 조사 필요
+- [x] Firebase 프로젝트 설정값(`apiKey`/`authDomain`/`projectId`/`appId`) — `EXPO_PUBLIC_FIREBASE_*`로 `.env`/`.env.example`에 있음
+- [x] `src/lib/firebase.ts` — `initializeAuth(app, { persistence: getReactNativePersistence(AsyncStorage) })`로 세션 유지 설정 완료
+- [x] `login.tsx`/`register.tsx` — `signInWithEmailAndPassword`/`createUserWithEmailAndPassword` → ID Token → `src/api/auth.ts`의 `getMe`/`registerUser`(axios 기반, `src/lib/api-client.ts`) 호출 → `useUserStore` 저장 → 라우팅까지 연결됨
+- [x] 토큰 만료 시 자동 갱신 — `src/lib/api-client.ts`의 axios 인터셉터가 요청마다 `getIdToken()`을, 401 응답 시 `getIdToken(true)`(강제 갱신) 후 원요청 1회 재시도
+- [x] React Query 레이어 — `src/lib/query-keys.ts`(queryKey factory), `src/api/auth.ts`(순수 함수), `src/hooks/use-auth.ts`(`useRegisterMutation`). 프로필 조회는 컴포넌트 라이프사이클에 안 묶인 1회성 호출이라 `queryClient.fetchQuery`로 처리 (로그인 성공 직후 `['auth','me']` 캐시를 채워 이후 화면이 재조회 없이 재사용 가능)
+- [x] 구글 로그인 — `src/hooks/use-google-login.ts`(`expo-auth-session` generic `useAuthRequest` + `GoogleAuthProvider.credential`). **단, 아래 제약 확인 필수**
+
+### ⚠️ Google 로그인 — Expo Go 실기기 제약
+
+Google의 OAuth "Web" 클라이언트는 redirect URI로 `http`/`https`만 허용해 커스텀 스킴(`exp://...`)을 거부한다. 따라서 Expo Go 앱으로 실기기/시뮬레이터에서 실행하면 `AuthSession.makeRedirectUri({ scheme: 'b-territory' })`가 `exp://...` 형태가 되어 Google이 `redirect_uri_mismatch`로 거부하는 게 **정상 동작**이다. 예전에 이를 우회하던 Expo `auth.expo.io` 프록시는 최신 `expo-auth-session`에서 제거됐다.
+
+- **지금 검증 가능한 방법**: `npm run web`(`expo start --web`) — redirect URI가 `http://localhost:...`가 되어 Google이 허용
+- **Dev Build 전환 후**: 네이티브 `@react-native-google-signin/google-signin`으로 교체 예정 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고)
+- **설정 필요**: Firebase 콘솔 → Authentication → Sign-in method → Google 활성화 시 자동 발급되는 **Web client ID**를 `.env`의 `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`에 채워야 함(콘솔 접근 권한이 있는 사람이 직접). 값이 없으면 `useGoogleLogin`의 `request`가 `null`이 되어 로그인 화면은 "준비 중" alert로 자연스럽게 폴백됨
+
+## Apple Sign In
+
+> ⚠️ 골격만 구현됨 — `src/components/auth/AppleSignInButton.tsx`는 iOS에서만 렌더링되고, 탭하면 "준비 중" alert만 뜨는 비활성 버튼. App Store 심사 Guideline 4.8(소셜 로그인 제공 시 Apple 로그인도 필수)에 대비한 자리만 마련해둔 상태.
+
+네이티브 모듈(`expo-apple-authentication`)이 필요한데 Dev Build가 있어야 하고, 지금 프로젝트는 아직 Expo Go 단계라 `app.json`에 iOS bundle identifier도 없다 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md)가 정한 전환 시점은 GPS 작업 시작 시점).
+
+### 필요 작업 (TODO, Dev Build 전환 이후)
+
+- [ ] `app.json`에 `ios.bundleIdentifier` 설정 (Dev Build 전환의 일부)
+- [ ] Apple Developer 계정에서 Sign in with Apple capability 활성화
+- [ ] `npx expo install expo-apple-authentication`
+- [ ] Firebase 콘솔에서 Apple Provider 활성화
+- [ ] `AppleSignInButton`의 stub `onPress`를 `AppleAuthentication.signInAsync(...)` → `OAuthProvider('apple.com').credential(...)` → Google과 동일한 프로필 체크/가입 플로우로 교체
