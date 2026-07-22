@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import Redis from 'ioredis';
 
 @Injectable()
@@ -53,29 +54,39 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  private dailyClaimKey(userId: string, spotId: number): string {
+    return `claim:daily:${userId}:${spotId}`;
+  }
+
   /**
    * 유저별 관광지 일일 점령 마킹 (SET NX — 확인과 기록을 단일 원자 연산으로 처리해
    * 동시 요청도 하나만 통과). created=false면 오늘(KST) 이미 점령한 관광지.
-   * 이후 단계가 실패하면 호출측이 clearDailyClaim으로 이번에 만든 키만 롤백해
-   * 점령이 확정되지 않은 시도가 일일 횟수를 소진하지 않게 한다.
+   * 이후 단계가 실패하면 호출측이 반환된 token으로 clearDailyClaim을 호출해 이번
+   * 요청이 만든 키만 CAS 롤백한다 — 자정 근처 최소 TTL(1초) 구간에서 이 요청이
+   * 지연 실패하는 사이 자정을 넘겨 같은 키로 다음날 정상 재점령이 이미 성사된
+   * 경우, 무조건 DEL이면 그 새 키를 지워버리므로 tryAcquireLock/releaseLock과
+   * 같은 토큰 기반 CAS로 막는다.
    */
   async markDailyClaim(
     userId: string,
     spotId: number,
     ttlSeconds: number,
-  ): Promise<{ created: boolean }> {
-    const result = await this.client.set(
-      `claim:daily:${userId}:${spotId}`,
-      '1',
-      'EX',
+  ): Promise<{ created: boolean; token: string }> {
+    const token = randomUUID();
+    const created = await this.tryAcquireLock(
+      this.dailyClaimKey(userId, spotId),
       ttlSeconds,
-      'NX',
+      token,
     );
-    return { created: result === 'OK' };
+    return { created, token };
   }
 
-  async clearDailyClaim(userId: string, spotId: number): Promise<void> {
-    await this.client.del(`claim:daily:${userId}:${spotId}`);
+  async clearDailyClaim(
+    userId: string,
+    spotId: number,
+    token: string,
+  ): Promise<void> {
+    await this.releaseLock(this.dailyClaimKey(userId, spotId), token);
   }
 
   /**

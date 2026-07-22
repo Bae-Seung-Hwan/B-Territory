@@ -150,13 +150,16 @@ export class ClaimsService {
       return { success: true, spotId, team, defenseSeconds: defense.remaining };
     } catch (err) {
       // 점령이 확정되지 않은 실패(방어 중, DB 오류 등)가 일일 횟수를 소진하지 않도록,
-      // 이번 요청에서 새로 만든 일일 키만 롤백한다 (NX 성공 = 이번 요청이 만든 키)
-      await this.redis.clearDailyClaim(userId, spotId).catch((redisErr) => {
-        this.logger.error(
-          `일일 점령 키 롤백 실패 userId=${userId} spotId=${spotId}`,
-          redisErr,
-        );
-      });
+      // 이번 요청에서 새로 만든 일일 키만 CAS로 롤백한다 (daily.token 불일치 시
+      // no-op — 자정 경계에서 다음날 새로 생성된 정상 키를 지우지 않기 위함)
+      await this.redis
+        .clearDailyClaim(userId, spotId, daily.token)
+        .catch((redisErr) => {
+          this.logger.error(
+            `일일 점령 키 롤백 실패 userId=${userId} spotId=${spotId}`,
+            redisErr,
+          );
+        });
       throw err;
     }
   }
