@@ -61,5 +61,6 @@ CLI 접속 정보는 `src/data-source.ts`가 `.env`에서 읽으며, `DB_NAME=..
 
 - **확장(Extension)**: `InitialSchema` 마이그레이션이 `uuid-ossp`(users.id 기본값)와 `postgis`(GPS 검증 쿼리)를 `CREATE EXTENSION IF NOT EXISTS`로 설치합니다. 관리형 PG(RDS 등)는 마스터 계정으로 실행하면 됩니다. synchronize는 uuid-ossp를 자동 설치하지만 **마이그레이션은 명시해야** 합니다.
 - **down()에서 확장을 드롭하지 마세요** — 다른 객체가 공유할 수 있습니다.
+- **`ts-node`는 `dependencies`에 있어야 합니다** — `migration:run`이 배포 파이프라인의 필수 스텝인데 `typeorm-ts-node-commonjs`가 내부적으로 `ts-node`를 필요로 합니다(`typeorm`의 optional peerDependency). 배포 아티팩트가 `npm ci --omit=dev` 등으로 devDependencies를 제외하면 이 스텝이 `ts-node`를 찾지 못해 실패하므로, `devDependencies`로 옮기지 마세요.
 - 이미 synchronize로 스키마가 만들어진 DB(초기 프로덕션 등)에 마이그레이션을 도입하려면, 테이블이 이미 존재하므로 `InitialSchema`를 실행 없이 기록만 해야 합니다:
   `INSERT INTO migrations("timestamp", "name") VALUES (1784180425289, 'InitialSchema1784180425289');`
