@@ -23,10 +23,13 @@ export enum PointSource {
  */
 @Entity('point_events')
 @Index(['userId', 'createdAt'])
-// 동일 근거(영수증/트랜잭션 ID 등)의 이벤트 재전송을 DB 레벨에서 차단 (refId 없는 이벤트는 제외)
+// 동일 근거(영수증/트랜잭션 ID 등)의 이벤트 재전송을 DB 레벨에서 차단 (refId 없는 이벤트는 제외).
+// CLAIM은 제외한다 — refId가 spotId 그대로라 같은 관광지 재점령(상대팀 탈환, 재방문)마다
+// 매번 새 이벤트가 쌓여야 하는데, 이 유니크 제약이 있으면 두 번째 점령부터 포인트가
+// 영구히 막힌다. claim_score_events와 마찬가지로 idempotency key가 확정되면 별도 제약을 추가한다.
 @Index('UQ_point_events_source_ref_id', ['source', 'refId'], {
   unique: true,
-  where: '"refId" IS NOT NULL',
+  where: '"refId" IS NOT NULL AND source != \'CLAIM\'',
 })
 export class PointEvent {
   @PrimaryGeneratedColumn()

@@ -23,7 +23,7 @@ export class ScoreAndPointLedgers1784181745407 implements MigrationInterface {
       `CREATE INDEX "IDX_de27598669655ee46f55843ab0" ON "point_events"  ("userId", "createdAt") `,
     );
     await queryRunner.query(
-      `CREATE UNIQUE INDEX "UQ_point_events_source_ref_id" ON "point_events" ("source", "refId") WHERE "refId" IS NOT NULL`,
+      `CREATE UNIQUE INDEX "UQ_point_events_source_ref_id" ON "point_events" ("source", "refId") WHERE "refId" IS NOT NULL AND source != 'CLAIM'`,
     );
     await queryRunner.query(
       `ALTER TABLE "claim_score_events" ADD CONSTRAINT "FK_71b68b81987f08d00590201b58a" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE NO ACTION`,
