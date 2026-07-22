@@ -47,3 +47,6 @@ example
 # AI tool local settings
 .claude/
 !.claude/settings.json
+
+# only developer read file
+docs/temp_docs/

@@ -26,6 +26,16 @@ export const Colors = {
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
+// 게임 화면(온보딩/인증/지도/오버레이 등) 전용 다크 팔레트 — 위 Colors(light/dark)와 별개로,
+// 항상 다크로 고정된 브랜드 톤. 14개 파일에 흩어져 있던 하드코딩 값을 여기로 통합한다.
+export const BrandColors = {
+  background: '#0A0A0F',
+  surface: '#1A1A2E',
+  border: '#2A2A3E',
+  accent: '#208AEF',
+  danger: '#FF4444',
+} as const;
+
 export const Fonts = Platform.select({
   ios: {
     /** iOS `UIFontDescriptorSystemDesignDefault` */
