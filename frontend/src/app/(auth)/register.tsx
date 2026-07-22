@@ -87,17 +87,22 @@ export default function RegisterScreen() {
   const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
     try {
-      await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const profile = await registerMutation.mutateAsync({
-        nickname: nickname.trim(),
-        nationality: selectedCode,
-      });
-
-      setUserId(profile.id);
-      setNickname(profile.nickname);
-      setNationality(profile.nationality);
-      setAuthenticated(true);
-      router.replace('/(main)/map');
+      const { user } = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      try {
+        const profile = await registerMutation.mutateAsync({
+          nickname: nickname.trim(),
+          nationality: selectedCode,
+        });
+        setUserId(profile.id);
+        setNickname(profile.nickname);
+        setNationality(profile.nationality);
+        setAuthenticated(true);
+        router.replace('/(main)/map');
+      } catch (backendErr) {
+        // 백엔드 실패 시 Firebase 계정도 롤백해 중간 상태 방지
+        await user.delete();
+        throw backendErr;
+      }
     } catch (err) {
       Alert.alert(
         t('auth.errors.title'),
