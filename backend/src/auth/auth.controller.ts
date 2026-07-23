@@ -21,6 +21,10 @@ export class AuthController {
   @ApiResponse({ status: 201, description: '회원가입 성공' })
   @ApiResponse({ status: 400, description: '이메일 정보가 없는 계정' })
   @ApiResponse({ status: 401, description: '유효하지 않은 Firebase ID Token' })
+  @ApiResponse({
+    status: 403,
+    description: '이메일 인증(POST /api/email/verify-token)을 먼저 완료해야 함',
+  })
   @ApiResponse({ status: 409, description: '이미 가입된 사용자' })
   register(
     @Body() dto: RegisterDto,
