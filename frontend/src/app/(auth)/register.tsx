@@ -171,7 +171,7 @@ export default function RegisterScreen() {
         />
       </ScrollView>
 
-      <BottomSheet ref={countrySheetRef} snapPoints={['75%']} contentStyle={styles.sheetContent}>
+      <BottomSheet ref={countrySheetRef} snapPoints={['75%']} scrollable>
         <CountrySearchInput
           style={styles.searchInput}
           placeholder={t('auth.register.nationalitySearchPlaceholder')}
@@ -253,7 +253,6 @@ const styles = StyleSheet.create({
   dropdownValue: { fontSize: 16, color: '#fff' },
   dropdownPlaceholder: { fontSize: 16, color: '#666' },
   dropdownChevron: { fontSize: 14, color: '#888' },
-  sheetContent: { padding: 0 },
   searchInput: {
     marginHorizontal: 16,
     marginBottom: 12,
