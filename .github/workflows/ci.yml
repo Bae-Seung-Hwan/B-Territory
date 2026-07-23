@@ -14,6 +14,75 @@ jobs:
       run:
         working-directory: ./backend
 
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: b_territory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: development
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: b_territory
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      TOUR_API_KEY: ci-dummy
+      FIREBASE_PROJECT_ID: ci-dummy
+      FIREBASE_CLIENT_EMAIL: ci-dummy@example.com
+      # CI 전용 더미 키 (실제 계정과 무관, 여기서만 사용) — firebase-admin의 cert()가
+      # 로컬에서 PEM 형식만 파싱하고 앱 초기화 시점에는 네트워크 호출을 하지 않으므로
+      # 문법적으로 유효한 RSA 키만 있으면 된다.
+      FIREBASE_PRIVATE_KEY: |
+        -----BEGIN PRIVATE KEY-----
+        MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCTZ9ObGryALDV4
+        cJaSTsV0bMImuSspgPzW/viAilHowT9Edk8MF1KICMc+oz60t3UMAhkI8M5zNush
+        beqXSIvv+covpXbDmSznC4+WNIfkYqAzLy0u11GrXxB8ONoH8zhj6/Tm1CF8+LG5
+        WZFe5H3k0K/5VK8Gk22F4rptPUCfiSjUEBlJ7CRgtljOIVISwURgQtHan9G1XwvA
+        02U71Gzq6Gcg2SWDmj9wT5jPC37LZg//TIpygpPAfqTgRUKPoFw9/Kb1rF2u5KJC
+        Jey8yJBwX3csTz7EGLeiJjnHwifcFYYlBWvP+HCrpyB239/gLCd3/NY134uU7/mJ
+        DmpJAsaHAgMBAAECggEAMq3LrtPuYxLP/2yWGA9FC9Yomi+ni0lxpGlc/rSPnLp0
+        ChGy87FBCswZ1ItDj9ZTQ6GlAdHo6OvEw2WK9iBXHFaBEQiOYIlVSspKv5Wn8vmF
+        opNhsW0OAyFYBZ12OK2CgbgqJwJf0Ruf3t3QgROFxRmKpupakqQ1T4a4Gb6pbS+x
+        PExg7t6zI25IVkJQBeazXoKjKNwLFyRQNIduaHz/s1O8Fk4nSz97dPv2TtaKrYl1
+        u5fZTFdEK9/+02rzbDFBpn5sGHGaYHnRHdGCIkzgNZ88Ck41tGWFyk/aotTJZBTa
+        WQFM/zVZ5oIG98x54Peod2Mc4j4o8otdQpFlc1sYAQKBgQDMn485BZnCoMJJB30q
+        UdEjDR02VurxYDzfrBlCo7Zn9rKNCO8FmRkSs9gRTPI42upBZHeJR88SnSv3TPJY
+        lLLULx3O0hIFa4VMe9WmqzCA4W92pfWFMvBNFPIzzfmwUrUAwX85e6ndVrrVUCT8
+        sMzhsz0SqsuIU0rQEbmBcRx/hwKBgQC4aoVcewsk9rNB8VSwXQQFc8zU36dhF3gq
+        El41gDgafetq0ThGQcaWE2mheMXFUzEZ8W9gSLwiKiNWanKDMKNL48lRlb7CxB68
+        zlPo83lmvePZVRs8YLiAjK9Dby2JkasSNM8pMFUELUtlca12MCCV5ssTsgljL5lw
+        Ytm/15NBAQKBgErdjh9Ex08IVk016juTl7sFT0zUXD1YAq2rX8qb7172SbmELT+V
+        FjFbj5A04OKgZdjrEzktBrw+uRlQE9MJBKzRWEyVW3aUMj8bh73lIGfnE0sLyVqk
+        mnr5UOxXTiWO/R57rTqw3iNXWiA1pHK3lR523792seT85IBgG8kaQ1z9AoGAe/Y2
+        YNzgt98QzfG/wLE1o8icVjdklpIlFvqz0vi2PbCIz4uFbUyHhZfU+FJrdmGebtbo
+        y+r4c2qpyEvTX7YQ/lFGoQ2sZdVY6Ac1RjBrWZGpGAzqOuK1AswOf6C7Fm8RdDKF
+        UiWH8D/WH4GTXQ+qx7iUp0+UmdSEKpR31Em/VQECgYEAnqA53UH76Lk54aVVt23a
+        50irgZg2JhY56FNjmHCT0q4m1xFD6kul89oOptUMaQ7rbSdyb6CoTq213T+Tt25z
+        aXGjoVyOQ8JHfs9cYkQbf4DoQYw1kKHY5nRk0H1Sqbv5GQehW3qOeuWDL1M9ISkJ
+        CCun4Y++xR/ZXpAW81juEr0=
+        -----END PRIVATE KEY-----
+
     steps:
       - uses: actions/checkout@v4
 
@@ -32,3 +101,19 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Unit test
+        run: npm test
+
+      - name: Migration consistency check
+        run: |
+          npm run migration:run
+          output=$(npm run migration:generate -- src/migrations/CiConsistencyCheck 2>&1) || true
+          echo "$output"
+          if ! echo "$output" | grep -q "No changes in database schema were found"; then
+            echo "::error::엔티티 변경분이 마이그레이션 파일에 반영되지 않았습니다. 'npm run migration:generate'로 마이그레이션을 추가해주세요."
+            exit 1
+          fi
+
+      - name: E2E test
+        run: npm run test:e2e
