@@ -25,6 +25,12 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BottomSheet } from '@/components/ui/BottomSheet';
 
+// BottomSheetTextInput의 blur 처리가 RNTextInput.State.currentlyFocusedInput()에
+// 의존하는데, react-native-web은 이 메서드를 구현하지 않아 국가 선택 후 시트가
+// 닫힐 때 크래시가 난다(@gorhom/bottom-sheet 5.2.14). 네이티브에서만 필요한
+// 키보드 연동이므로 web에서는 일반 TextInput으로 대체한다.
+const CountrySearchInput = Platform.OS === 'web' ? TextInput : BottomSheetTextInput;
+
 export default function RegisterScreen() {
   const router = useRouter();
   const { setUserId, setNickname, setNationality, setAuthenticated } = useUserStore();
@@ -166,7 +172,7 @@ export default function RegisterScreen() {
       </ScrollView>
 
       <BottomSheet ref={countrySheetRef} snapPoints={['75%']} contentStyle={styles.sheetContent}>
-        <BottomSheetTextInput
+        <CountrySearchInput
           style={styles.searchInput}
           placeholder={t('auth.register.nationalitySearchPlaceholder')}
           placeholderTextColor="#666"
