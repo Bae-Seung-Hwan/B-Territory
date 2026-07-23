@@ -21,6 +21,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { useUserStore } from '@/store/useUserStore';
 import { useGoogleLogin } from '@/hooks/use-google-login';
 import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
+import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 
@@ -114,13 +115,13 @@ export default function LoginScreen() {
         editable={!loading}
       />
 
-      <TouchableOpacity
-        style={[styles.button, !canSubmit && styles.buttonDisabled]}
+      <Button
+        title={t('auth.login.submit')}
         onPress={handleLogin}
         disabled={!canSubmit}
-      >
-        <Text style={styles.buttonText}>{t('auth.login.submit')}</Text>
-      </TouchableOpacity>
+        loading={loading}
+        style={styles.button}
+      />
 
       <View style={styles.divider}>
         <View style={styles.dividerLine} />
@@ -128,9 +129,7 @@ export default function LoginScreen() {
         <View style={styles.dividerLine} />
       </View>
 
-      <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin}>
-        <Text style={styles.googleButtonText}>{t('auth.login.google')}</Text>
-      </TouchableOpacity>
+      <Button title={t('auth.login.google')} onPress={handleGoogleLogin} variant="secondary" />
 
       <AppleSignInButton />
 
@@ -174,29 +173,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 12,
   },
-  button: {
-    width: '100%',
-    paddingVertical: 16,
-    backgroundColor: BrandColors.accent,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  buttonDisabled: { backgroundColor: BrandColors.border },
-  buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  button: { marginTop: 8 },
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 24 },
   dividerLine: { flex: 1, height: 1, backgroundColor: BrandColors.border },
   dividerText: { color: '#666', fontSize: 12, marginHorizontal: 12 },
-  googleButton: {
-    width: '100%',
-    paddingVertical: 16,
-    backgroundColor: BrandColors.surface,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: BrandColors.border,
-  },
-  googleButtonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   registerLink: { marginTop: 24, alignItems: 'center' },
   registerLinkText: { color: '#888', fontSize: 14 },
   registerLinkAccent: { color: BrandColors.accent, fontWeight: '600' },

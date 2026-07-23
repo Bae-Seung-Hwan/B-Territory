@@ -1,6 +1,6 @@
-import { TouchableOpacity, Text, StyleSheet, Alert } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
+import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/i18n';
-import { BrandColors } from '@/constants/theme';
 
 /**
  * Sign in with Apple 골격 (App Store 심사 Guideline 4.8 — Google 로그인 제공 시 필수).
@@ -18,23 +18,15 @@ export function AppleSignInButton() {
   };
 
   return (
-    <TouchableOpacity style={styles.button} onPress={handlePress}>
-      <Text style={styles.text}>{t('auth.login.apple')}</Text>
-    </TouchableOpacity>
+    <Button
+      title={t('auth.login.apple')}
+      onPress={handlePress}
+      variant="secondary"
+      style={styles.button}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  button: {
-    width: '100%',
-    paddingVertical: 16,
-    backgroundColor: BrandColors.surface,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: BrandColors.border,
-    marginTop: 12,
-    opacity: 0.6,
-  },
-  text: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  button: { marginTop: 12, opacity: 0.6 },
 });

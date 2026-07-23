@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Text,
   TextInput,
@@ -12,13 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 import { isAxiosError } from 'axios';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import {
-  BottomSheetModal,
-  BottomSheetBackdrop,
-  BottomSheetFlatList,
-  BottomSheetTextInput,
-  type BottomSheetBackdropProps,
-} from '@gorhom/bottom-sheet';
+import { BottomSheetModal, BottomSheetFlatList, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { auth } from '@/lib/firebase';
 import { getAuthErrorMessage } from '@/lib/firebase-errors';
 import { getApiErrorMessage } from '@/lib/api-errors';
@@ -27,6 +21,9 @@ import { useUserStore } from '@/store/useUserStore';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { getCountryList, type Country } from '@/constants/countries';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { BottomSheet } from '@/components/ui/BottomSheet';
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -69,13 +66,6 @@ export default function RegisterScreen() {
     setSelectedCode(code);
     countrySheetRef.current?.dismiss();
   };
-
-  const renderBackdrop = useCallback(
-    (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop {...props} appearsOnIndex={0} disappearsOnIndex={-1} />
-    ),
-    [],
-  );
 
   const canSubmit =
     email.trim().length > 0 &&
@@ -166,22 +156,16 @@ export default function RegisterScreen() {
           <Text style={styles.dropdownChevron}>▾</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
+        <Button
+          title={t('auth.register.submit')}
           onPress={handleSubmit}
           disabled={!canSubmit}
-        >
-          <Text style={styles.submitButtonText}>{t('auth.register.submit')}</Text>
-        </TouchableOpacity>
+          loading={registerMutation.isPending}
+          style={styles.submitButton}
+        />
       </ScrollView>
 
-      <BottomSheetModal
-        ref={countrySheetRef}
-        snapPoints={['75%']}
-        backdropComponent={renderBackdrop}
-        backgroundStyle={styles.sheetBackground}
-        handleIndicatorStyle={styles.sheetHandle}
-      >
+      <BottomSheet ref={countrySheetRef} snapPoints={['75%']} contentStyle={styles.sheetContent}>
         <BottomSheetTextInput
           style={styles.searchInput}
           placeholder={t('auth.register.nationalitySearchPlaceholder')}
@@ -195,17 +179,18 @@ export default function RegisterScreen() {
           keyExtractor={(item: Country) => item.code}
           contentContainerStyle={styles.sheetListContent}
           renderItem={({ item }: { item: Country }) => (
-            <TouchableOpacity
-              style={[styles.item, selectedCode === item.code && styles.itemSelected]}
+            <Card
               onPress={() => handleSelectCountry(item.code)}
+              selected={selectedCode === item.code}
+              style={[styles.item, selectedCode === item.code && styles.itemSelected]}
             >
               <Text style={styles.itemText}>
                 {item.flag} {item.name}
               </Text>
-            </TouchableOpacity>
+            </Card>
           )}
         />
-      </BottomSheetModal>
+      </BottomSheet>
     </KeyboardAvoidingView>
   );
 }
@@ -262,8 +247,7 @@ const styles = StyleSheet.create({
   dropdownValue: { fontSize: 16, color: '#fff' },
   dropdownPlaceholder: { fontSize: 16, color: '#666' },
   dropdownChevron: { fontSize: 14, color: '#888' },
-  sheetBackground: { backgroundColor: BrandColors.surface },
-  sheetHandle: { backgroundColor: BrandColors.border },
+  sheetContent: { padding: 0 },
   searchInput: {
     marginHorizontal: 16,
     marginBottom: 12,
@@ -278,25 +262,12 @@ const styles = StyleSheet.create({
   },
   sheetListContent: { paddingHorizontal: 16, paddingBottom: 24 },
   item: {
-    width: '100%',
     paddingVertical: 16,
     paddingHorizontal: 20,
     backgroundColor: BrandColors.background,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BrandColors.border,
     marginBottom: 12,
   },
-  itemSelected: { borderColor: BrandColors.accent, backgroundColor: '#16233A' },
+  itemSelected: { backgroundColor: '#16233A' },
   itemText: { fontSize: 18, color: '#fff', textAlign: 'center' },
-  submitButton: {
-    width: '100%',
-    paddingVertical: 16,
-    backgroundColor: BrandColors.accent,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  submitButtonDisabled: { backgroundColor: BrandColors.border },
-  submitButtonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  submitButton: { marginTop: 8 },
 });
