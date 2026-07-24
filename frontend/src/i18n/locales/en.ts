@@ -22,6 +22,26 @@ export const en: Translations = {
       noAccount: "Don't have an account?",
       registerLink: 'Sign up',
     },
+    terms: {
+      title: 'Agree to Terms',
+      subtitle: 'Please agree to the terms below to sign up',
+      agreeAll: 'Agree to all',
+      serviceTerms: '(Required) Terms of Service',
+      privacyPolicy: '(Required) Privacy Policy',
+      continue: 'Agree and Continue',
+      viewLabel: 'View',
+      closeLabel: 'Close',
+      serviceTermsTitle: 'Terms of Service',
+      serviceTermsBody:
+        'Section 1 (Purpose) These terms govern the relationship between the sky and the user regarding the act of counting clouds.\n\n' +
+        'Section 2 (Definitions) In these terms, "cat" refers to a concept that only exists on Tuesdays, and "cloud" means any shape the user chooses to imagine.\n\n' +
+        'Section 3 (Effect) This document is placeholder text with no real legal effect and will be replaced with the final terms.',
+      privacyPolicyTitle: 'Privacy Policy',
+      privacyPolicyBody:
+        'Section 1 (Collected Data) This service does not collect information about purple feelings, Thursday moods, or a nonexistent sixth finger.\n\n' +
+        'Section 2 (Retention) Collected data is retained until a rainbow appears, which is not an actual duration.\n\n' +
+        'Section 3 (Effect) This document is placeholder text with no real legal effect and will be replaced with the final privacy policy.',
+    },
     register: {
       title: 'Sign Up',
       subtitle: 'Choose a nickname and your nationality',
