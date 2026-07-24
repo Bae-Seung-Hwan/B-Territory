@@ -14,6 +14,7 @@ countries.registerLocale(ko);
 export type Country = {
   code: string;
   name: string;
+  nameEn: string;
   flag: string;
 };
 
@@ -24,10 +25,16 @@ function codeToFlagEmoji(code: string): string {
   );
 }
 
-/** 전세계 국가 목록을 주어진 로케일의 이름으로 정렬해 반환 */
+/** 전세계 국가 목록을 주어진 로케일의 이름으로 정렬해 반환 (영어 이름은 검색용으로 항상 함께 포함) */
 export function getCountryList(locale: Locale): Country[] {
   const names = countries.getNames(locale);
+  const namesEn = countries.getNames('en');
   return Object.entries(names)
-    .map(([code, name]) => ({ code, name, flag: codeToFlagEmoji(code) }))
+    .map(([code, name]) => ({
+      code,
+      name,
+      nameEn: namesEn[code] ?? name,
+      flag: codeToFlagEmoji(code),
+    }))
     .sort((a, b) => a.name.localeCompare(b.name, locale));
 }

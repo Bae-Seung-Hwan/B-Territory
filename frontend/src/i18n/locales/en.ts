@@ -46,6 +46,8 @@ export const en: Translations = {
       title: 'Sign Up',
       subtitle: 'Choose a nickname and your nationality',
       nicknamePlaceholder: 'Nickname (2-20 characters)',
+      confirmPasswordPlaceholder: 'Confirm password',
+      passwordMismatch: 'Passwords do not match',
       nationalityLabel: 'Select nationality',
       nationalityHint: "You'll be teamed up with tourists of the same nationality",
       nationalitySearchPlaceholder: 'Search country',

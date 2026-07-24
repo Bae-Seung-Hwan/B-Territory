@@ -8,8 +8,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  View,
+  type StyleProp,
+  type TextStyle,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { isAxiosError } from 'axios';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { BottomSheetModal, BottomSheetFlatList, BottomSheetTextInput } from '@gorhom/bottom-sheet';
@@ -31,6 +35,77 @@ import { BottomSheet } from '@/components/ui/BottomSheet';
 // 키보드 연동이므로 web에서는 일반 TextInput으로 대체한다.
 const CountrySearchInput = Platform.OS === 'web' ? TextInput : BottomSheetTextInput;
 
+// countryQuery(입력값)를 RegisterScreen이 아니라 이 컴포넌트가 직접 들고 있는다.
+// RegisterScreen이 들고 있으면 키 입력마다 이메일/비밀번호 필드, ~250개 항목의
+// BottomSheetFlatList까지 포함한 화면 전체가 리렌더링되는데, 이 부하가 네이티브
+// IME의 한글 조합(모아쓰기) 타이밍과 겹치면서 자음/모음이 분리되거나("ㅎㅏㄱㅜㄱ")
+// 음절이 중복 커밋되는("하한하하구구국") 문제로 이어진다. 입력값을 이 컴포넌트
+// 안에 격리해 리렌더 범위를 검색창 자신으로만 좁히고, 디바운스된 값만 부모로
+// 올려 목록 필터링에 쓴다.
+function CountrySearchField({
+  placeholder,
+  onDebouncedChange,
+}: {
+  placeholder: string;
+  onDebouncedChange: (query: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => onDebouncedChange(query), 200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  return (
+    <CountrySearchInput
+      style={styles.searchInput}
+      placeholder={placeholder}
+      placeholderTextColor="#666"
+      value={query}
+      onChangeText={setQuery}
+      autoCapitalize="none"
+    />
+  );
+}
+
+function PasswordField({
+  value,
+  onChangeText,
+  placeholder,
+  editable,
+  style,
+}: {
+  value: string;
+  onChangeText: (text: string) => void;
+  placeholder: string;
+  editable: boolean;
+  style?: StyleProp<TextStyle>;
+}) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <View style={styles.passwordWrapper}>
+      <TextInput
+        style={[styles.input, styles.passwordInput, style]}
+        placeholder={placeholder}
+        placeholderTextColor="#666"
+        value={value}
+        onChangeText={onChangeText}
+        secureTextEntry={!visible}
+        editable={editable}
+      />
+      <TouchableOpacity
+        style={styles.passwordToggle}
+        onPress={() => setVisible((prev) => !prev)}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
+        <Ionicons name={visible ? 'eye-outline' : 'eye-off-outline'} size={20} color="#888" />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 export default function RegisterScreen() {
   const router = useRouter();
   const { setUserId, setNickname, setNationality, setAuthenticated } = useUserStore();
@@ -39,32 +114,28 @@ export default function RegisterScreen() {
   const countrySheetRef = useRef<BottomSheetModal>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [nickname, setNicknameInput] = useState('');
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
-  const [countryQuery, setCountryQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-
-  // 검색어 입력(한글 조합)과 리스트 재필터링을 분리한다. 매 타이핑마다 ~250개국
-  // 목록 전체를 재필터링해 BottomSheetFlatList를 리렌더링하면, 그 부하가 IME의
-  // 한글 조합(모아쓰기) 처리를 방해해 자음/모음이 분리된 채로 커밋되는 문제가 있었다.
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(countryQuery), 200);
-    return () => clearTimeout(timer);
-  }, [countryQuery]);
+  const [searchFieldKey, setSearchFieldKey] = useState(0);
 
   const countries = useMemo(() => getCountryList(locale), [locale]);
   const filteredCountries = useMemo(() => {
     const query = debouncedQuery.trim().toLowerCase();
     if (!query) return countries;
     return countries.filter(
-      (c) => c.name.toLowerCase().includes(query) || c.code.toLowerCase().includes(query),
+      (c) =>
+        c.name.toLowerCase().includes(query) ||
+        c.nameEn.toLowerCase().includes(query) ||
+        c.code.toLowerCase().includes(query),
     );
   }, [countries, debouncedQuery]);
   const selectedCountry = countries.find((c) => c.code === selectedCode) ?? null;
 
   const openCountryPicker = () => {
-    setCountryQuery('');
     setDebouncedQuery('');
+    setSearchFieldKey((key) => key + 1);
     countrySheetRef.current?.present();
   };
 
@@ -73,9 +144,12 @@ export default function RegisterScreen() {
     countrySheetRef.current?.dismiss();
   };
 
+  const passwordMismatch = confirmPassword.length > 0 && password !== confirmPassword;
+
   const canSubmit =
     email.trim().length > 0 &&
     password.length > 0 &&
+    password === confirmPassword &&
     nickname.trim().length >= 2 &&
     selectedCode !== null &&
     !registerMutation.isPending;
@@ -128,15 +202,22 @@ export default function RegisterScreen() {
           keyboardType="email-address"
           editable={!registerMutation.isPending}
         />
-        <TextInput
-          style={styles.input}
-          placeholder={t('auth.login.passwordPlaceholder')}
-          placeholderTextColor="#666"
+        <PasswordField
           value={password}
           onChangeText={setPassword}
-          secureTextEntry
+          placeholder={t('auth.login.passwordPlaceholder')}
           editable={!registerMutation.isPending}
         />
+        <PasswordField
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          placeholder={t('auth.register.confirmPasswordPlaceholder')}
+          editable={!registerMutation.isPending}
+          style={passwordMismatch && styles.inputError}
+        />
+        {passwordMismatch && (
+          <Text style={styles.errorText}>{t('auth.register.passwordMismatch')}</Text>
+        )}
         <TextInput
           style={styles.input}
           placeholder={t('auth.register.nicknamePlaceholder')}
@@ -172,13 +253,10 @@ export default function RegisterScreen() {
       </ScrollView>
 
       <BottomSheet ref={countrySheetRef} snapPoints={['75%']} scrollable>
-        <CountrySearchInput
-          style={styles.searchInput}
+        <CountrySearchField
+          key={searchFieldKey}
           placeholder={t('auth.register.nationalitySearchPlaceholder')}
-          placeholderTextColor="#666"
-          value={countryQuery}
-          onChangeText={setCountryQuery}
-          autoCapitalize="none"
+          onDebouncedChange={setDebouncedQuery}
         />
         <BottomSheetFlatList
           data={filteredCountries}
@@ -222,6 +300,24 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     marginBottom: 12,
+  },
+  inputError: { borderColor: BrandColors.danger },
+  errorText: {
+    alignSelf: 'flex-start',
+    fontSize: 12,
+    color: BrandColors.danger,
+    marginTop: -8,
+    marginBottom: 12,
+  },
+  passwordWrapper: { width: '100%', marginBottom: 12 },
+  passwordInput: { marginBottom: 0, paddingRight: 44 },
+  passwordToggle: {
+    position: 'absolute',
+    right: 4,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
   },
   sectionLabel: {
     alignSelf: 'flex-start',

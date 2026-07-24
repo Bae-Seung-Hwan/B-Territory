@@ -44,6 +44,8 @@ export const ko = {
       title: '회원가입',
       subtitle: '닉네임과 국적을 선택하세요',
       nicknamePlaceholder: '닉네임 (2~20자)',
+      confirmPasswordPlaceholder: '비밀번호 확인',
+      passwordMismatch: '비밀번호가 일치하지 않습니다',
       nationalityLabel: '국적 선택',
       nationalityHint: '같은 국적 관광객과 팀이 됩니다',
       nationalitySearchPlaceholder: '국가 검색',

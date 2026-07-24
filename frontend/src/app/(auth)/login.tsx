@@ -20,7 +20,6 @@ import { getApiErrorMessage } from '@/lib/api-errors';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
 import { useUserStore } from '@/store/useUserStore';
-import { useGoogleLogin } from '@/hooks/use-google-login';
 import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -82,17 +81,8 @@ export default function LoginScreen() {
     }
   };
 
-  const { request: googleRequest, promptGoogleLogin } = useGoogleLogin({
-    onSuccess: finishLogin,
-    onError: (err) => handleAuthError(err, 'auth.errors.loginFailed'),
-  });
-
   const handleGoogleLogin = () => {
-    if (!googleRequest) {
-      Alert.alert(t('auth.login.googleComingSoonTitle'), t('auth.login.googleComingSoonMessage'));
-      return;
-    }
-    promptGoogleLogin();
+    Alert.alert(t('auth.login.googleComingSoonTitle'), t('auth.login.googleComingSoonMessage'));
   };
 
   const openTermsSheet = () => {
@@ -156,7 +146,12 @@ export default function LoginScreen() {
         <View style={styles.dividerLine} />
       </View>
 
-      <Button title={t('auth.login.google')} onPress={handleGoogleLogin} variant="secondary" />
+      <Button
+        title={t('auth.login.google')}
+        onPress={handleGoogleLogin}
+        variant="secondary"
+        style={styles.googleButton}
+      />
 
       <AppleSignInButton />
 
@@ -167,7 +162,7 @@ export default function LoginScreen() {
         </Text>
       </TouchableOpacity>
 
-      <BottomSheet ref={termsSheetRef} snapPoints={[termsView === 'list' ? '45%' : '70%']}>
+      <BottomSheet ref={termsSheetRef} snapPoints={[termsView === 'list' ? '58%' : '70%']}>
         {termsView === 'list' ? (
           <>
             <Text style={styles.termsTitle}>{t('auth.terms.title')}</Text>
@@ -269,6 +264,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   button: { marginTop: 8 },
+  googleButton: { opacity: 0.6 },
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 24 },
   dividerLine: { flex: 1, height: 1, backgroundColor: BrandColors.border },
   dividerText: { color: '#666', fontSize: 12, marginHorizontal: 12 },
