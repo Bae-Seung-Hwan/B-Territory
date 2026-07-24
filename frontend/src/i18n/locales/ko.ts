@@ -87,7 +87,15 @@ export const ko = {
   },
   profile: {
     title: '내정보',
-    placeholder: '유저 프로필 · 점령 통계가 표시됩니다',
+    placeholder: '점령 통계는 추후 제공됩니다',
+    loading: '불러오는 중…',
+    emailLabel: '이메일',
+    nationalityLabel: '국적',
+    teamLabel: '소속 팀',
+    logout: '로그아웃',
+    logoutConfirmTitle: '로그아웃',
+    logoutConfirmMessage: '정말 로그아웃하시겠어요?',
+    cancel: '취소',
   },
   map: {
     hud: {

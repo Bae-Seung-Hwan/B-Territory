@@ -89,7 +89,15 @@ export const en: Translations = {
   },
   profile: {
     title: 'Profile',
-    placeholder: 'User profile and territory stats will appear here',
+    placeholder: 'Territory stats coming soon',
+    loading: 'Loading…',
+    emailLabel: 'Email',
+    nationalityLabel: 'Nationality',
+    teamLabel: 'Team',
+    logout: 'Log Out',
+    logoutConfirmTitle: 'Log Out',
+    logoutConfirmMessage: 'Are you sure you want to log out?',
+    cancel: 'Cancel',
   },
   map: {
     hud: {
