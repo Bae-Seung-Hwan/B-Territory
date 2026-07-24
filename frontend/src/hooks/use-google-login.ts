@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import * as Crypto from 'expo-crypto';
@@ -30,6 +30,11 @@ interface UseGoogleLoginOptions {
  */
 export function useGoogleLogin({ onSuccess, onError }: UseGoogleLoginOptions) {
   const redirectUri = AuthSession.makeRedirectUri({ scheme: 'b-territory' });
+  // nonce는 요청마다 한 번만 생성해야 한다. 매 렌더링마다 새로 만들면
+  // extraParams가 매번 다른 객체가 되어 useAuthRequest의 useEffect가 계속
+  // 재실행 -> setRequest -> 리렌더 -> nonce 재생성으로 이어지는 무한 루프에
+  // 빠진다(로그인 화면에서 텍스트 입력 등 아무 리렌더링에도 CPU가 100%로 치솟음).
+  const nonce = useMemo(() => Crypto.randomUUID(), []);
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
       clientId: CLIENT_ID ?? '',
@@ -38,7 +43,7 @@ export function useGoogleLogin({ onSuccess, onError }: UseGoogleLoginOptions) {
       usePKCE: false,
       scopes: ['openid', 'profile', 'email'],
       extraParams: {
-        nonce: Crypto.randomUUID(),
+        nonce,
       },
     },
     discovery,
