@@ -46,14 +46,15 @@
 
 ## Firebase Authentication
 
-이메일/비밀번호 로그인·가입, Google 로그인(Expo Go에서는 `expo start --web`으로만 검증 가능 — 아래 참고), Apple 로그인 골격까지 구현되어 있음.
+이메일/비밀번호 로그인·가입, Google 로그인(현재 임시 비활성화 — 아래 참고), Apple 로그인 골격까지 구현되어 있음.
 
 ### 인증 흐름
 
 1. **로그인**: Firebase Authentication SDK(이메일/비밀번호, 소셜 로그인 등)로 로그인 → Firebase가 **ID Token** 발급
-2. **가입 여부 확인**: 발급받은 ID Token으로 `GET /api/auth/me` 호출
+2. **가입 여부 확인**: 로그인 화면에서 로그인 성공 직후, 발급받은 ID Token으로 `GET /api/auth/me` 호출 (`login.tsx:46-60`의 `finishLogin`에서만 호출됨)
    - `200` → 이미 가입된 사용자. 응답 프로필(`id`/`email`/`nickname`/`nationality`/`team`)을 `useUserStore`에 채우고 바로 메인 화면 진입
-   - `404` → 미가입. 회원가입 화면으로 이동 후 `POST /api/auth/register` 호출 (최초 1회만; 재호출 시 `409`)
+   - `404` → Firebase 계정은 있지만 백엔드 프로필이 없음. 예전엔 회원가입 화면으로 자동 이동시켰으나, 아래 "⚠️ Firebase ↔ 백엔드 계정 불일치" 문제 때문에 지금은 이메일/비밀번호를 다시 확인해달라는 alert만 띄우고 로그인 화면에 그대로 머무름
+   - 신규 가입은 이 흐름과 별개로 진행됨: 로그인 화면의 "회원가입 하기" 링크 → 약관 동의 바텀시트 → `register.tsx`에서 `createUserWithEmailAndPassword` 후 `POST /api/auth/register` 호출 (최초 1회만; 재호출 시 `409`)
 3. **보관**: ID Token과 위에서 받은 프로필 값들을 클라이언트에 보관 (예: `useUserStore`)
 4. **요청 시 첨부**: 인증이 필요한 API 호출 시 `Authorization: Bearer <idToken>` 헤더로 전송
 5. **갱신**: ID Token은 약 1시간 후 만료되므로, Firebase SDK의 갱신 함수로 주기적으로 재발급 필요
@@ -66,6 +67,22 @@
   - `GET /api/auth/me` — 가입 여부 확인 + 프로필 조회. 로그인 직후 항상 먼저 호출해야 함. 미가입 시 `404`
 - 백엔드 코드에 `JwtStrategy`(자체 발급 JWT)도 존재하지만 어떤 API에도 연결되어 있지 않음 → 프론트는 자체 JWT를 신경 쓸 필요 없이 **Firebase ID Token만** 다루면 됨
 
+### ⚠️ Firebase ↔ 백엔드 계정 불일치
+
+Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭션으로 묶여있지 않아, 둘 중 하나만 존재하는 상태가 생길 수 있고 두 방향 모두 자력으로 복구가 안 되는 막다른 상태로 이어진다.
+
+**A. Firebase 계정은 있는데 백엔드 프로필이 없음 (가입 중단)**
+- 원인: `register.tsx`는 `createUserWithEmailAndPassword`로 Firebase 계정을 만든 뒤 `POST /api/auth/register`를 호출하는데, 백엔드 호출이 동기적으로 실패하면 방금 만든 Firebase 계정을 롤백(`user.delete()`)하지만(`register.tsx:97-101`), 그 사이 앱이 강제 종료되거나 네트워크가 끊기는 등 **중단**이 발생하면 이 롤백이 실행되지 않아 "유령 Firebase 계정"이 남는다.
+- 현재 동작: 다음 로그인 시 `getMe()`가 `404` → 위에서 설명한 "이메일/비밀번호를 확인해달라"는 alert만 뜨고 로그인 화면에 머무름 (`login.tsx:46-60`).
+- 문제: 사용자가 가입을 재개할 방법이 없다. `register.tsx`로 다시 가서 같은 이메일/비밀번호를 입력해도 `createUserWithEmailAndPassword`가 `auth/email-already-in-use`로 실패한다.
+- 개선 방향(TODO): 로그인 직후엔 이미 유효한 Firebase 세션(`auth.currentUser`)이 있고 `apiClient`가 매 요청마다 이를 자동으로 첨부하므로(`src/lib/api-client.ts:14-17`), `register.tsx`에 "이어서 가입" 모드를 추가해 계정 재생성 없이 닉네임/국적만 입력받아 바로 `POST /api/auth/register`를 호출하도록 개선.
+
+**B. 백엔드 프로필은 있는데 Firebase 계정이 없음 (Firebase 콘솔 등에서 수동 삭제된 경우)**
+- 로그인 시도: `signInWithEmailAndPassword`가 즉시 실패(`auth/user-not-found` 또는 `auth/invalid-credential`) → A와 똑같은 "이메일/비밀번호를 확인해주세요" 메시지가 떠서 진짜 원인(계정 삭제)을 구분할 방법이 없음.
+- 재가입 시도: 같은 이메일로 새 Firebase 계정 생성 자체는 성공하지만, 백엔드 `users.email`에 `unique: true` 제약이 있어(`backend/src/users/entities/user.entity.ts:16-17`) INSERT가 기존 유령 row와 충돌 → `409` → `register.tsx`가 방금 만든 새 Firebase 계정을 다시 롤백. 결과적으로 **로그인도 재가입도 모두 막힌 상태로 고착**되며, DB에서 유령 row를 수동으로 지우기 전까지는 해당 이메일을 다시 쓸 수 없다.
+- 추가 함정: `FirebaseAuthGuard`가 `verifyIdToken`을 `checkRevoked` 옵션 없이 호출해서(`backend/src/common/firebase/firebase.service.ts:24-26`) 서명·만료만 검증하고 계정이 지금도 존재하는지는 확인하지 않는다. 그래서 계정이 삭제되기 전 이미 발급된 ID Token은 만료 시간(최대 1시간)까지는 계속 유효한 것으로 통과된다.
+- 개선 방향(TODO): 백엔드에 Firebase 계정이 실제로 존재하는 UID만 남기는 정리 배치, 또는 재가입 시 이메일 충돌을 "관리자 문의" 등으로 더 명확히 안내하는 처리 필요.
+
 ### 필요 작업 (TODO)
 
 - [x] frontend에 Firebase SDK 설치 — `firebase`(JS SDK) + `@react-native-async-storage/async-storage`. Expo Go 유지 중이라 네이티브 모듈이 필요 없는 JS SDK를 선택했고, Dev Build 전환 후에도 그대로 사용 가능 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고)
@@ -74,15 +91,20 @@
 - [x] `login.tsx`/`register.tsx` — `signInWithEmailAndPassword`/`createUserWithEmailAndPassword` → ID Token → `src/api/auth.ts`의 `getMe`/`registerUser`(axios 기반, `src/lib/api-client.ts`) 호출 → `useUserStore` 저장 → 라우팅까지 연결됨
 - [x] 토큰 만료 시 자동 갱신 — `src/lib/api-client.ts`의 axios 인터셉터가 요청마다 `getIdToken()`을, 401 응답 시 `getIdToken(true)`(강제 갱신) 후 원요청 1회 재시도
 - [x] React Query 레이어 — `src/lib/query-keys.ts`(queryKey factory), `src/api/auth.ts`(순수 함수), `src/hooks/use-auth.ts`(`useRegisterMutation`). 프로필 조회는 컴포넌트 라이프사이클에 안 묶인 1회성 호출이라 `queryClient.fetchQuery`로 처리 (로그인 성공 직후 `['auth','me']` 캐시를 채워 이후 화면이 재조회 없이 재사용 가능)
-- [x] 구글 로그인 — `src/hooks/use-google-login.ts`(`expo-auth-session` generic `useAuthRequest` + `GoogleAuthProvider.credential`). **단, 아래 제약 확인 필수**
+- [x] 구글 로그인 훅 구현 — `src/hooks/use-google-login.ts`(`expo-auth-session` generic `useAuthRequest` + `GoogleAuthProvider.credential`). **단, 아래 ⚠️ 제약으로 현재 `login.tsx`에서 호출을 막아둔 상태**
+- [ ] Dev Build 전환 후 구글 로그인 재활성화 — `login.tsx`의 "준비 중" 스텁(`handleGoogleLogin`)을 `useGoogleLogin` 실제 호출로 되돌리기 (아래 ⚠️ Google 로그인 항목 참고)
+- [ ] "Firebase 계정은 있는데 백엔드 프로필 없음" 복구 — `register.tsx`에 "이어서 가입" 모드 추가 (위 ⚠️ A 항목)
+- [ ] "백엔드 프로필은 있는데 Firebase 계정 없음" 복구 — 유령 유저 정리 배치 또는 재가입 시 안내 개선 (위 ⚠️ B 항목)
 
-### ⚠️ Google 로그인 — Expo Go 실기기 제약
+### ⚠️ Google 로그인 — 임시 비활성화 (Expo Go 실기기 제약)
 
 Google의 OAuth "Web" 클라이언트는 redirect URI로 `http`/`https`만 허용해 커스텀 스킴(`exp://...`)을 거부한다. 따라서 Expo Go 앱으로 실기기/시뮬레이터에서 실행하면 `AuthSession.makeRedirectUri({ scheme: 'b-territory' })`가 `exp://...` 형태가 되어 Google이 `redirect_uri_mismatch`로 거부하는 게 **정상 동작**이다. 예전에 이를 우회하던 Expo `auth.expo.io` 프록시는 최신 `expo-auth-session`에서 제거됐다.
 
-- **지금 검증 가능한 방법**: `npm run web`(`expo start --web`) — redirect URI가 `http://localhost:...`가 되어 Google이 허용
-- **Dev Build 전환 후**: 네이티브 `@react-native-google-signin/google-signin`으로 교체 예정 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고)
-- **설정 필요**: Firebase 콘솔 → Authentication → Sign-in method → Google 활성화 시 자동 발급되는 **Web client ID**를 `.env`의 `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`에 채워야 함(콘솔 접근 권한이 있는 사람이 직접). 값이 없으면 `useGoogleLogin`의 `request`가 `null`이 되어 로그인 화면은 "준비 중" alert로 자연스럽게 폴백됨
+문제는 여기서 그치지 않는다: 실기기(Expo Go)에서 이 mismatch 에러 화면을 X로 닫으면 Auth Session이 비정상 종료되면서 **Expo Go 앱 자체가 꺼지는 문제**가 확인되어, 지금은 `login.tsx`의 구글 로그인 버튼을 Apple 로그인과 동일하게 "준비 중" alert만 띄우는 스텁으로 임시 전환해뒀다(`handleGoogleLogin`). `useGoogleLogin` 훅(`src/hooks/use-google-login.ts`) 구현 자체는 남아있지만 `login.tsx`에서 더 이상 호출하지 않는다.
+
+- **지금 검증 가능한 방법**: `npm run web`(`expo start --web`) — redirect URI가 `http://localhost:...`가 되어 Google이 허용. 단 실기기 버튼은 스텁 상태라 알럿만 뜨므로, 실제 로그인을 확인하려면 웹에서 `login.tsx`에 `useGoogleLogin` 호출을 임시로 되돌려야 함
+- **재활성화 시점**: Dev Build 전환 후 네이티브 `@react-native-google-signin/google-signin`으로 교체하면서 `login.tsx`의 스텁을 실제 훅 호출로 되돌릴 예정 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고)
+- **설정 필요(재활성화 시)**: Firebase 콘솔 → Authentication → Sign-in method → Google 활성화 시 자동 발급되는 **Web client ID**를 `.env`의 `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`에 채워야 함(콘솔 접근 권한이 있는 사람이 직접)
 
 ## Apple Sign In
 

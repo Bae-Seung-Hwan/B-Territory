@@ -47,8 +47,10 @@ export default function LoginScreen() {
     const profile = await queryClient.fetchQuery({ queryKey: queryKeys.auth.me, queryFn: getMe });
 
     if (profile === null) {
-      // Firebase 계정은 있지만 백엔드 프로필이 없음 (가입 미완료)
-      router.replace('/(auth)/register');
+      // Firebase 계정은 있지만 백엔드 프로필이 없음 (가입 미완료). 가입 화면으로
+      // 바로 넘기면 "왜 다시 가입하라는지" 혼란을 주므로, 이메일/비밀번호를
+      // 다시 확인하도록 안내한다.
+      Alert.alert(t('auth.errors.title'), t('auth.errors.invalidCredential'));
       return;
     }
 
