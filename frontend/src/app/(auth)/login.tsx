@@ -11,15 +11,13 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { isAxiosError } from 'axios';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { BottomSheetModal } from '@gorhom/bottom-sheet';
 import { auth } from '@/lib/firebase';
-import { getAuthErrorMessage } from '@/lib/firebase-errors';
-import { getApiErrorMessage } from '@/lib/api-errors';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
 import { useUserStore } from '@/store/useUserStore';
+import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -61,14 +59,7 @@ export default function LoginScreen() {
     router.replace('/(main)/map');
   };
 
-  const handleAuthError = (err: unknown, fallbackKey: string) => {
-    Alert.alert(
-      t('auth.errors.title'),
-      isAxiosError(err)
-        ? getApiErrorMessage(err, t, fallbackKey)
-        : getAuthErrorMessage(err, t, fallbackKey),
-    );
-  };
+  const handleAuthError = useHandleAuthError();
 
   const handleLogin = async () => {
     if (!canSubmit) return;

@@ -18,6 +18,10 @@ apiClient.interceptors.request.use(async (config) => {
   return config;
 });
 
+// 토큰 만료 시점에 여러 요청이 동시에 401을 받아도 갱신 요청은 하나만 나가도록
+// 진행 중인 갱신 Promise를 공유한다(single-flight).
+let refreshPromise: Promise<string> | null = null;
+
 apiClient.interceptors.response.use(
   (res) => res,
   async (error) => {
@@ -31,7 +35,12 @@ apiClient.interceptors.response.use(
     ) {
       original._retry = true;
       try {
-        const freshToken = await auth.currentUser.getIdToken(true);
+        if (!refreshPromise) {
+          refreshPromise = auth.currentUser.getIdToken(true).finally(() => {
+            refreshPromise = null;
+          });
+        }
+        const freshToken = await refreshPromise;
         original.headers.Authorization = `Bearer ${freshToken}`;
         return apiClient.request(original);
       } catch {

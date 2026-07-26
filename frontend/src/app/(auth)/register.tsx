@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Text,
   TextInput,
@@ -7,7 +7,6 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   View,
   type StyleProp,
   type TextStyle,
@@ -18,9 +17,8 @@ import { isAxiosError } from 'axios';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { BottomSheetModal, BottomSheetFlatList, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { auth } from '@/lib/firebase';
-import { getAuthErrorMessage } from '@/lib/firebase-errors';
-import { getApiErrorMessage } from '@/lib/api-errors';
 import { useRegisterMutation } from '@/hooks/use-auth';
+import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useUserStore } from '@/store/useUserStore';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
@@ -50,12 +48,11 @@ function CountrySearchField({
   onDebouncedChange: (query: string) => void;
 }) {
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
 
   useEffect(() => {
-    const timer = setTimeout(() => onDebouncedChange(query), 200);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+    onDebouncedChange(deferredQuery);
+  }, [deferredQuery, onDebouncedChange]);
 
   return (
     <CountrySearchInput
@@ -111,6 +108,7 @@ export default function RegisterScreen() {
   const { setUserId, setNickname, setNationality, setAuthenticated } = useUserStore();
   const { t, locale } = useTranslation();
   const registerMutation = useRegisterMutation();
+  const handleAuthError = useHandleAuthError();
   const countrySheetRef = useRef<BottomSheetModal>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -169,17 +167,27 @@ export default function RegisterScreen() {
         setAuthenticated(true);
         router.replace('/(main)/map');
       } catch (backendErr) {
-        // 백엔드 실패 시 Firebase 계정도 롤백해 중간 상태 방지
-        await user.delete();
+        // 백엔드가 4xx로 명확히 거부한 경우(409 제외)에만 서버에 아무 부작용도
+        // 없었다고 확신할 수 있어 Firebase 계정을 롤백한다. 네트워크/타임아웃/5xx는
+        // 백엔드에 유저 row가 실제로 생겼을 수 있으므로 롤백하지 않는다.
+        const shouldRollback =
+          isAxiosError(backendErr) &&
+          backendErr.response &&
+          backendErr.response.status >= 400 &&
+          backendErr.response.status < 500 &&
+          backendErr.response.status !== 409;
+
+        if (shouldRollback) {
+          try {
+            await user.delete();
+          } catch (deleteErr) {
+            console.warn('Failed to rollback Firebase user after registration failure', deleteErr);
+          }
+        }
         throw backendErr;
       }
     } catch (err) {
-      Alert.alert(
-        t('auth.errors.title'),
-        isAxiosError(err)
-          ? getApiErrorMessage(err, t, 'auth.errors.registerFailed')
-          : getAuthErrorMessage(err, t, 'auth.errors.registerFailed'),
-      );
+      handleAuthError(err, 'auth.errors.registerFailed');
     }
   };
 
