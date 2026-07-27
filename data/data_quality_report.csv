@@ -1,6 +1,0 @@
-﻿table_name,file_path,row_count,column_count,duplicate_count,columns,missing_source,missing_source_id,missing_title,missing_address,missing_map_x,missing_map_y,missing_image_url,missing_content_type_id,missing_sigungu_code,missing_row_no,missing_metric,missing_value,missing_code_type,missing_code,missing_name
-places,C:\Users\swlee\Downloads\places.xls,220,17,0,"source, source_id, title, address, address_detail, map_x, map_y, image_url, content_type_id, area_code, sigungu_code, category1, category2, category3, tel, description, homepage",0,0,0,1,0,0,11,0,0,,,,,,
-stays,C:\Users\swlee\Downloads\stays.xls,80,17,0,"source, source_id, title, address, address_detail, map_x, map_y, image_url, content_type_id, area_code, sigungu_code, category1, category2, category3, tel, description, homepage",0,0,0,0,0,0,,,,,,,,,
-festivals,C:\Users\swlee\Downloads\festivals.xls,45,14,0,"source, source_id, title, address, place, map_x, map_y, image_url, start_date, end_date, usage_time, tel, description, homepage",0,0,0,3,0,0,0,,,,,,,,
-visitor_stats_long,C:\Users\swlee\Downloads\visitor_stats_long.xls,962,4,0,"row_no, spot, metric, value",,,,,,,,,,0,0,0,,,
-code_tables,C:\Users\swlee\Downloads\code_tables.xls,50,4,0,"code_type, code, name, rnum",,,,,,,,,,,,,0,0,0
