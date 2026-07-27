@@ -123,6 +123,7 @@ export const en: Translations = {
       topTeam: 'Top Team',
       capitalDistrict: "This Week's Capital",
     },
+    outOfBounds: 'Current location is not in Busan',
   },
   overlay: {
     enemyAlert: {

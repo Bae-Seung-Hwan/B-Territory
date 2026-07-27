@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import { StyleProp, ViewStyle } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { BrandColors } from '@/constants/theme';
+import { BUSAN_CENTER, BUSAN_BOUNDS } from '@/constants/busan';
 import busanSigGeoJson from '@/assets/geo/busan_sig.json';
 import type { Spot } from '@/api/spots';
 
 const KAKAO_KEY = process.env.EXPO_PUBLIC_KAKAO_MAP_KEY ?? '';
-
-const BUSAN_LAT = 35.1796;
-const BUSAN_LNG = 129.0756;
 
 const MAP_HTML = `
 <!DOCTYPE html>
@@ -66,6 +64,25 @@ const MAP_HTML = `
     }
     .iw-title { display: block; font-weight: 600; }
     .iw-addr { margin-top: 3px; font-size: 12px; color: #666; }
+    /* 현재 위치 — 카카오맵 기본 "내 위치" UI를 흉내낸 펄스 도트. 마커 이미지 대신
+       CustomOverlay + CSS로 그려서 애니메이션(pulse)을 쉽게 넣는다 */
+    .my-location-dot {
+      width: 16px; height: 16px; border-radius: 50%;
+      background: #208AEF; border: 2px solid #fff;
+      box-shadow: 0 0 0 2px rgba(32,138,239,0.35);
+      position: relative;
+    }
+    .my-location-dot::after {
+      content: '';
+      position: absolute; left: 50%; top: 50%;
+      width: 32px; height: 32px; margin: -16px 0 0 -16px;
+      border-radius: 50%; background: rgba(32,138,239,0.25);
+      animation: my-location-pulse 2s ease-out infinite;
+    }
+    @keyframes my-location-pulse {
+      0% { transform: scale(0.4); opacity: 0.8; }
+      100% { transform: scale(1); opacity: 0; }
+    }
   </style>
 </head>
 <body>
@@ -156,7 +173,7 @@ const MAP_HTML = `
       kakao.maps.load(function() {
         try {
           var map = new kakao.maps.Map(document.getElementById('map'), {
-            center: new kakao.maps.LatLng(${BUSAN_LAT}, ${BUSAN_LNG}),
+            center: new kakao.maps.LatLng(${BUSAN_CENTER.lat}, ${BUSAN_CENTER.lng}),
             level: 7,
           });
           window.mapInstance = map;
@@ -164,7 +181,7 @@ const MAP_HTML = `
           // Kakao Maps는 한국 밖 타일이 없어 과도하게 축소/이동하면 흰 영역이 보인다 —
           // 축소 상한은 유지하고, 이동 범위는 부산 시군구 bbox(+여유 0.05도)로 제한
           map.setMaxLevel(11);
-          var BUSAN_BOUNDS = { minLat: 34.83, maxLat: 35.44, minLng: 128.71, maxLng: 129.36 };
+          var BUSAN_BOUNDS = { minLat: ${BUSAN_BOUNDS.minLat}, maxLat: ${BUSAN_BOUNDS.maxLat}, minLng: ${BUSAN_BOUNDS.minLng}, maxLng: ${BUSAN_BOUNDS.maxLng} };
           kakao.maps.event.addListener(map, 'dragend', function() {
             var center = map.getCenter();
             var lat = center.getLat();
@@ -401,6 +418,24 @@ const MAP_HTML = `
       postToRN({ type: 'log', message: 'markers: ' + spotMarkers.length + ' shown, ' + failed + ' failed of ' + spots.length });
     }
 
+    var myLocationOverlay = null;
+    function updateCurrentLocation(lat, lng) {
+      var position = new kakao.maps.LatLng(lat, lng);
+      if (myLocationOverlay) {
+        myLocationOverlay.setPosition(position);
+        return;
+      }
+      var content = document.createElement('div');
+      content.className = 'my-location-dot';
+      myLocationOverlay = new kakao.maps.CustomOverlay({
+        map: window.mapInstance,
+        position: position,
+        content: content,
+        yAnchor: 0.5,
+        zIndex: 5,
+      });
+    }
+
     // RN → WebView 메시지 수신
     function handleRNMessage(e) {
       if (!window.mapInstance) return;
@@ -409,7 +444,13 @@ const MAP_HTML = `
         if (msg.type === 'updateMarkers') {
           updateMarkers(window.mapInstance, msg.spots);
         }
-        // TODO: msg.type === 'updatePolygons' | 'panTo'
+        if (msg.type === 'updateLocation') {
+          updateCurrentLocation(msg.latitude, msg.longitude);
+        }
+        if (msg.type === 'panTo') {
+          window.mapInstance.panTo(new kakao.maps.LatLng(msg.latitude, msg.longitude));
+        }
+        // TODO: msg.type === 'updatePolygons'
       } catch (err) {
         showDebug('RN message error: ' + err.message);
         postToRN({ type: 'error', message: 'RN message: ' + err.message });
@@ -428,20 +469,51 @@ const MAP_HTML = `
 // (지도 SDK 전체 재주입 비용 발생) 모듈 레벨 상수로 고정한다.
 const MAP_SOURCE = { html: MAP_HTML, baseUrl: 'http://localhost' } as const;
 
+interface Coords {
+  latitude: number;
+  longitude: number;
+}
+
+export interface KakaoMapViewHandle {
+  panTo: (coords: Coords) => void;
+}
+
 interface KakaoMapViewProps {
   style?: StyleProp<ViewStyle>;
   spots?: Spot[];
+  coords?: Coords | null;
   onReady?: () => void;
   onError?: (message: string) => void;
 }
 
-export function KakaoMapView({ style, spots = [], onReady, onError }: KakaoMapViewProps) {
+export const KakaoMapView = forwardRef<KakaoMapViewHandle, KakaoMapViewProps>(function KakaoMapView(
+  { style, spots = [], coords = null, onReady, onError },
+  ref,
+) {
   const webViewRef = useRef<WebView>(null);
   const isMapReadyRef = useRef(false);
 
   const sendMarkers = useCallback((data: Spot[]) => {
     webViewRef.current?.postMessage(JSON.stringify({ type: 'updateMarkers', spots: data }));
   }, []);
+
+  const sendLocation = useCallback((c: Coords) => {
+    webViewRef.current?.postMessage(
+      JSON.stringify({ type: 'updateLocation', latitude: c.latitude, longitude: c.longitude }),
+    );
+  }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      panTo: (c: Coords) => {
+        webViewRef.current?.postMessage(
+          JSON.stringify({ type: 'panTo', latitude: c.latitude, longitude: c.longitude }),
+        );
+      },
+    }),
+    [],
+  );
 
   const handleMessage = (e: WebViewMessageEvent) => {
     try {
@@ -450,6 +522,7 @@ export function KakaoMapView({ style, spots = [], onReady, onError }: KakaoMapVi
         console.log('[KakaoMap] 지도 초기화 성공');
         isMapReadyRef.current = true;
         sendMarkers(spots);
+        if (coords) sendLocation(coords);
         onReady?.();
       }
       if (msg.type === 'log') {
@@ -466,6 +539,10 @@ export function KakaoMapView({ style, spots = [], onReady, onError }: KakaoMapVi
     if (isMapReadyRef.current) sendMarkers(spots);
   }, [spots, sendMarkers]);
 
+  useEffect(() => {
+    if (isMapReadyRef.current && coords) sendLocation(coords);
+  }, [coords, sendLocation]);
+
   return (
     <WebView
       ref={webViewRef}
@@ -478,4 +555,4 @@ export function KakaoMapView({ style, spots = [], onReady, onError }: KakaoMapVi
       onMessage={handleMessage}
     />
   );
-}
+});

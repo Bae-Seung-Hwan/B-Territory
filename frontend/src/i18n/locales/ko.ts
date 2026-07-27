@@ -119,6 +119,7 @@ export const ko = {
       topTeam: '1위 팀',
       capitalDistrict: '이번 주 수도',
     },
+    outOfBounds: '현재 위치가 부산이 아닙니다',
   },
   overlay: {
     enemyAlert: {
