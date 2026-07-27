@@ -21,12 +21,18 @@ export enum ScoreEventType {
 /**
  * 점수 원장 — append-only. 랭킹/시즌 집계는 전부 이 테이블의 SUM 쿼리로 산출하고,
  * 행 자체는 절대 수정/삭제하지 않는다 (감사 로그 겸용).
- * 팀 점수 집계 시에는 반드시 type IN (CLAIM_NEW, CLAIM_REVISIT)로 필터링할 것 —
+ *
+ * 점수는 개인/팀 두 축으로 분리 저장한다:
+ * - personalPoints: user.score·개인 랭킹의 근거. 모든 이벤트가 기여하며 결투 패배는 음수.
+ * - teamPoints: 구 집계·팀 랭킹의 근거. 점령(CLAIM_*)만 값을 갖고, 결투 이벤트는 항상 0.
+ *
+ * 팀 점수 집계 시에는 반드시 SUM(teamPoints) + type IN (CLAIM_NEW, CLAIM_REVISIT)로 필터링할 것 —
  * 결투 점수(DUEL_WIN/DUEL_LOSS)는 개인 점수에만 반영되고 팀 점수에는 절대 포함되지 않는다.
  */
 @Entity('score_events')
 @Index(['team', 'createdAt'])
 @Index(['userId', 'createdAt'])
+@Index(['createdAt']) // 12시간 윈도우 구 집계용
 export class ScoreEvent {
   @PrimaryGeneratedColumn()
   id: number;
@@ -45,24 +51,31 @@ export class ScoreEvent {
   @Column({ type: 'enum', enum: ScoreEventType })
   type: ScoreEventType;
 
-  // 결투 패배는 음수가 될 수 있다.
+  // 개인 점수 기여분 (개인 랭킹·user.score). 결투 패배는 음수가 될 수 있다.
   @Column({ type: 'int' })
-  points: number;
+  personalPoints: number;
 
-  @Column({ nullable: true })
+  // 팀 점수 기여분 (구 집계·팀 랭킹). 결투 이벤트는 0.
+  @Column({ type: 'int', default: 0 })
+  teamPoints: number;
+
+  @Index()
+  @Column({ type: 'int', nullable: true })
   spotId: number | null;
 
   @ManyToOne(() => Spot, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'spotId' })
   spot: Spot | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'int', nullable: true })
   duelId: number | null;
 
   @ManyToOne(() => Duel, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'duelId' })
   duel: Duel | null;
 
-  @CreateDateColumn()
+  // timestamptz로 저장해 절대 시각(인스턴트)을 보존한다. 일일 제한(KST 자정)·12시간 윈도우
+  // 판정이 DB 세션 타임존 설정과 무관하게 정확히 동작하도록 하기 위함.
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }
