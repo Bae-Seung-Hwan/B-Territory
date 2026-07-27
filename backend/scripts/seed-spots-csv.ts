@@ -38,6 +38,29 @@ const BUSAN_SIGUNGU_CODE_BY_NAME: Record<string, string> = {
   해운대구: '16',
 };
 const VALID_SIGUNGU_CODES = new Set(Object.values(BUSAN_SIGUNGU_CODE_BY_NAME));
+const BUSAN_SIGUNGU_NAME_BY_CODE: Record<string, string> = Object.fromEntries(
+  Object.entries(BUSAN_SIGUNGU_CODE_BY_NAME).map(([name, code]) => [
+    code,
+    name,
+  ]),
+);
+
+// 주소 문자열에서 부산 구/군 이름을 추출한다 (매핑 테이블에 있는 이름만 인식).
+// normalizeSigunguCode()는 "매핑 불가/빈 값"만 막고 "값이 틀린" 경우(MISSION_0031:
+// 주소는 수영구인데 코드는 16=해운대구)는 통과시키므로, 주소 기반으로 교차검증해
+// 어긋나면 경고를 남긴다 — 다음 CSV 갱신에서 같은 원본 오류가 들어와도 자동으로 드러난다.
+export function districtNameFromAddress(address: string): string | null {
+  for (const name of Object.keys(BUSAN_SIGUNGU_CODE_BY_NAME)) {
+    const idx = address.indexOf(name);
+    if (idx === -1) continue;
+    // 앞 글자가 한글 음절이면 더 긴 이름의 일부다(예: "강남구" 안의 "남구"). 이 경우는
+    // 부산 구/군이 아니므로 건너뛴다 — 구 이름은 "시/도/공백" 뒤에 토큰으로 나온다.
+    const prev = idx === 0 ? '' : address[idx - 1];
+    if (/[가-힣]/.test(prev)) continue;
+    return name;
+  }
+  return null;
+}
 
 // 알 수 없는 값이나 빈 값을 null로 조용히 넣으면 집계에서 해당 관광지가 증발하므로 시딩을 실패시킨다
 export function normalizeSigunguCode(value: string, missionId: string): string {
@@ -67,6 +90,22 @@ interface MissionRow {
   description: string;
   homepage: string;
 }
+
+// 시딩에 실제로 쓰는 필수 컬럼. 헤더가 바뀌거나(예: mission_id → missionId) 파일이 손상되면
+// 모든 행이 조용히 빈 값으로 읽혀 전부 스킵되는데, 그 상태로 후처리(잔여 행 자동 삭제)까지
+// 진행되면 위험하므로 로드 시점에 헤더를 검증해 즉시 실패시킨다.
+const REQUIRED_HEADERS = [
+  'mission_id',
+  'title',
+  'address',
+  'map_x',
+  'map_y',
+  'image_url',
+  'content_type_id',
+  'sigungu_code',
+  'description',
+  'homepage',
+] as const;
 
 // data/mission_places_final.csv — 한국관광공사 + 부산시 API 3종을 합쳐
 // 중복 제거·품질 검증까지 마친 최종 산출물 (data/DATA_README.md 참고)
@@ -119,8 +158,22 @@ export function loadMissionRows(filePath: string): MissionRow[] {
   let raw = fs.readFileSync(filePath, 'utf8');
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // BOM 제거
   const rows = parseCsv(raw);
+  if (rows.length === 0) {
+    throw new Error(`CSV가 비어 있습니다: ${filePath}`);
+  }
   const header = rows[0];
-  return rows.slice(1).map((r) => {
+  const missing = REQUIRED_HEADERS.filter((col) => !header.includes(col));
+  if (missing.length > 0) {
+    throw new Error(
+      `CSV 헤더에 필수 컬럼이 없습니다: ${missing.join(', ')} — ` +
+        `헤더가 변경됐거나 파일이 손상됐을 수 있습니다 (실제 헤더: ${header.join(', ')})`,
+    );
+  }
+  const dataRows = rows.slice(1);
+  if (dataRows.length === 0) {
+    throw new Error(`CSV에 데이터 행이 없습니다 (헤더만 존재): ${filePath}`);
+  }
+  return dataRows.map((r) => {
     const record: Record<string, string> = {};
     header.forEach((col, idx) => {
       record[col] = r[idx] ?? '';
@@ -204,6 +257,7 @@ async function main() {
     let updated = 0;
     let unchanged = 0;
     let skipped = 0;
+    const sigunguMismatches: string[] = [];
 
     await client.query('BEGIN');
     try {
@@ -218,6 +272,18 @@ async function main() {
           console.warn(`title 없음, 스킵: mission_id=${missionId}`);
           skipped++;
           continue;
+        }
+
+        const sigungucode = normalizeSigunguCode(
+          m.sigungu_code ?? '',
+          missionId,
+        );
+        const addrDistrict = districtNameFromAddress(m.address ?? '');
+        const codeDistrict = BUSAN_SIGUNGU_NAME_BY_CODE[sigungucode];
+        if (addrDistrict && codeDistrict && addrDistrict !== codeDistrict) {
+          sigunguMismatches.push(
+            `  - ${missionId} 주소상 "${addrDistrict}" ≠ sigungu_code ${sigungucode}("${codeDistrict}") (주소: ${m.address})`,
+          );
         }
 
         // upsert: 데이터팀이 CSV를 보정하면 재실행만으로 기존 행에도 반영되도록 한다.
@@ -256,7 +322,7 @@ async function main() {
             m.image_url || null,
             m.content_type_id || null,
             AREA_CODE,
-            normalizeSigunguCode(m.sigungu_code ?? '', missionId),
+            sigungucode,
             m.description || null,
             m.homepage || null,
           ],
@@ -275,6 +341,29 @@ async function main() {
     console.log(
       `${DRY_RUN ? '[dry-run] ' : ''}완료: 신규 ${inserted}건, 갱신 ${updated}건, 변경 없음 ${unchanged}건, 스킵 ${skipped}건(mission_id/title 없음)`,
     );
+
+    // 헤더 검증을 통과했는데도 한 건도 반영되지 않았다면(전 행 스킵) CSV 내용이 비정상이라는
+    // 뜻이다. 이 상태로 파괴적인 후처리(잔여 행 자동 삭제)에 진입하면 정상 데이터가 없는데도
+    // DB를 정리하게 되므로, 후처리 전에 실패시킨다 (exit 1). dry-run은 미리보기이므로 예외.
+    if (
+      !DRY_RUN &&
+      missions.length > 0 &&
+      inserted + updated + unchanged === 0
+    ) {
+      throw new Error(
+        `CSV ${missions.length}건이 전부 스킵되어 시딩된 행이 없습니다 (mission_id/title 누락 등). ` +
+          `CSV 형식을 확인하세요 — 잔여 행 정리를 건너뜁니다.`,
+      );
+    }
+
+    // 주소↔sigungu_code 불일치(원본 데이터 오류)는 시딩을 막지는 않되 경고로 남긴다.
+    if (sigunguMismatches.length > 0) {
+      console.warn(
+        `경고: 주소상 구/군과 sigungu_code가 어긋나는 행 ${sigunguMismatches.length}건 ` +
+          `(원본 데이터 오류로 추정 — 해당 장소의 점령이 다른 구로 집계됩니다. 데이터팀 확인 요망):\n` +
+          sigunguMismatches.join('\n'),
+      );
+    }
 
     // 위 upsert는 이미 커밋(또는 dry-run 롤백)까지 끝난 상태라, 아래 후처리(잔여 행 정리·경고)가
     // 실패해도 시딩 자체가 실패한 것처럼 보이면 안 된다 — 별도로 잡아서 경고로만 남긴다.
@@ -304,16 +393,23 @@ async function main() {
           }
         }
       } else {
-        const deletedStale = await client.query<{ id: number }>(
+        const deletedStale = await client.query<{
+          contentId: string;
+          title: string;
+        }>(
           `DELETE FROM spots s
            WHERE s."contentId" NOT LIKE 'MISSION%'
              AND NOT EXISTS (SELECT 1 FROM spot_claims sc WHERE sc."spotId" = s.id)
-           RETURNING s.id`,
+           RETURNING s."contentId", s.title`,
         );
         if ((deletedStale.rowCount ?? 0) > 0) {
+          // 무엇을 지웠는지 사후에 확인할 수 있도록 dry-run과 동일하게 목록을 남긴다.
           console.log(
-            `구 KTO 시딩 잔여 행 중 점령 기록이 없는 ${deletedStale.rowCount}건을 자동 삭제했습니다.`,
+            `구 KTO 시딩 잔여 행 중 점령 기록이 없는 ${deletedStale.rowCount}건을 자동 삭제했습니다:`,
           );
+          for (const row of deletedStale.rows) {
+            console.log(`  - ${row.contentId} ${row.title}`);
+          }
         }
       }
 

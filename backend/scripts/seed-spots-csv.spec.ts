@@ -1,8 +1,13 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   parseCsv,
   parseCoord,
   normalizeSigunguCode,
   findDuplicateMissionIds,
+  districtNameFromAddress,
+  loadMissionRows,
 } from './seed-spots-csv';
 
 describe('seed-spots-csv', () => {
@@ -93,6 +98,64 @@ describe('seed-spots-csv', () => {
         { mission_id: '  ', title: 'B' } as never,
       ]);
       expect(duplicateIds).toEqual([]);
+    });
+  });
+
+  describe('districtNameFromAddress', () => {
+    it('주소에 포함된 부산 구/군 이름을 인식한다', () => {
+      expect(districtNameFromAddress('부산광역시 수영구 광남로 96')).toBe(
+        '수영구',
+      );
+      expect(districtNameFromAddress('부산광역시 기장군 ...')).toBe('기장군');
+    });
+
+    it('부산 구/군 이름이 없으면 null을 반환한다', () => {
+      expect(districtNameFromAddress('서울특별시 강남구 ...')).toBeNull();
+      expect(districtNameFromAddress('')).toBeNull();
+    });
+  });
+
+  describe('loadMissionRows 헤더 검증', () => {
+    const tmpFiles: string[] = [];
+    const writeTmp = (content: string): string => {
+      const p = path.join(
+        os.tmpdir(),
+        `seed-spots-test-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`,
+      );
+      fs.writeFileSync(p, content, 'utf8');
+      tmpFiles.push(p);
+      return p;
+    };
+    afterAll(() => {
+      for (const p of tmpFiles) fs.rmSync(p, { force: true });
+    });
+
+    const FULL_HEADER =
+      'mission_id,title,address,map_x,map_y,image_url,content_type_id,sigungu_code,description,homepage';
+
+    it('필수 컬럼이 빠진 헤더는 예외를 던진다 (mission_id → missionId)', () => {
+      const bad = FULL_HEADER.replace('mission_id', 'missionId');
+      const file = writeTmp(`${bad}\nX,제목,주소,1,2,,12,16,,`);
+      expect(() => loadMissionRows(file)).toThrow(/필수 컬럼이 없습니다/);
+    });
+
+    it('헤더만 있고 데이터 행이 없으면 예외를 던진다', () => {
+      const file = writeTmp(`${FULL_HEADER}\n`);
+      expect(() => loadMissionRows(file)).toThrow(/데이터 행이 없습니다/);
+    });
+
+    it('빈 파일은 예외를 던진다', () => {
+      const file = writeTmp('');
+      expect(() => loadMissionRows(file)).toThrow(/비어 있습니다/);
+    });
+
+    it('필수 컬럼이 모두 있으면 정상 파싱한다', () => {
+      const file = writeTmp(
+        `${FULL_HEADER}\nMISSION_0001,라메르호텔,부산광역시 해운대구,129.1,35.1,,12,16,,`,
+      );
+      const rows = loadMissionRows(file);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].mission_id).toBe('MISSION_0001');
     });
   });
 });
