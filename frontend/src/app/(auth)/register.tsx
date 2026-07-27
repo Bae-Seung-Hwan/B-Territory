@@ -162,10 +162,14 @@ export default function RegisterScreen() {
       // 네트워크 실패로 프로필 생성만 실패한 경우)가 같은 이메일로 다시 이 화면에
       // 들어오면 createUserWithEmailAndPassword가 auth/email-already-in-use로 막혀
       // 가입을 완료할 방법이 없었다. 이미 로그인된 세션이 같은 이메일이면 계정을 새로
-      // 만들지 않고 그 세션으로 registerMutation만 호출한다.
+      // 만들지 않고 그 세션으로 registerMutation만 호출한다. Firebase는 이메일 중복을
+      // 대소문자 구분 없이 판정하므로 비교도 동일하게 대소문자를 무시한다.
+      const trimmedEmail = email.trim();
       const existingUser =
-        auth.currentUser && auth.currentUser.email === email.trim() ? auth.currentUser : null;
-      const user = existingUser ?? (await createUserWithEmailAndPassword(auth, email.trim(), password)).user;
+        auth.currentUser && auth.currentUser.email?.toLowerCase() === trimmedEmail.toLowerCase()
+          ? auth.currentUser
+          : null;
+      const user = existingUser ?? (await createUserWithEmailAndPassword(auth, trimmedEmail, password)).user;
       try {
         const profile = await registerMutation.mutateAsync({
           nickname: nickname.trim(),

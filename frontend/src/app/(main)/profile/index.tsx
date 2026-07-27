@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Text, StyleSheet, Alert } from 'react-native';
+import { Text, View, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,6 +13,7 @@ import { BrandColors, Spacing } from '@/constants/theme';
 import { getCountryList } from '@/constants/countries';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -58,12 +59,17 @@ export default function ProfileScreen() {
           <Text style={styles.row}>
             {t('profile.emailLabel')}: {profile.email}
           </Text>
-          <Text style={styles.row}>
-            {t('profile.nationalityLabel')}:{' '}
-            {nationalityCountry
-              ? `${nationalityCountry.flag} ${nationalityCountry.name}`
-              : profile.nationality}
-          </Text>
+          <View style={styles.badgeRow}>
+            <Text style={styles.row}>{t('profile.nationalityLabel')}</Text>
+            <Badge
+              label={
+                nationalityCountry
+                  ? `${nationalityCountry.flag} ${nationalityCountry.name}`
+                  : profile.nationality
+              }
+              variant="accent"
+            />
+          </View>
           <Text style={styles.row}>
             {t('profile.teamLabel')}: {profile.team}
           </Text>
@@ -91,6 +97,7 @@ const styles = StyleSheet.create({
     backgroundColor: BrandColors.background,
   },
   title: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 24 },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: 6 },
   loading: { color: '#888', fontSize: 14, marginBottom: 24 },
   card: { marginBottom: Spacing.three },
   nickname: { fontSize: 18, fontWeight: '600', color: '#fff', marginBottom: 12 },
