@@ -13,6 +13,7 @@ import { ClaimsModule } from './claims/claims.module';
 import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ScoresModule } from './scores/scores.module';
+import { DistrictsModule } from './districts/districts.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { ScoresModule } from './scores/scores.module';
     DuelsModule,
     RealtimeModule,
     ScoresModule,
+    DistrictsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
