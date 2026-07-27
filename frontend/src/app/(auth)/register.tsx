@@ -129,7 +129,10 @@ export default function RegisterScreen() {
         c.code.toLowerCase().includes(query),
     );
   }, [countries, debouncedQuery]);
-  const selectedCountry = countries.find((c) => c.code === selectedCode) ?? null;
+  const selectedCountry = useMemo(
+    () => countries.find((c) => c.code === selectedCode) ?? null,
+    [countries, selectedCode],
+  );
 
   const openCountryPicker = () => {
     setDebouncedQuery('');
@@ -155,7 +158,14 @@ export default function RegisterScreen() {
   const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
     try {
-      const { user } = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      // Firebase 계정은 이미 있는데 백엔드 프로필이 없는 사용자(예: 이전 가입 시도 중
+      // 네트워크 실패로 프로필 생성만 실패한 경우)가 같은 이메일로 다시 이 화면에
+      // 들어오면 createUserWithEmailAndPassword가 auth/email-already-in-use로 막혀
+      // 가입을 완료할 방법이 없었다. 이미 로그인된 세션이 같은 이메일이면 계정을 새로
+      // 만들지 않고 그 세션으로 registerMutation만 호출한다.
+      const existingUser =
+        auth.currentUser && auth.currentUser.email === email.trim() ? auth.currentUser : null;
+      const user = existingUser ?? (await createUserWithEmailAndPassword(auth, email.trim(), password)).user;
       try {
         const profile = await registerMutation.mutateAsync({
           nickname: nickname.trim(),
@@ -169,8 +179,10 @@ export default function RegisterScreen() {
       } catch (backendErr) {
         // 백엔드가 4xx로 명확히 거부한 경우(409 제외)에만 서버에 아무 부작용도
         // 없었다고 확신할 수 있어 Firebase 계정을 롤백한다. 네트워크/타임아웃/5xx는
-        // 백엔드에 유저 row가 실제로 생겼을 수 있으므로 롤백하지 않는다.
+        // 백엔드에 유저 row가 실제로 생겼을 수 있으므로 롤백하지 않는다. 이미 있던
+        // 세션(existingUser)은 이 시도로 만든 계정이 아니므로 롤백 대상에서 제외한다.
         const shouldRollback =
+          !existingUser &&
           isAxiosError(backendErr) &&
           backendErr.response &&
           backendErr.response.status >= 400 &&
