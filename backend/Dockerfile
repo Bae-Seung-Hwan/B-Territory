@@ -15,5 +15,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
+# node:alpine에 기본 포함된 비특권 사용자로 실행해 컨테이너 공격 표면을 줄인다.
+USER node
 EXPOSE 3000
 CMD ["node", "dist/main"]

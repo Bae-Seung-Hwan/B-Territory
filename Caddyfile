@@ -1,3 +1,10 @@
+{
+	# Let's Encrypt 인증서 만료·발급 실패 알림 수신 이메일.
+	# docker-compose.prod.yml이 ACME_EMAIL을 주입하며, 미설정 시 도메인 기반 기본값으로
+	# 대체하므로 이 값은 항상 비어 있지 않다(빈 값이면 Caddy 파싱 에러로 기동 실패).
+	email {$ACME_EMAIL}
+}
+
 b-territory.duckdns.org {
 	reverse_proxy backend:3000
 }

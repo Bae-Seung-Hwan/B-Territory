@@ -1,49 +1,88 @@
+# dev용 docker-compose.yml과 컨테이너/볼륨 이름이 겹치지 않도록 별도 프로젝트명을 둔다.
+# (dev는 프로젝트명 b-territory, prod는 b-territory-prod → 볼륨이 서로 다른 실체가 되고
+#  한 호스트에서 두 스택을 동시에 띄울 수 있다.)
+name: b-territory-prod
+
+# 도커 기본 json-file 로그는 용량 무제한이라 EBS를 조용히 채운다 — 전 서비스에 상한을 건다.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 services:
   postgres:
     image: postgis/postgis:16-3.4
-    container_name: b-territory-postgres
+    container_name: b-territory-prod-postgres
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME:-b_territory}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-b_territory}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    container_name: b-territory-redis
+    container_name: b-territory-prod-redis
+    # RAM 1GB를 Postgres/Node/Caddy와 나눠 쓰므로 상한을 둔다. Bull 큐 데이터가 유실되면
+    # 안 되므로 eviction 대신 noeviction(한도 초과 시 쓰기 거부)으로 예측 가능하게 실패시킨다.
+    command: ['redis-server', '--maxmemory', '256mb', '--maxmemory-policy', 'noeviction']
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
     restart: unless-stopped
 
   backend:
     build:
       context: ./backend
-    container_name: b-territory-backend
+    container_name: b-territory-prod-backend
     env_file:
       - ./backend/.env
     environment:
       NODE_ENV: production
       DB_HOST: postgres
       REDIS_HOST: redis
+      # Caddyfile이 backend:3000으로 프록시하므로, 서버 .env의 PORT 값과 무관하게 여기서 고정한다.
+      PORT: 3000
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
   caddy:
     image: caddy:2-alpine
-    container_name: b-territory-caddy
+    container_name: b-territory-prod-caddy
     ports:
       - '80:80'
       - '443:443'
+    environment:
+      # Let's Encrypt 인증서 만료/문제 알림 수신 이메일 (backend/.env 또는 셸 환경에서 주입).
+      # 미설정/빈 값이면 도메인 기반 기본값으로 대체한다 — Caddyfile의 email 지시어에 빈 값이
+      # 들어가면 파싱 에러로 Caddy가 기동하지 못하므로, 컨테이너에는 항상 유효한 주소를 넘긴다.
+      ACME_EMAIL: ${ACME_EMAIL:-admin@b-territory.duckdns.org}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - backend
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:
