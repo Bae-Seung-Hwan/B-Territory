@@ -17,7 +17,7 @@
 | busan_district_foreign_visitor_share.csv | 구·군 외국인 방문 비율 계산 결과 | 16 |
 | visitor_stats_long.csv | 관광 통계 long-format 데이터 | 962 |
 | festivals_fix.csv | 축제/행사 데이터와 sigungu_code 보강 파일 | 45 |
-| busan_districts_boundary.geojson | 부산 16개 구·군 경계 GeoJSON | 미납품 |
+| busan_districts_boundary.geojson | 부산 16개 구·군 경계 GeoJSON | 16 |
 | code_tables.csv | 지역코드/분류코드 참고표 | 50 |
 | missing_detail_report.csv | 누락값 상세 리포트 | 15 |
 | mission_duplicate_report.csv | 미션 장소 중복 제거 리포트 | 4 |
@@ -179,7 +179,7 @@ foreign_visitor_share 정의:
 | visitor_stats_long.csv sigungu_code 누락 | 0건 |
 | festivals_fix.csv sigungu_code 누락 | 1건 |
 | busan_districts.csv 외국인 방문 비율 | 반영 |
-| busan_districts_boundary.geojson | 미납품 |
+| busan_districts_boundary.geojson | 완료 |
 
 ## 8. 남은 협의 사항
 
