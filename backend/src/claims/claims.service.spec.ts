@@ -16,6 +16,12 @@ describe('ClaimsService', () => {
           ]),
       };
       const redis = {
+        // 페널티 없음(#13 사전/TOCTOU 체크 통과), 일일 제한 통과(#19) 상태를 기본값으로 둔다.
+        hasPenalty: jest.fn().mockResolvedValue(false),
+        markDailyClaim: jest
+          .fn()
+          .mockResolvedValue({ created: true, token: 'daily-token' }),
+        clearDailyClaim: jest.fn().mockResolvedValue(undefined),
         claimDefense: jest
           .fn()
           .mockResolvedValue({ status: 'ok', remaining: 300, created: true }),

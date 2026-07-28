@@ -126,6 +126,16 @@ describe('Claims (e2e)', () => {
     expect(body.defenseSeconds).toBeGreaterThan(0);
   });
 
+  it('시나리오 1-1: 같은 유저가 같은 관광지 재점령 시도 → 409 일일 점령 제한', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/claims/visit')
+      .set('Authorization', 'Bearer uid-teamA')
+      .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
+      .expect(409);
+
+    expect((res.body as ErrorBody).message).toContain('오늘 이미 점령');
+  });
+
   it('시나리오 2: 50m 초과 좌표 → 400 방문 인증 실패', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/claims/visit')
@@ -146,6 +156,17 @@ describe('Claims (e2e)', () => {
     const body = res.body as ErrorBody;
     expect(body.message).toContain('방어 시간 중');
     expect(body.message).toMatch(/\d+초/);
+  });
+
+  it('시나리오 3-1: 방어에 막힌 시도는 일일 횟수를 소진하지 않는다 (재시도해도 방어 409, 일일 제한 409가 아님)', async () => {
+    // 시나리오 3에서 teamB의 일일 키가 롤백되지 않았다면 이번 응답은 "오늘 이미 점령"이 된다
+    const res = await request(app.getHttpServer())
+      .post('/api/claims/visit')
+      .set('Authorization', 'Bearer uid-teamB')
+      .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
+      .expect(409);
+
+    expect((res.body as ErrorBody).message).toContain('방어 시간 중');
   });
 
   it('시나리오 4: GET /claims/spots/:spotId — 점령 현황 정상 반환', async () => {

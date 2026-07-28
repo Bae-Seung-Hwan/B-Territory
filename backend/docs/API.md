@@ -253,13 +253,13 @@ curl http://localhost:3000/api/spots/930
 
 ---
 
-## 곧 추가될 API (아직 develop 미병합 — PR 리뷰 중)
+## Claims / 실시간 API (병합됨 — 상세 문서화 예정)
 
-프론트엔드에서 미리 설계에 참고할 수 있도록 남겨둡니다. 실제 머지 전까지 변경될 수 있습니다.
+아래는 이미 develop에 병합되어 동작 중인 엔드포인트 요약입니다. 상세 스펙(요청/응답 예시)은 추후 이 문서에 보강합니다.
 
 | API | 브랜치 / PR | 설명 |
 |---|---|---|
-| `POST /api/claims/visit` | develop 머지됨 (PR #9) — 상세 문서화 예정 | GPS 방문 인증 + 관광지 점령 (반경 50m) |
-| `GET /api/claims/spots/:spotId` | 〃 | 관광지 현재 점령 팀 조회 |
-| `GET /api/claims/districts/:sigungucode` | 〃 | 구 단위 점령 현황 조회 (`sigungucode`는 위 부산 구 코드표와 동일) |
-| WebSocket `location:update` / `duel:*` | `feature/Bae/realtime-duel` (PR #13, 리뷰 중) | 실시간 조우 탐지, 결투 신청/수락/거절/결과 |
+| `POST /api/claims/visit` | develop 병합됨 (PR #9, #19) | GPS 방문 인증 + 관광지 점령 (반경 50m). 관광지별 인당 하루 1회 제한(KST 자정 초기화) — 초과 시 `409 {"message":"이 관광지는 오늘 이미 점령했습니다. (KST 자정에 초기화)"}` |
+| `GET /api/claims/spots/:spotId` | develop 병합됨 (PR #9) | 관광지 현재 점령 팀 조회 |
+| `GET /api/claims/districts/:sigungucode` | develop 병합됨 (PR #9) | 구 단위 점령 현황 조회 (`sigungucode`는 위 부산 구 코드표와 동일) |
+| WebSocket `location:update` / `duel:*` | develop 병합됨 (PR #13) | 실시간 조우 탐지, 결투 신청/수락/거절/결과 |
