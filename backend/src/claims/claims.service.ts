@@ -7,7 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, Not, In } from 'typeorm';
+import { Repository, DataSource, Not, In, QueryFailedError } from 'typeorm';
 import { SpotClaim } from './entities/spot-claim.entity';
 import { DistrictClaim } from './entities/district-claim.entity';
 import { RedisService } from '../common/redis/redis.service';
@@ -87,6 +87,7 @@ export class ClaimsService {
 
     // 일일 점령 제한: 같은 관광지는 인당 하루 1회만 점령 가능 (KST 자정 리셋 —
     // 구 집계 크론과 같은 시계). SET NX가 확인과 기록을 원자로 처리한다.
+    // 하루 1회는 "점령 시도권" — 뺏겨도 본인은 당일 재점령 불가 (기획 확정)
     const daily = await this.redis.markDailyClaim(
       userId,
       spotId,
@@ -143,6 +144,13 @@ export class ClaimsService {
               redisErr,
             );
           });
+        }
+        // FK 위반(23503): 존재 확인 이후 이 시점 사이에 seed:spots가 레거시 잔여
+        // spot을 삭제한 경합(race) 상황 — spot이 사라진 것과 동일하게 404로 처리한다
+        const pgCode = (err instanceof QueryFailedError &&
+          (err.driverError as { code?: string })?.code) as string | undefined;
+        if (pgCode === '23503') {
+          throw new NotFoundException('관광지를 찾을 수 없습니다.');
         }
         throw err;
       }
