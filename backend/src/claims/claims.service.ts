@@ -7,7 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, QueryFailedError } from 'typeorm';
 import { SpotClaim } from './entities/spot-claim.entity';
 import { DistrictClaim } from './entities/district-claim.entity';
 import { DistrictClaimHistory } from './entities/district-claim-history.entity';
@@ -16,6 +16,7 @@ import { UsersService } from '../users/users.service';
 import { ScoresService } from '../scores/scores.service';
 import { DistrictsService } from '../districts/districts.service';
 import { ScoreEventType } from '../scores/entities/score-event.entity';
+import { secondsUntilKstMidnight } from '../common/utils/kst.util';
 import { VisitDto } from './dto/visit.dto';
 
 const DEFENSE_TTL = 300; // 5분
@@ -102,100 +103,143 @@ export class ClaimsService {
       );
     }
 
-    // Lua 원자 연산으로 방어 체크 + 타이머 갱신을 단일 명령으로 처리
-    // 신규 점령 시에만 타이머를 설정하고, 같은 팀 재방문은 타이머 리셋 없이 통과
-    const defense = await this.redis.claimDefense(
-      DEFENSE_KEY(spotId),
-      team,
-      DEFENSE_TTL,
+    // 일일 점령 제한: 같은 관광지는 인당 하루 1회만 점령 가능 (KST 자정 리셋 —
+    // 구 집계 크론과 같은 시계). SET NX가 확인과 기록을 원자로 처리한다.
+    // 하루 1회는 "점령 시도권" — 뺏겨도 본인은 당일 재점령 불가 (기획 확정)
+    const daily = await this.redis.markDailyClaim(
+      userId,
+      spotId,
+      secondsUntilKstMidnight(),
     );
-    if (defense.status === 'blocked') {
+    if (!daily.created) {
       throw new ConflictException(
-        `방어 시간 중: ${defense.defenseTeam} 팀이 ${Math.max(0, defense.remaining)}초 동안 방어 중입니다.`,
+        '이 관광지는 오늘 이미 점령했습니다. (KST 자정에 초기화)',
       );
     }
 
-    // 최종 재확인: 위 관광지 조회·방어 타이머 확인 사이(비동기 구간)에 결투 패배로 페널티가
-    // 새로 걸렸을 수 있으므로, 실제 커밋 직전에 한 번 더 확인해 TOCTOU 창을 최소화한다.
-    if (await this.redis.hasPenalty(userId)) {
-      if (defense.created) {
-        await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
-          this.logger.error(
-            `Redis 방어 키 롤백 실패 spotId=${spotId}`,
-            redisErr,
-          );
-        });
-      }
-      throw new ForbiddenException(
-        '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
-      );
-    }
-
-    // 점령 처리 + 점수 지급을 한 트랜잭션으로 묶는다 — 실패 시 이번 요청에서 새로 만든 방어 키만 롤백
-    // (같은 팀 재방문 시 기존 방어 타이머를 지우면 진행 중이던 방어가 무효화됨)
+    // 점령 확정 전 실패는 일일 횟수를 소진하지 않도록, 방어 타이머 확보~점수 지급 전체를
+    // 바깥 try로 감싸고 실패 시 이번 요청이 만든 일일 키를 CAS로 롤백한다.
     let type: ScoreEventType;
     let personalPoints: number;
     let teamPoints: number;
+    let defenseSeconds: number;
     try {
-      const weight = this.districtsService.getWeight(sigungucode);
-      const outcome = await this.dataSource.transaction(async (manager) => {
-        // 같은 유저·같은 관광지의 동시 요청(더블탭·재시도)을 직렬화한다.
-        // 이 트랜잭션 잠금이 없으면 두 요청이 모두 "오늘 미채점"을 읽고 각각 점수를
-        // 적립해 일일 1회 제한이 깨질 수 있다(READ COMMITTED). 트랜잭션 종료 시 자동 해제.
-        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-          `claim:${userId}:${spotId}`,
-        ]);
-
-        // 점령 직전 보유팀으로 신규/재방문 판정.
-        // (교차팀 진입은 Redis 방어가, 동일 유저 동시성은 위 advisory lock이 직렬화한다.)
-        const prev = await manager
-          .getRepository(SpotClaim)
-          .findOne({ where: { spotId } });
-        const isRevisit = prev?.team === team;
-        const eventType = isRevisit
-          ? ScoreEventType.CLAIM_REVISIT
-          : ScoreEventType.CLAIM_NEW;
-
-        // 일일 제한: 오늘(KST) 이 관광지에서 이미 점수를 받았으면 점수 0 (방문/방어는 그대로 성공)
-        const alreadyScored = await this.scoresService.hasClaimScoredToday(
-          manager,
-          userId,
-          spotId,
+      // Lua 원자 연산으로 방어 체크 + 타이머 갱신을 단일 명령으로 처리
+      // 신규 점령 시에만 타이머를 설정하고, 같은 팀 재방문은 타이머 리셋 없이 통과
+      const defense = await this.redis.claimDefense(
+        DEFENSE_KEY(spotId),
+        team,
+        DEFENSE_TTL,
+      );
+      if (defense.status === 'blocked') {
+        throw new ConflictException(
+          `방어 시간 중: ${defense.defenseTeam} 팀이 ${Math.max(0, defense.remaining)}초 동안 방어 중입니다.`,
         );
-        const teamBase = isRevisit ? TEAM_BASE_REVISIT : TEAM_BASE_NEW;
-        const personal = alreadyScored ? 0 : Math.round(PERSONAL_BASE * weight);
-        const teamPts = alreadyScored ? 0 : Math.round(teamBase * weight);
+      }
+      defenseSeconds = defense.remaining;
 
-        await manager
-          .getRepository(SpotClaim)
-          .upsert({ spotId, team, userId }, { conflictPaths: ['spotId'] });
-
-        if (personal > 0 || teamPts > 0) {
-          await this.scoresService.record(manager, {
-            userId,
-            team,
-            type: eventType,
-            personalPoints: personal,
-            teamPoints: teamPts,
-            spotId,
+      // 최종 재확인: 위 관광지 조회·방어 타이머 확인 사이(비동기 구간)에 결투 패배로 페널티가
+      // 새로 걸렸을 수 있으므로, 실제 커밋 직전에 한 번 더 확인해 TOCTOU 창을 최소화한다.
+      if (await this.redis.hasPenalty(userId)) {
+        if (defense.created) {
+          await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+            this.logger.error(
+              `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+              redisErr,
+            );
           });
-          await this.usersService.applyScoreDelta(userId, personal, manager);
         }
+        throw new ForbiddenException(
+          '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
+        );
+      }
 
-        return { eventType, personal, teamPts };
-      });
-      type = outcome.eventType;
-      personalPoints = outcome.personal;
-      teamPoints = outcome.teamPts;
+      // 점령 처리 + 점수 지급을 한 트랜잭션으로 묶는다 — 실패 시 이번 요청에서 새로 만든 방어 키만 롤백
+      // (같은 팀 재방문 시 기존 방어 타이머를 지우면 진행 중이던 방어가 무효화됨)
+      try {
+        const weight = this.districtsService.getWeight(sigungucode);
+        const outcome = await this.dataSource.transaction(async (manager) => {
+          // 같은 유저·같은 관광지의 동시 요청(더블탭·재시도)을 직렬화한다.
+          // 이 트랜잭션 잠금이 없으면 두 요청이 모두 "오늘 미채점"을 읽고 각각 점수를
+          // 적립할 수 있다(READ COMMITTED). 트랜잭션 종료 시 자동 해제.
+          await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+            `claim:${userId}:${spotId}`,
+          ]);
+
+          // 점령 직전 보유팀으로 신규/재방문 판정.
+          // (교차팀 진입은 Redis 방어가, 동일 유저 동시성은 위 advisory lock이 직렬화한다.)
+          const prev = await manager
+            .getRepository(SpotClaim)
+            .findOne({ where: { spotId } });
+          const isRevisit = prev?.team === team;
+          const eventType = isRevisit
+            ? ScoreEventType.CLAIM_REVISIT
+            : ScoreEventType.CLAIM_NEW;
+
+          // 오늘(KST) 이 관광지에서 이미 점수를 받았으면 점수 0.
+          // (일일 점령 게이트가 재점령을 막으므로 통상 false지만, 원장 기준 방어선으로 유지)
+          const alreadyScored = await this.scoresService.hasClaimScoredToday(
+            manager,
+            userId,
+            spotId,
+          );
+          const teamBase = isRevisit ? TEAM_BASE_REVISIT : TEAM_BASE_NEW;
+          const personal = alreadyScored
+            ? 0
+            : Math.round(PERSONAL_BASE * weight);
+          const teamPts = alreadyScored ? 0 : Math.round(teamBase * weight);
+
+          await manager
+            .getRepository(SpotClaim)
+            .upsert({ spotId, team, userId }, { conflictPaths: ['spotId'] });
+
+          if (personal > 0 || teamPts > 0) {
+            await this.scoresService.record(manager, {
+              userId,
+              team,
+              type: eventType,
+              personalPoints: personal,
+              teamPoints: teamPts,
+              spotId,
+            });
+            await this.usersService.applyScoreDelta(userId, personal, manager);
+          }
+
+          return { eventType, personal, teamPts };
+        });
+        type = outcome.eventType;
+        personalPoints = outcome.personal;
+        teamPoints = outcome.teamPts;
+      } catch (err) {
+        if (defense.created) {
+          await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+            this.logger.error(
+              `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+              redisErr,
+            );
+          });
+        }
+        // FK 위반(23503): 존재 확인 이후 이 시점 사이에 seed:spots가 레거시 잔여
+        // spot을 삭제한 경합(race) 상황 — spot이 사라진 것과 동일하게 404로 처리한다
+        const pgCode = (err instanceof QueryFailedError &&
+          (err.driverError as { code?: string })?.code) as string | undefined;
+        if (pgCode === '23503') {
+          throw new NotFoundException('관광지를 찾을 수 없습니다.');
+        }
+        throw err;
+      }
     } catch (err) {
-      if (defense.created) {
-        await this.redis.del(DEFENSE_KEY(spotId)).catch((redisErr) => {
+      // 점령이 확정되지 않은 실패(방어 중, DB 오류 등)가 일일 횟수를 소진하지 않도록,
+      // 이번 요청에서 새로 만든 일일 키만 CAS로 롤백한다 (daily.token 불일치 시
+      // no-op — 자정 경계에서 다음날 새로 생성된 정상 키를 지우지 않기 위함)
+      await this.redis
+        .clearDailyClaim(userId, spotId, daily.token)
+        .catch((redisErr) => {
           this.logger.error(
-            `Redis 방어 키 롤백 실패 spotId=${spotId}`,
+            `일일 점령 키 롤백 실패 userId=${userId} spotId=${spotId}`,
             redisErr,
           );
         });
-      }
       throw err;
     }
 
@@ -206,7 +250,7 @@ export class ClaimsService {
       type,
       pointsAwarded: personalPoints,
       teamPointsAwarded: teamPoints,
-      defenseSeconds: defense.remaining,
+      defenseSeconds,
     };
   }
 

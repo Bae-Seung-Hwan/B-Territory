@@ -177,30 +177,8 @@ describe('Claims (e2e)', () => {
     expect(user?.score).toBe(100);
   });
 
-  it('시나리오 1-B: 같은 날 같은 관광지 재방문 → 방문 성공하되 점수 0 (일일 제한)', async () => {
-    const res = await request(app.getHttpServer())
-      .post('/api/claims/visit')
-      .set('Authorization', 'Bearer uid-teamA')
-      .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
-      .expect(201);
-
-    const body = res.body as VisitSuccessBody;
-    expect(body).toMatchObject({
-      success: true,
-      team: 'A',
-      type: ScoreEventType.CLAIM_REVISIT,
-      pointsAwarded: 0,
-      teamPointsAwarded: 0,
-    });
-
-    // 점수 0이므로 원장·user.score 모두 증가하지 않음
-    const events = await scoreRepo.find({ where: { spotId } });
-    expect(events).toHaveLength(1);
-    const user = await userRepo.findOne({
-      where: { firebaseUid: 'uid-teamA' },
-    });
-    expect(user?.score).toBe(100);
-  });
+  // (구 시나리오 1-B "재방문 → 성공하되 0점"은 A안 확정으로 폐기 — 재방문은 시나리오 1-1처럼
+  //  일일 제한(409)으로 완전 차단된다. 점수 0 경로는 일일 게이트 때문에 도달 불가.)
 
   it('시나리오 1-C: 외국인 방문 비율 가중치가 점수에 반영된다', async () => {
     const res = await request(app.getHttpServer())
@@ -214,6 +192,16 @@ describe('Claims (e2e)', () => {
     // 해운대구(16)는 가중치 > 1 → 기본 100보다 큰 점수
     expect(body.pointsAwarded).toBeGreaterThan(100);
     expect(body.teamPointsAwarded).toBe(body.pointsAwarded);
+  });
+
+  it('시나리오 1-1: 같은 유저가 같은 관광지 재점령 시도 → 409 일일 점령 제한', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/claims/visit')
+      .set('Authorization', 'Bearer uid-teamA')
+      .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
+      .expect(409);
+
+    expect((res.body as ErrorBody).message).toContain('오늘 이미 점령');
   });
 
   it('시나리오 2: 50m 초과 좌표 → 400 방문 인증 실패', async () => {
@@ -236,6 +224,17 @@ describe('Claims (e2e)', () => {
     const body = res.body as ErrorBody;
     expect(body.message).toContain('방어 시간 중');
     expect(body.message).toMatch(/\d+초/);
+  });
+
+  it('시나리오 3-1: 방어에 막힌 시도는 일일 횟수를 소진하지 않는다 (재시도해도 방어 409, 일일 제한 409가 아님)', async () => {
+    // 시나리오 3에서 teamB의 일일 키가 롤백되지 않았다면 이번 응답은 "오늘 이미 점령"이 된다
+    const res = await request(app.getHttpServer())
+      .post('/api/claims/visit')
+      .set('Authorization', 'Bearer uid-teamB')
+      .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
+      .expect(409);
+
+    expect((res.body as ErrorBody).message).toContain('방어 시간 중');
   });
 
   it('시나리오 4: GET /claims/spots/:spotId — 점령 현황 정상 반환', async () => {
