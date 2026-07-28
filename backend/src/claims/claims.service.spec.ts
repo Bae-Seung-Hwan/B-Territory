@@ -47,7 +47,6 @@ describe('ClaimsService', () => {
         applyScoreDelta: jest.fn().mockResolvedValue(undefined),
       };
       const scoresService = {
-        hasClaimScoredToday: jest.fn().mockResolvedValue(false),
         record: jest.fn().mockResolvedValue(undefined),
       };
       const districtsService = { getWeight: jest.fn().mockReturnValue(1) };

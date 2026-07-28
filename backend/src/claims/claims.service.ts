@@ -176,18 +176,11 @@ export class ClaimsService {
             ? ScoreEventType.CLAIM_REVISIT
             : ScoreEventType.CLAIM_NEW;
 
-          // 오늘(KST) 이 관광지에서 이미 점수를 받았으면 점수 0.
-          // (일일 점령 게이트가 재점령을 막으므로 통상 false지만, 원장 기준 방어선으로 유지)
-          const alreadyScored = await this.scoresService.hasClaimScoredToday(
-            manager,
-            userId,
-            spotId,
-          );
+          // 점수 = 기준 점령치 × 구 가중치. 같은 유저의 당일 재점령은 상위 markDailyClaim
+          // 게이트가 409로 막으므로, 여기 도달한 요청은 항상 오늘의 첫 점령 = 정상 지급.
           const teamBase = isRevisit ? TEAM_BASE_REVISIT : TEAM_BASE_NEW;
-          const personal = alreadyScored
-            ? 0
-            : Math.round(PERSONAL_BASE * weight);
-          const teamPts = alreadyScored ? 0 : Math.round(teamBase * weight);
+          const personal = Math.round(PERSONAL_BASE * weight);
+          const teamPts = Math.round(teamBase * weight);
 
           await manager
             .getRepository(SpotClaim)

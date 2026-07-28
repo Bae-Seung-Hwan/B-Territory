@@ -18,18 +18,6 @@ export interface DistrictTeamScore {
   team_score: string; // pg SUM은 문자열로 반환
 }
 
-/**
- * KST(UTC+9, DST 없음) 기준 '오늘 00:00'에 해당하는 UTC 시각 인스턴트.
- * createdAt과 인스턴트 비교로 KST 달력일 경계를 판정한다.
- */
-function kstStartOfTodayUtc(now = new Date()): Date {
-  const kst = new Date(now.getTime() + 9 * 3600 * 1000);
-  const midnightUtcMs =
-    Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate()) -
-    9 * 3600 * 1000;
-  return new Date(midnightUtcMs);
-}
-
 @Injectable()
 export class ScoresService {
   /** 원장에 이벤트 1건 append (호출자 트랜잭션에 참여). */
@@ -43,25 +31,6 @@ export class ScoresService {
       spotId: input.spotId ?? null,
       duelId: input.duelId ?? null,
     });
-  }
-
-  /** 해당 유저가 오늘(KST) 이 관광지에서 이미 점령 점수를 받았는지. */
-  async hasClaimScoredToday(
-    manager: EntityManager,
-    userId: string,
-    spotId: number,
-  ): Promise<boolean> {
-    const count = await manager
-      .getRepository(ScoreEvent)
-      .createQueryBuilder('se')
-      .where('se.userId = :userId', { userId })
-      .andWhere('se.spotId = :spotId', { spotId })
-      .andWhere('se.type IN (:...types)', {
-        types: [ScoreEventType.CLAIM_NEW, ScoreEventType.CLAIM_REVISIT],
-      })
-      .andWhere('se.createdAt >= :since', { since: kstStartOfTodayUtc() })
-      .getCount();
-    return count > 0;
   }
 
   /**
