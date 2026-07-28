@@ -54,6 +54,27 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * 패턴에 맞는 키 일괄 삭제 (KEYS와 달리 SCAN 기반이라 서버를 블로킹하지 않음).
+   * 더 이상 소유 코드가 없는 leftover 키 정리용. 삭제한 키 수를 반환한다.
+   */
+  async deleteByPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let deleted = 0;
+    do {
+      const [nextCursor, keys] = await this.client.scan(
+        cursor,
+        'MATCH',
+        pattern,
+        'COUNT',
+        100,
+      );
+      cursor = nextCursor;
+      if (keys.length > 0) deleted += await this.client.unlink(...keys);
+    } while (cursor !== '0');
+    return deleted;
+  }
+
+  /**
    * 방어 타이머 원자 연산 (Lua 스크립트)
    * - 키 없음: 타이머 신규 설정 후 'ok' (created: true)
    * - 같은 팀:  타이머 리셋 없이 'ok' (무한 리셋 방지, created: false)

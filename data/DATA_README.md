@@ -170,6 +170,8 @@ foreign_visitor_share 정의:
 - 축제 데이터는 초기 시딩용으로 사용하고, 이후 KTO searchFestival2 API 동기화로 전환할 수 있습니다.
 - busan_districts_boundary.geojson은 구 단위 점령 지도 색칠 렌더링에 사용합니다.
 
+> **`sigungu_code` 혼재 형식 안내 (시딩 정규화)**: mission_places_final.csv의 `sigungu_code`는 소스에 따라 KTO 숫자 코드(`kto_*` 소스)와 한글 구 이름(`busan_attraction` 소스)이 혼재되어 있습니다. 백엔드 시딩 스크립트(`backend/scripts/seed-spots-csv.ts`)가 DB 삽입 시 KTO 표준 부산 구 코드(가나다순 `1` 강서구 ~ `16` 해운대구)로 정규화하므로 DB에는 숫자 코드만 존재합니다. 매핑할 수 없는 새 값이나 빈 값이 CSV에 들어오면 시딩이 실패합니다 (빈 값은 구 집계에서 조용히 누락되는 것을 막기 위해, 매핑 불가 값은 스크립트의 매핑 테이블 갱신이 필요하다는 것을 알리기 위해 각각 실패시킵니다). CSV를 새로 받을 때는 `sigungu_code` 결측 여부를 품질 검수 항목에 포함하세요.
+
 ## 7. 검증 요약
 
 | 항목 | 결과 |
@@ -180,6 +182,16 @@ foreign_visitor_share 정의:
 | festivals_fix.csv sigungu_code 누락 | 1건 |
 | busan_districts.csv 외국인 방문 비율 | 반영 |
 | busan_districts_boundary.geojson | 완료 |
+| mission_places_final.csv sigungu_code 결측(빈 값) | 0건 |
+| 주소↔sigungu_code 불일치(원본 오류) | 3건 (아래) |
+
+> **주소↔`sigungu_code` 불일치 (원본 데이터 오류, 코드로 자동 정정 불가)**: 아래 3건은 `sigungu_code` 값 자체는 유효한 숫자 코드라 시딩 정규화(`normalizeSigunguCode`)를 통과하지만, 주소의 구/군과 어긋나 해당 장소의 점령이 엉뚱한 구로 집계되거나 두 장소가 한 행에 병합돼 있습니다. 시딩 스크립트가 주소와 코드를 교차검증해 **경고**로 출력하니(`seed:spots` 로그 확인), CSV 갱신 시 함께 점검하세요.
+>
+> | mission_id | 내용 |
+> |---|---|
+> | MISSION_0031 | 주소는 `수영구 광남로 96`인데 `sigungu_code`가 `16`(해운대구) — 코드 오류 |
+> | MISSION_0183 | address에 주소 2개 병합 (`서구 ...` + `중구 ...`), 코드는 `15`(중구) |
+> | MISSION_0201 | `동래향교`(동래구)+`기장향교`(기장군)가 한 행에 병합, 주소 2개 / 코드는 `6`(동래구) |
 
 ## 8. 남은 협의 사항
 
