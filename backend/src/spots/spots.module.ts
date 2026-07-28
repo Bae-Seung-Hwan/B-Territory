@@ -1,49 +1,39 @@
 import { Logger, Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { BullModule, InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
 import { Spot } from './entities/spot.entity';
 import { SpotsController } from './spots.controller';
 import { SpotsService } from './spots.service';
-import { SpotsProcessor } from './spots.processor';
+import { RedisService } from '../common/redis/redis.service';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([Spot]),
-    BullModule.registerQueue({ name: 'spot-sync' }),
-  ],
+  imports: [TypeOrmModule.forFeature([Spot])],
   controllers: [SpotsController],
-  providers: [SpotsService, SpotsProcessor],
+  providers: [SpotsService],
   exports: [SpotsService],
 })
 export class SpotsModule implements OnModuleInit {
   private readonly logger = new Logger(SpotsModule.name);
 
-  constructor(@InjectQueue('spot-sync') private readonly queue: Queue) {}
+  constructor(private readonly redis: RedisService) {}
 
   async onModuleInit() {
+    // 구 KTO 주간 재동기화(spot-sync) 잡의 leftover 정리. 큐 등록과 자기 정리 로직
+    // (removeRepeatableByKey)이 CSV 시딩 전환으로 함께 삭제되어, 이전 코드를 실행했던
+    // 환경의 Redis에는 반복 잡 스케줄 키가 남아도 지울 코드가 없다. 방치하면 향후
+    // 같은 이름의 큐를 재도입할 때 옛 cron 스케줄이 섞여 들어갈 수 있으므로, 큐를
+    // 아는 코드가 더 이상 없는 지금은 키를 직접 삭제한다. (정리된 환경에서는 no-op)
     try {
-      // 기존 repeatable 잡 제거 후 재등록 (키 불일치로 인한 중복 방지)
-      // 주의: 인스턴스 2개 이상 동시 기동 시 잡이 중복 등록될 수 있음
-      const existing = await this.queue.getRepeatableJobs();
-      await Promise.all(
-        existing
-          .filter((j) => j.name === 'sync')
-          .map((j) => this.queue.removeRepeatableByKey(j.key)),
-      );
-
-      // 매주 월요일 새벽 3시 동기화 (부산 관광공사 API 업데이트 주기 반영)
-      await this.queue.add(
-        'sync',
-        {},
-        {
-          repeat: { cron: '0 3 * * 1' },
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 60000 },
-        },
-      );
+      const removed = await this.redis.deleteByPattern('bull:spot-sync:*');
+      if (removed > 0) {
+        this.logger.log(
+          `구 spot-sync 반복 잡 잔여 키 ${removed}개를 정리했습니다`,
+        );
+      }
     } catch (err) {
-      this.logger.error('spot-sync 잡 등록 실패 (Redis 연결 확인 필요)', err);
+      this.logger.error(
+        '구 spot-sync 잔여 키 정리 실패 (Redis 연결 확인 필요)',
+        err,
+      );
     }
   }
 }

@@ -138,8 +138,17 @@ curl http://localhost:3000/api/auth/me \
 | `page` | number | X | 1 | 페이지 번호 |
 | `limit` | number | X | 20 | 페이지당 개수 |
 | `areacode` | string | X | - | 지역코드 (부산 = `6`) |
-| `sigungucode` | string | X | - | 구 코드 |
-| `contenttypeid` | string | X | - | 콘텐츠 유형 코드 |
+| `sigungucode` | string | X | - | 부산 구 코드 `1`~`16` (아래 코드표 참고) |
+| `contenttypeid` | string | X | - | 콘텐츠 유형 코드 (아래 참고) |
+
+**부산 구 코드표 (`sigungucode`)** — KTO 표준. 구 단위 점령 API(`/api/claims/districts/:sigungucode`)에도 동일하게 사용
+
+> `1` 강서구 · `2` 금정구 · `3` 기장군 · `4` 남구 · `5` 동구 · `6` 동래구 · `7` 부산진구 · `8` 북구 · `9` 사상구 · `10` 사하구 · `11` 서구 · `12` 수영구 · `13` 연제구 · `14` 영도구 · `15` 중구 · `16` 해운대구
+
+**콘텐츠 유형 코드 (`contenttypeid`)** — 데이터 소스에 따라 두 형식이 존재하니 주의
+
+> - KTO 소스(115건): `12` 관광지 · `14` 문화시설 · `15` 축제공연행사 · `28` 레포츠 · `32` 숙박 · `38` 쇼핑 · `39` 음식점
+> - 부산시 소스(100건): 문자열 `busan_attraction` (부산명소 — 대응되는 KTO 유형 코드가 없어 원본 값 유지)
 
 **Response 필드**
 
@@ -147,7 +156,7 @@ curl http://localhost:3000/api/auth/me \
 |---|---|---|
 | `items[]` | array | 아래 관광지 목록 |
 | `items[].id` | number | |
-| `items[].contentId` | string | 원본 API(한국관광공사) 콘텐츠 ID |
+| `items[].contentId` | string | 데이터셋 미션 ID (`MISSION_0001` 형식) |
 | `items[].title` | string | 장소명 |
 | `items[].addr1` | string \| null | 주소 |
 | `items[].mapX` | **string** | 경도. ⚠️ **숫자가 아니라 문자열로 옵니다** (Postgres `decimal` 컬럼 특성). 프론트에서 `parseFloat` 필요 |
@@ -160,9 +169,9 @@ curl http://localhost:3000/api/auth/me \
 | `page` | number | 요청한 페이지 |
 | `limit` | number | 요청한 페이지당 개수 |
 
-**예시: 요청**
+**예시: 요청** (해운대구 = `16`)
 ```bash
-curl "http://localhost:3000/api/spots?page=1&limit=1&sigungucode=6-2"
+curl "http://localhost:3000/api/spots?page=1&limit=1&sigungucode=16"
 ```
 
 **예시: 실제 응답 (200 OK)**
@@ -170,19 +179,19 @@ curl "http://localhost:3000/api/spots?page=1&limit=1&sigungucode=6-2"
 {
   "items": [
     {
-      "id": 1,
-      "contentId": "doc-example-1",
-      "title": "해운대해수욕장",
-      "addr1": "부산광역시 해운대구 해운대해변로 264",
-      "mapX": "129.1603000000",
-      "mapY": "35.1587000000",
-      "firstimage": "https://tong.visitkorea.or.kr/cms/resource/example1.jpg",
-      "contenttypeid": "12",
+      "id": 818,
+      "contentId": "MISSION_0005",
+      "title": "해운대 빛축제",
+      "addr1": "부산광역시 해운대구 해운대해변로 280 (중동)",
+      "mapX": "129.1626049105",
+      "mapY": "35.1595354549",
+      "firstimage": "http://tong.visitkorea.or.kr/cms/resource/12/3576412_image2_1.jpg",
+      "contenttypeid": "15",
       "areacode": "6",
-      "sigungucode": "6-2"
+      "sigungucode": "16"
     }
   ],
-  "total": 1,
+  "total": 48,
   "page": 1,
   "limit": 1
 }
@@ -214,25 +223,25 @@ curl "http://localhost:3000/api/spots?page=1&limit=1&sigungucode=6-2"
 
 **예시: 요청**
 ```bash
-curl http://localhost:3000/api/spots/1
+curl http://localhost:3000/api/spots/930
 ```
 
-**예시: 실제 응답 (200 OK)**
+**예시: 실제 응답 (200 OK, `overview` 일부 생략)**
 ```json
 {
-  "id": 1,
-  "contentId": "doc-example-1",
-  "title": "해운대해수욕장",
-  "addr1": "부산광역시 해운대구 해운대해변로 264",
-  "mapX": "129.1603000000",
-  "mapY": "35.1587000000",
-  "firstimage": "https://tong.visitkorea.or.kr/cms/resource/example1.jpg",
-  "contenttypeid": "12",
+  "id": 930,
+  "contentId": "MISSION_0117",
+  "title": "흰여울문화마을",
+  "addr1": "부산광역시 영도구 흰여울길",
+  "mapX": "129.0440200000",
+  "mapY": "35.0788500000",
+  "firstimage": "https://www.visitbusan.net/uploadImgs/files/cntnts/20191222164810529_ttiel",
+  "contenttypeid": "busan_attraction",
   "areacode": "6",
-  "sigungucode": "6-2",
-  "overview": null,
+  "sigungucode": "14",
+  "overview": "절영해안산책로 가파른 담벼락 위로 독특한 마을 풍경이 보인다. (...생략)",
   "usetime": null,
-  "homepage": null
+  "homepage": "http://www.ydculture.com/huinnyeoulculturetown/"
 }
 ```
 
@@ -244,13 +253,13 @@ curl http://localhost:3000/api/spots/1
 
 ---
 
-## 곧 추가될 API (아직 develop 미병합 — PR 리뷰 중)
+## Claims / 실시간 API (병합됨 — 상세 문서화 예정)
 
-프론트엔드에서 미리 설계에 참고할 수 있도록 남겨둡니다. 실제 머지 전까지 변경될 수 있습니다.
+아래는 이미 develop에 병합되어 동작 중인 엔드포인트 요약입니다. 상세 스펙(요청/응답 예시)은 추후 이 문서에 보강합니다.
 
 | API | 브랜치 / PR | 설명 |
 |---|---|---|
-| `POST /api/claims/visit` | `feature/Bae/territory-claim` (PR #9) | GPS 방문 인증 + 관광지 점령 (반경 50m) |
-| `GET /api/claims/spots/:spotId` | 〃 | 관광지 현재 점령 팀 조회 |
-| `GET /api/claims/districts/:sigungucode` | 〃 | 구 단위 점령 현황 조회 |
-| WebSocket `location:update` / `duel:*` | `feature/Bae/realtime-duel` (PR #13) | 실시간 조우 탐지, 결투 신청/수락/거절/결과 |
+| `POST /api/claims/visit` | develop 병합됨 (PR #9, #19) | GPS 방문 인증 + 관광지 점령 (반경 50m). 관광지별 인당 하루 1회 제한(KST 자정 초기화) — 초과 시 `409 {"message":"이 관광지는 오늘 이미 점령했습니다. (KST 자정에 초기화)"}` |
+| `GET /api/claims/spots/:spotId` | develop 병합됨 (PR #9) | 관광지 현재 점령 팀 조회 |
+| `GET /api/claims/districts/:sigungucode` | develop 병합됨 (PR #9) | 구 단위 점령 현황 조회 (`sigungucode`는 위 부산 구 코드표와 동일) |
+| WebSocket `location:update` / `duel:*` | develop 병합됨 (PR #13) | 실시간 조우 탐지, 결투 신청/수락/거절/결과 |
