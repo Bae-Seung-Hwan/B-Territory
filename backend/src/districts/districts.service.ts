@@ -43,13 +43,23 @@ export class DistrictsService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // 가중치는 점령 점수의 핵심이므로, 시딩/캐시 로드 실패를 조용히 삼켜 전 구를 1.0으로
+    // degrade시키지 않고 부팅을 실패시킨다(fail-fast). CSV 경로 오류(예: Docker) 등이
+    // 눈에 띄지 않게 넘어가는 것을 막는다.
+    await this.seedFromCsv();
+    await this.loadWeightCache();
+    if (this.weightCache.size === 0) {
+      throw new Error(
+        `District 가중치 캐시가 비어 있습니다 — CSV 시딩 실패로 점령 점수 가중치가 모두 1.0이 됩니다. CSV 경로 확인 필요: ${this.csvPath()}`,
+      );
+    }
+
+    // 정합성 검증은 경고성이므로 실패해도 부팅은 계속한다 (가중치 동작과 무관).
     try {
-      await this.seedFromCsv();
-      await this.loadWeightCache();
       await this.validateSpotSigungu();
     } catch (err) {
-      this.logger.error(
-        'District 시딩/검증 실패 (CSV 경로·DB 연결 확인 필요)',
+      this.logger.warn(
+        'spots.sigungucode 정합성 검증 실패 (부팅은 계속)',
         err as Error,
       );
     }
