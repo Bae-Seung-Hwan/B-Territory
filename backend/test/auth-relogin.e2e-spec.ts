@@ -7,12 +7,14 @@ import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { configureApp } from '../src/app-setup';
 import { FirebaseService } from '../src/common/firebase/firebase.service';
+import { MailService } from '../src/common/mail/mail.service';
 import { User } from '../src/users/entities/user.entity';
 
 const FIREBASE_UID = 'e2e-relogin-uid';
 const RACE_UID = 'e2e-relogin-race-uid';
 const NO_EMAIL_UID = 'e2e-relogin-no-email-uid';
-const ALL_UIDS = [FIREBASE_UID, RACE_UID, NO_EMAIL_UID];
+const UNVERIFIED_UID = 'e2e-relogin-unverified-uid';
+const ALL_UIDS = [FIREBASE_UID, RACE_UID, NO_EMAIL_UID, UNVERIFIED_UID];
 
 // 토큰 문자열은 "uid:세션번호" 형태 — 실제 재로그인처럼 매번 다른 토큰 문자열이지만
 // 같은 uid로 디코딩되는 상황을 재현. NO_EMAIL_UID는 이메일 없는 계정(전화번호/익명 로그인)을 재현.
@@ -23,6 +25,32 @@ const mockFirebaseService = {
     return Promise.resolve({ uid, email: `${uid}@test.com` });
   },
 };
+
+// 실제 Resend 발송 대신 링크만 캡처 — send-link가 만드는 실제 토큰으로 verify-token까지
+// 그대로 거치게 해서 register()의 이메일 인증 게이트를 end-to-end로 재현한다.
+const sentLinks = new Map<string, string>();
+const mockMailService = {
+  sendVerificationLink: (to: string, link: string) => {
+    sentLinks.set(to, link);
+    return Promise.resolve();
+  },
+};
+
+async function verifyEmail(app: INestApplication<App>, email: string) {
+  await request(app.getHttpServer())
+    .post('/api/email/send-link')
+    .send({ email })
+    .expect(201);
+
+  const link = sentLinks.get(email);
+  if (!link) throw new Error(`no verification link captured for ${email}`);
+  const token = new URL(link).searchParams.get('token');
+
+  await request(app.getHttpServer())
+    .post('/api/email/verify-token')
+    .send({ token })
+    .expect(201);
+}
 
 interface ErrorBody {
   message: string;
@@ -45,6 +73,8 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     })
       .overrideProvider(FirebaseService)
       .useValue(mockFirebaseService)
+      .overrideProvider(MailService)
+      .useValue(mockMailService)
       .compile();
 
     app = configureApp(moduleFixture.createNestApplication());
@@ -70,7 +100,24 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     expect((res.body as ErrorBody).message).toContain('등록되지 않은');
   });
 
-  it('최초 로그인(토큰 A)으로 register → 201 가입 성공', async () => {
+  it('이메일 인증 없이 register 시도 → 403', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${UNVERIFIED_UID}:login-session-1`)
+      .send({ nickname: '미인증', nationality: 'KR' })
+      .expect(403);
+
+    expect((res.body as ErrorBody).message).toContain('이메일 인증');
+
+    const count = await userRepo.count({
+      where: { firebaseUid: UNVERIFIED_UID },
+    });
+    expect(count).toBe(0); // 계정이 생성되지 않음
+  });
+
+  it('최초 로그인(토큰 A)으로 이메일 인증 후 register → 201 가입 성공', async () => {
+    await verifyEmail(app, `${FIREBASE_UID}@test.com`);
+
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${FIREBASE_UID}:login-session-1`)
@@ -121,6 +168,8 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
   });
 
   it('동시에 register 2건이 경합해도 하나만 201, 나머지는 409 (500 없음)', async () => {
+    await verifyEmail(app, `${RACE_UID}@test.com`);
+
     const server = app.getHttpServer();
     const send = () =>
       request(server)
