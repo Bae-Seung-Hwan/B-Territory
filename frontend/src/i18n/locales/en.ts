@@ -59,7 +59,7 @@ export const en: Translations = {
       retry: 'Retry',
     },
     emailVerification: {
-      hint: 'Email verification is required to sign up. Request the email and tap the link.',
+      hint: "Email verification is required to sign up. Tap the link in the email, then tap Sign Up.\nIf you've already verified, you don't need another email.",
       send: 'Send verification email',
       resendIn: 'Resend available in {{seconds}}s',
       sentTitle: 'Verification email sent',

@@ -21,6 +21,8 @@ import { auth } from '@/lib/firebase';
 import { useRegisterMutation } from '@/hooks/use-auth';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useSendVerificationLink } from '@/hooks/use-email-verification';
+import { useRegisterDraft } from '@/hooks/use-register-draft';
+import { clearRegisterDraft } from '@/lib/register-draft';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { getCountryList, type Country } from '@/constants/countries';
@@ -140,6 +142,19 @@ export default function RegisterScreen() {
     [countries, selectedCode],
   );
 
+  // 이메일 인증 때문에 앱을 벗어났다 돌아와도 다시 입력하지 않도록 초안을 보관한다.
+  // 비밀번호는 담기지 않으므로 복원 후에도 다시 입력해야 한다.
+  useRegisterDraft({
+    email,
+    nickname,
+    nationality: selectedCode,
+    onRestore: (draft) => {
+      setEmail(draft.email);
+      setNicknameInput(draft.nickname);
+      setSelectedCode(draft.nationality);
+    },
+  });
+
   const openCountryPicker = () => {
     setDebouncedQuery('');
     setSearchFieldKey((key) => key + 1);
@@ -203,6 +218,8 @@ export default function RegisterScreen() {
           nickname: nickname.trim(),
           nationality: selectedCode,
         });
+        // 가입이 확정된 뒤에만 초안을 지운다 — 실패 시엔 재입력 없이 다시 시도할 수 있어야 한다.
+        void clearRegisterDraft();
         // (main)은 가드되어 있어 인증 상태가 리렌더에 반영되기 전까진 열리지 않으므로,
         // 항상 열려있는 "/"로 보내 index가 판단하게 한다.
         router.replace('/');
