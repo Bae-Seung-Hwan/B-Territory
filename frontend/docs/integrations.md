@@ -69,6 +69,17 @@
 
 이전에는 `login.tsx`/`register.tsx`/`AuthProvider`가 각자 `getMe`를 호출해 `useUserStore`에 복사했고, 완료 순서에 따라 서로의 결과를 덮어쓰는 문제가 있었다. 쓰는 곳을 하나로 모아 그 클래스의 버그를 구조적으로 없앴다(`useUserStore`는 이 과정에서 읽는 곳이 없어져 삭제됨).
 
+### 이메일 인증 매직 링크
+
+백엔드 `register()`가 "이 이메일을 방금 인증했는가"를 게이트로 걸기 때문에(`auth.service.ts`), 인증을 거치지 않으면 가입이 `403`으로 거부된다. 프론트 흐름은 다음과 같다.
+
+1. `register.tsx`의 **인증 메일 발송** 버튼 → `POST /api/email/send-link`. 백엔드가 60초 재발송 쿨다운(`429`)을 걸어서, `useSendVerificationLink`가 같은 길이의 카운트다운으로 버튼을 잠근다(최종 판정은 서버).
+2. 사용자가 메일의 링크(`${FRONTEND_URL}/verify?token=...`)를 연다 → `app/verify.tsx` → `POST /api/email/verify-token`. 토큰은 **1회용**이라 이 화면은 자동 재시도를 켜지 않고, StrictMode의 이펙트 이중 실행도 ref로 막는다.
+3. 검증 성공 시 서버가 `email-verified:<email>` 마커를 30분간 남긴다. **인증 상태는 클라이언트가 아니라 서버에 이메일 기준으로 남으므로**, 링크를 폰 브라우저에서 열고 앱으로 돌아와 가입을 이어가도 인정된다(딥링크 설정이 없어도 동작하는 이유).
+4. 인증 없이 가입을 시도하면 `403` → `api-errors.ts`가 "이메일 인증이 필요합니다"로 매핑. 이 경우 백엔드에 아무것도 생기지 않았으므로 `register.tsx`의 롤백 조건에 걸려 방금 만든 Firebase 계정은 삭제된다.
+
+⚠️ **백엔드 CORS 필요.** 매직 링크는 브라우저에서 열리므로 `/verify` 화면이 API를 교차 출처로 호출한다. 네이티브 앱만 쓸 때는 CORS가 필요 없어 설정이 없었고, 그 상태에서는 이 기능이 preflight에서 막혀 아예 동작하지 않는다. `backend/src/app-setup.ts`에 `CORS_ORIGINS`(없으면 `FRONTEND_URL`) 기반 `enableCors`를 추가했다. `FRONTEND_URL`은 Expo 웹 개발 서버 포트(기본 8081)와 맞아야 링크가 실제로 열린다.
+
 ### 라우트 가드
 
 `app/_layout.tsx`의 `RootNavigator`가 `(main)` 그룹을 `Stack.Protected guard={isAuthenticated}`로 감싼다. `app/index.tsx`의 리다이렉트는 `"/"`로 들어온 경우에만 동작하므로, 딥링크·웹 URL 직접 입력·푸시 알림처럼 `"/"`를 거치지 않는 진입은 검사를 건너뛰었다.

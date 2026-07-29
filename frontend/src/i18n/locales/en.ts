@@ -58,6 +58,22 @@ export const en: Translations = {
       loadFailed: 'Could not load your account.\nPlease check your network connection.',
       retry: 'Retry',
     },
+    emailVerification: {
+      hint: 'Email verification is required to sign up. Request the email and tap the link.',
+      send: 'Send verification email',
+      resendIn: 'Resend available in {{seconds}}s',
+      sentTitle: 'Verification email sent',
+      sentMessage:
+        'Check your inbox and tap the verification link.\nOnce verified, tap Sign Up. (Link valid for 10 minutes)',
+      sendFailed: 'Failed to send the verification email.',
+      verifyingTitle: 'Verifying email',
+      successTitle: 'Email verified',
+      successMessage: 'Verification complete.\nReturn to the app to finish signing up.',
+      failedTitle: 'Verification failed',
+      failedMessage: 'This link is invalid or expired.\nPlease request a new verification email.',
+      missingToken: 'This address has no verification token.\nPlease open the link from your email.',
+      goToRegister: 'Go to sign up',
+    },
     errors: {
       title: 'Error',
       invalidCredential: 'Incorrect email or password',
@@ -70,6 +86,7 @@ export const en: Translations = {
       registerFailed: 'Sign up failed',
       sessionExpired: 'Your session has expired. Please log in again',
       alreadyRegistered: 'This account is already registered',
+      emailVerificationRequired: 'Email verification required. Please tap the link in the verification email first',
     },
   },
   tabs: {

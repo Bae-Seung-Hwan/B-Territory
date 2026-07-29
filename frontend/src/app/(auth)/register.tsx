@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Text,
   TextInput,
   TouchableOpacity,
@@ -19,6 +20,7 @@ import { BottomSheetModal, BottomSheetFlatList, BottomSheetTextInput } from '@go
 import { auth } from '@/lib/firebase';
 import { useRegisterMutation } from '@/hooks/use-auth';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
+import { useSendVerificationLink } from '@/hooks/use-email-verification';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { getCountryList, type Country } from '@/constants/countries';
@@ -107,6 +109,12 @@ export default function RegisterScreen() {
   const { t, locale } = useTranslation();
   const registerMutation = useRegisterMutation();
   const handleAuthError = useHandleAuthError();
+  const {
+    sendLink,
+    isSending: isSendingLink,
+    hasSent: hasSentLink,
+    cooldown,
+  } = useSendVerificationLink();
   const countrySheetRef = useRef<BottomSheetModal>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -152,6 +160,18 @@ export default function RegisterScreen() {
     nickname.trim().length >= 2 &&
     selectedCode !== null &&
     !registerMutation.isPending;
+
+  const handleSendVerificationLink = async () => {
+    try {
+      await sendLink(email.trim());
+      Alert.alert(
+        t('auth.emailVerification.sentTitle'),
+        t('auth.emailVerification.sentMessage'),
+      );
+    } catch (err) {
+      handleAuthError(err, 'auth.emailVerification.sendFailed');
+    }
+  };
 
   const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
@@ -232,6 +252,24 @@ export default function RegisterScreen() {
           keyboardType="email-address"
           editable={!registerMutation.isPending}
         />
+
+        <Text style={styles.verifyHint}>{t('auth.emailVerification.hint')}</Text>
+        <Button
+          title={
+            cooldown > 0
+              ? t('auth.emailVerification.resendIn', { seconds: cooldown })
+              : t('auth.emailVerification.send')
+          }
+          onPress={handleSendVerificationLink}
+          variant="secondary"
+          disabled={email.trim().length === 0 || cooldown > 0 || registerMutation.isPending}
+          loading={isSendingLink}
+          style={styles.verifyButton}
+        />
+        {hasSentLink && (
+          <Text style={styles.verifySent}>{t('auth.emailVerification.sentMessage')}</Text>
+        )}
+
         <PasswordField
           value={password}
           onChangeText={setPassword}
@@ -332,6 +370,23 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   inputError: { borderColor: BrandColors.danger },
+  verifyHint: {
+    alignSelf: 'flex-start',
+    fontSize: 12,
+    color: '#888',
+    lineHeight: 17,
+    marginTop: -4,
+    marginBottom: 8,
+  },
+  verifyButton: { marginBottom: 12 },
+  verifySent: {
+    alignSelf: 'flex-start',
+    fontSize: 12,
+    color: BrandColors.accent,
+    lineHeight: 17,
+    marginTop: -4,
+    marginBottom: 12,
+  },
   errorText: {
     alignSelf: 'flex-start',
     fontSize: 12,
