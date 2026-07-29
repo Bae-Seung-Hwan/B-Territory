@@ -57,6 +57,10 @@ services:
       REDIS_HOST: redis
       # Caddyfile이 backend:3000으로 프록시하므로, 서버 .env의 PORT 값과 무관하게 여기서 고정한다.
       PORT: 3000
+    volumes:
+      # seed:spots가 읽는 CSV(scripts 기준 ../../data → 컨테이너 /data)를 호스트 레포의 data/로 제공.
+      # 읽기전용, 시딩 전용 — 앱 런타임에는 사용하지 않는다.
+      - ./data:/data:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -48,6 +48,16 @@ docker compose --env-file backend/.env -f docker-compose.prod.yml exec backend n
 
 > 마이그레이션 인프라(`feature/Bae/migration-setup`, PR #20)가 develop에 merge된 뒤에만 위 명령이 동작한다. #20 이전에는 스키마가 없어 `/api/spots` 등이 500(`relation "spots" does not exist`)이 된다 — **#20 선행 merge가 이 배포의 실사용 전제 조건이다.**
 
+## 관광지 데이터 시딩
+
+마이그레이션은 빈 테이블만 만든다. 지도 마커·GPS 점령 인증 등이 동작하려면 관광지 데이터(`data/mission_places_final.csv`)를 `spots` 테이블에 넣어야 한다:
+
+```bash
+docker compose --env-file backend/.env -f docker-compose.prod.yml exec backend npm run seed:spots
+```
+
+> CSV는 이미지에 포함되지 않고(빌드 컨텍스트가 `backend/`라 레포 루트의 `data/`를 담지 못함), `docker-compose.prod.yml`이 호스트 레포의 `data/`를 컨테이너 `/data`로 읽기전용 마운트해 제공한다. 따라서 **레포를 clone한 디렉터리에서(즉 `data/`가 존재하는 상태로) 컴포즈를 실행**해야 시딩이 동작한다. 마이그레이션(`migration:run`)을 먼저 실행해 테이블이 존재해야 한다.
+
 ## 알려진 제약 / 참고
 
 - 이미지가 `node_modules`를 dev 의존성 포함 전체로 담고 있다 (`migration:*`가 ts-node로 `src/migrations/*.ts`를 직접 실행하는데 `typescript`가 devDependencies에만 있기 때문). 이미지 용량보다 동작 확실성을 우선한 선택이며, 향후 마이그레이션을 컴파일된 `dist/data-source.js` 기반으로 돌리면 `--omit=dev`로 이미지를 줄일 수 있다 (PR #20과 함께 후속 처리).
