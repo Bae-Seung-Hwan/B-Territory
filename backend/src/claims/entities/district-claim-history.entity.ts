@@ -27,6 +27,8 @@ export class DistrictClaimHistory {
   @Column()
   teamScore: number;
 
-  @CreateDateColumn()
+  // score_events.createdAt과 동일하게 timestamptz로 저장 — 명예의 전당 시계열이 DB 세션
+  // 타임존과 무관하게 절대 시각을 보존하도록 한다.
+  @CreateDateColumn({ type: 'timestamptz' })
   capturedAt: Date;
 }

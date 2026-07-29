@@ -1,14 +1,14 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class ScoreLedgerAndDistricts1785303812006 implements MigrationInterface {
-  name = 'ScoreLedgerAndDistricts1785303812006';
+export class ScoreLedgerAndDistricts1785304814173 implements MigrationInterface {
+  name = 'ScoreLedgerAndDistricts1785304814173';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
       `ALTER TABLE "district_claims" RENAME COLUMN "spotCount" TO "teamScore"`,
     );
     await queryRunner.query(
-      `CREATE TABLE "district_claim_history" ("id" SERIAL NOT NULL, "sigungucode" character varying NOT NULL, "team" character varying(2) NOT NULL, "teamScore" integer NOT NULL, "capturedAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_bd73101f3305dbc949e6a704431" PRIMARY KEY ("id"))`,
+      `CREATE TABLE "district_claim_history" ("id" SERIAL NOT NULL, "sigungucode" character varying NOT NULL, "team" character varying(2) NOT NULL, "teamScore" integer NOT NULL, "capturedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_bd73101f3305dbc949e6a704431" PRIMARY KEY ("id"))`,
     );
     await queryRunner.query(
       `CREATE INDEX "IDX_ad769dfe9d95d80e38aee930e6" ON "district_claim_history"  ("sigungucode", "capturedAt") `,
@@ -26,7 +26,7 @@ export class ScoreLedgerAndDistricts1785303812006 implements MigrationInterface 
       `CREATE TYPE "public"."score_events_type_enum" AS ENUM('CLAIM_NEW', 'CLAIM_REVISIT', 'DUEL_WIN', 'DUEL_LOSS')`,
     );
     await queryRunner.query(
-      `CREATE TABLE "score_events" ("id" SERIAL NOT NULL, "userId" uuid NOT NULL, "team" character varying(2) NOT NULL, "type" "public"."score_events_type_enum" NOT NULL, "personalPoints" integer NOT NULL, "teamPoints" integer NOT NULL DEFAULT '0', "spotId" integer, "duelId" integer, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_1b2270cf7ddc638ef13a1424da1" PRIMARY KEY ("id"))`,
+      `CREATE TABLE "score_events" ("id" SERIAL NOT NULL, "userId" uuid, "team" character varying(2) NOT NULL, "type" "public"."score_events_type_enum" NOT NULL, "personalPoints" integer NOT NULL, "teamPoints" integer NOT NULL DEFAULT '0', "spotId" integer, "duelId" integer, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_1b2270cf7ddc638ef13a1424da1" PRIMARY KEY ("id"))`,
     );
     await queryRunner.query(
       `CREATE INDEX "IDX_a7f8c7ab04517e7b1ef176c058" ON "score_events"  ("spotId") `,
@@ -41,7 +41,7 @@ export class ScoreLedgerAndDistricts1785303812006 implements MigrationInterface 
       `CREATE INDEX "IDX_0f2ab4b6c3e8eb7d54dd7ecc97" ON "score_events"  ("team", "createdAt") `,
     );
     await queryRunner.query(
-      `ALTER TABLE "score_events" ADD CONSTRAINT "FK_edefcb46f2c919c035d7419a2ea" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
+      `ALTER TABLE "score_events" ADD CONSTRAINT "FK_edefcb46f2c919c035d7419a2ea" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE NO ACTION`,
     );
     await queryRunner.query(
       `ALTER TABLE "score_events" ADD CONSTRAINT "FK_a7f8c7ab04517e7b1ef176c0588" FOREIGN KEY ("spotId") REFERENCES "spots"("id") ON DELETE SET NULL ON UPDATE NO ACTION`,

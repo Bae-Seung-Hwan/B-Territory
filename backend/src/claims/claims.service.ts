@@ -312,16 +312,15 @@ export class ClaimsService {
         }
       }
 
-      // 활동 있는 구만 갱신 (활동 없는 구는 기존 보유 유지 — 삭제하지 않음)
-      await Promise.all(
-        [...winners.entries()].map(([sigungucode, { team, teamScore }]) =>
-          manager.upsert(
-            DistrictClaim,
-            { sigungucode, team, teamScore },
-            { conflictPaths: ['sigungucode'] },
-          ),
-        ),
-      );
+      // 활동 있는 구만 갱신 (활동 없는 구는 기존 보유 유지 — 삭제하지 않음).
+      // 단일 트랜잭션 커넥션에서는 쿼리를 동시 발행(Promise.all)하지 않고 순차 실행한다.
+      for (const [sigungucode, { team, teamScore }] of winners.entries()) {
+        await manager.upsert(
+          DistrictClaim,
+          { sigungucode, team, teamScore },
+          { conflictPaths: ['sigungucode'] },
+        );
+      }
 
       // 갱신 후 현재 보유 중인 전체 구 스냅샷을 이력에 append.
       // teamScore는 저장된 값(과거 승리 시점 점수) 대신 '이번 윈도우에 해당 보유팀이 얻은

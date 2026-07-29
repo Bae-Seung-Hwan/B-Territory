@@ -37,12 +37,14 @@ export class ScoreEvent {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ type: 'uuid' })
-  userId: string;
+  // 유저 탈퇴(hard-delete) 후에도 원장 행은 감사·팀 점수 근거로 남긴다. team을 비정규화해
+  // 두므로 팀 집계는 userId가 NULL이 되어도 보존된다(spot_claims·#20 원장과 동일한 SET NULL 패턴).
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
 
-  @ManyToOne(() => User)
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'userId' })
-  user: User;
+  user: User | null;
 
   // 이벤트 시점의 팀을 그대로 남긴다 (집계 시 매번 users 테이블과 조인하지 않기 위한 비정규화).
   @Column({ length: 2 })
