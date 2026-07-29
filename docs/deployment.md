@@ -50,13 +50,13 @@ docker compose --env-file backend/.env -f docker-compose.prod.yml exec backend n
 
 ## 관광지 데이터 시딩
 
-마이그레이션은 빈 테이블만 만든다. 지도 마커·GPS 점령 인증 등이 동작하려면 관광지 데이터(`data/mission_places_final.csv`)를 `spots` 테이블에 넣어야 한다:
+마이그레이션은 빈 테이블만 만든다. 지도 마커·GPS 점령 인증 등이 동작하려면 관광지 데이터(`data/mission_places_final.csv`)를 `spots` 테이블에 넣어야 한다. 시딩은 상시 앱(`backend`)이 아니라 **일회성 `seed` 서비스**로 실행한다(`--profile seed`로만 뜨고, 끝나면 `--rm`으로 정리):
 
 ```bash
-docker compose --env-file backend/.env -f docker-compose.prod.yml exec backend npm run seed:spots
+docker compose --env-file backend/.env -f docker-compose.prod.yml --profile seed run --rm seed
 ```
 
-> CSV는 이미지에 포함되지 않고(빌드 컨텍스트가 `backend/`라 레포 루트의 `data/`를 담지 못함), `docker-compose.prod.yml`이 호스트 레포의 `data/`를 컨테이너 `/data`로 읽기전용 마운트해 제공한다. 따라서 **레포를 clone한 디렉터리에서(즉 `data/`가 존재하는 상태로) 컴포즈를 실행**해야 시딩이 동작한다. 마이그레이션(`migration:run`)을 먼저 실행해 테이블이 존재해야 한다.
+> CSV는 이미지에 포함되지 않고(빌드 컨텍스트가 `backend/`라 레포 루트의 `data/`를 담지 못함), `seed` 서비스가 호스트 레포의 `data/`를 컨테이너 `/data`로 읽기전용 마운트해 제공한다. 따라서 **레포를 clone한 디렉터리에서(즉 `data/`가 존재하는 상태로) 컴포즈를 실행**해야 시딩이 동작한다. 마이그레이션(`migration:run`)을 먼저 실행해 테이블이 존재해야 한다. `seed`는 `profiles`로 묶여 있어 일반 `up`으로는 뜨지 않으므로, 상시 `backend` 컨테이너에는 `data/` 마운트가 붙지 않는다.
 
 ## 알려진 제약 / 참고
 
