@@ -108,6 +108,18 @@ export class DistrictsService implements OnModuleInit {
       return;
     }
 
+    // 음수 share는 유효하지 않은 데이터이므로 '없음'(null)으로 정규화한다. 이대로 두면
+    // scoreWeight가 음수로 저장·캐시되고, 점령 응답(pointsAwarded 등)에 실제 기록되지
+    // 않은 음수 점수가 노출되어 클라이언트에 오해를 준다. 조용히 넘기지 않고 경고를 남긴다.
+    for (const r of rows) {
+      if (r.foreignVisitorShare !== null && r.foreignVisitorShare < 0) {
+        this.logger.warn(
+          `sigungu ${r.sigunguCode}: 음수 foreign_visitor_share(${r.foreignVisitorShare}) → 무효 처리(가중치 1.0)`,
+        );
+        r.foreignVisitorShare = null;
+      }
+    }
+
     // 가중치 = share / (share 보유 구 평균). share 없는 구는 1.0.
     const shares = rows
       .map((r) => r.foreignVisitorShare)

@@ -13,7 +13,9 @@ import { ScoresService } from './scores.service';
  *   생성하므로 여기서는 엔티티 등록만 유지한다(비파괴적 병합).
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([ScoreEvent, ClaimScoreEvent, PointEvent])],
+  imports: [
+    TypeOrmModule.forFeature([ScoreEvent, ClaimScoreEvent, PointEvent]),
+  ],
   providers: [ScoresService],
   exports: [ScoresService, TypeOrmModule],
 })
