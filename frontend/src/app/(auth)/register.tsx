@@ -178,7 +178,9 @@ export default function RegisterScreen() {
 
   const handleSendVerificationLink = async () => {
     try {
-      await sendLink(email.trim());
+      // 연타로 무시된 호출(false)에서는 보내지도 않고 "보냈습니다"를 띄우면 안 된다.
+      const sent = await sendLink(email.trim());
+      if (!sent) return;
       Alert.alert(
         t('auth.emailVerification.sentTitle'),
         t('auth.emailVerification.sentMessage'),

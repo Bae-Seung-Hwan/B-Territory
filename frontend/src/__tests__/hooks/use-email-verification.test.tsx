@@ -56,18 +56,89 @@ describe('useSendVerificationLink', () => {
     expect(result.current.cooldown).toBe(0);
   });
 
-  it('발송에 실패하면 쿨다운을 걸지 않아 바로 재시도할 수 있다', async () => {
-    (emailApi.sendVerificationLink as jest.Mock).mockRejectedValue(new Error('boom'));
+  // 백엔드는 메일을 보내기 전에 60초 락을 먼저 잡는다. 그래서 5xx·429여도 그동안
+  // 재요청은 무조건 429다 — 클라이언트도 같이 잠가야 헛된 요청이 쌓이지 않는다.
+  it.each([
+    ['메일 발송 실패(5xx)', 500],
+    ['쿨다운 미경과(429)', 429],
+  ])('%s여도 쿨다운을 건다', async (_label, status) => {
+    (emailApi.sendVerificationLink as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('fail'), { isAxiosError: true, response: { status } }),
+    );
 
     const { result } = await renderHook(() => useSendVerificationLink(), {
       wrapper: createWrapper(queryClient),
     });
 
     await act(async () => {
-      await expect(result.current.sendLink('a@b.com')).rejects.toThrow('boom');
+      await expect(result.current.sendLink('a@b.com')).rejects.toThrow('fail');
+    });
+
+    expect(result.current.cooldown).toBe(60);
+  });
+
+  // 400은 락을 잡기 전에 거부되고, 네트워크 오류는 서버 도달 여부를 알 수 없다.
+  it.each([
+    ['이메일 형식 오류(400)', { isAxiosError: true, response: { status: 400 } }],
+    ['네트워크 오류', { isAxiosError: true, response: undefined }],
+  ])('%s면 쿨다운을 걸지 않아 바로 다시 시도할 수 있다', async (_label, shape) => {
+    (emailApi.sendVerificationLink as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('fail'), shape),
+    );
+
+    const { result } = await renderHook(() => useSendVerificationLink(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await expect(result.current.sendLink('a@b.com')).rejects.toThrow('fail');
     });
 
     expect(result.current.cooldown).toBe(0);
+  });
+
+});
+
+// 쿨다운 카운트다운과 달리 여기서는 프로미스 정착 순서를 봐야 해서 실제 타이머를 쓴다.
+describe('useSendVerificationLink 연타', () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  });
+
+  afterEach(() => {
+    queryClient.clear();
+    jest.clearAllMocks();
+  });
+
+  it('진행 중인 요청이 있으면 겹친 호출은 큐에 쌓지 않고 버린다', async () => {
+    let resolveSend: () => void = () => {};
+    (emailApi.sendVerificationLink as jest.Mock).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
+
+    const { result } = await renderHook(() => useSendVerificationLink(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    // 버튼 disabled가 리렌더로 반영되기 전에 두 번째 press가 들어온 상황
+    const first = result.current.sendLink('a@b.com');
+    const second = result.current.sendLink('a@b.com');
+
+    await expect(second).resolves.toBe(false);
+
+    await act(async () => {
+      resolveSend();
+      await first;
+    });
+
+    await expect(first).resolves.toBe(true);
+    // 겹친 호출이 나중에 따로 나가지도 않는다
+    expect((emailApi.sendVerificationLink as jest.Mock).mock.calls).toHaveLength(1);
   });
 });
 
