@@ -35,7 +35,11 @@ export class ClaimsController {
   @ApiOperation({ summary: 'GPS 방문 인증 및 점령 시도' })
   @ApiResponse({ status: 201, description: '점령 성공' })
   @ApiResponse({ status: 400, description: '50m 초과 — 방문 인증 실패' })
-  @ApiResponse({ status: 409, description: '방어 시간 중' })
+  @ApiResponse({
+    status: 409,
+    description:
+      '방어 시간 중 또는 일일 점령 제한 (관광지별 인당 하루 1회, KST 자정 초기화)',
+  })
   async visit(
     @Body() dto: VisitDto,
     @Request() req: { user: { uid: string } },
