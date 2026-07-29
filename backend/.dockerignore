@@ -4,3 +4,6 @@ coverage
 .env
 .env.local
 *.log
+# TypeScript incremental 빌드 캐시 — 호스트의 stale 캐시가 COPY로 딸려 들어오면
+# 클린 이미지에서 tsc가 emit을 건너뛰어 dist/main.js 등이 누락된다(런타임 crash).
+*.tsbuildinfo
