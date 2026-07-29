@@ -64,6 +64,12 @@ services:
   backend:
     <<: *backend-base
     container_name: b-territory-prod-backend
+    volumes:
+      # DistrictsService가 부팅 시 data/busan_districts.csv를 읽어 구 가중치를 시딩하고,
+      # CSV를 못 읽으면 fail-fast로 부팅을 중단한다. CSV는 이미지에 없으므로(빌드 컨텍스트
+      # 밖) 호스트 레포의 data/를 읽기전용으로 제공한다. 시딩 완료 후에는 캐시를 DB에서
+      # 로드하지만, 매 부팅 재시딩하므로 상시 필요하다.
+      - ./data:/data:ro
     depends_on:
       postgres:
         condition: service_healthy
