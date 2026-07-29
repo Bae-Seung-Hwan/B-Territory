@@ -7,19 +7,6 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
  */
 export function configureApp<T extends INestApplication>(app: T): T {
   app.setGlobalPrefix('api');
-
-  // 이메일 인증 매직 링크(FRONTEND_URL/verify?token=...)는 브라우저에서 열리므로,
-  // 그 화면이 /api/email/verify-token을 호출하려면 CORS 허용이 필요하다.
-  // (네이티브 앱은 CORS 대상이 아니라 지금까지 없어도 문제가 없었다.)
-  // 인증은 Authorization 헤더(Bearer)로만 하므로 credentials는 켜지 않는다.
-  const corsOrigins = (process.env.CORS_ORIGINS ?? process.env.FRONTEND_URL ?? '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-  if (corsOrigins.length > 0) {
-    app.enableCors({ origin: corsOrigins });
-  }
-
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
