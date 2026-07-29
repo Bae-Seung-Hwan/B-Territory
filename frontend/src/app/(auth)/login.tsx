@@ -54,7 +54,9 @@ export default function LoginScreen() {
 
     // 프로필은 queryKeys.auth.me 캐시에 이미 담겼다. useAuth()가 그 캐시에서
     // 인증 상태를 파생시키므로 여기서 따로 스토어에 복사하지 않는다.
-    router.replace('/(main)/map');
+    // (main)은 가드되어 있어 인증 상태가 리렌더에 반영되기 전까진 열리지 않으므로,
+    // 항상 열려있는 "/"로 보내 index가 판단하게 한다.
+    router.replace('/');
   };
 
   const handleAuthError = useHandleAuthError();

@@ -183,7 +183,9 @@ export default function RegisterScreen() {
           nickname: nickname.trim(),
           nationality: selectedCode,
         });
-        router.replace('/(main)/map');
+        // (main)은 가드되어 있어 인증 상태가 리렌더에 반영되기 전까진 열리지 않으므로,
+        // 항상 열려있는 "/"로 보내 index가 판단하게 한다.
+        router.replace('/');
       } catch (backendErr) {
         // 백엔드가 4xx로 명확히 거부한 경우(409 제외)에만 서버에 아무 부작용도
         // 없었다고 확신할 수 있어 Firebase 계정을 롤백한다. 네트워크/타임아웃/5xx는

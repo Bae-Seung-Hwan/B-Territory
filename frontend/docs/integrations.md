@@ -69,6 +69,14 @@
 
 이전에는 `login.tsx`/`register.tsx`/`AuthProvider`가 각자 `getMe`를 호출해 `useUserStore`에 복사했고, 완료 순서에 따라 서로의 결과를 덮어쓰는 문제가 있었다. 쓰는 곳을 하나로 모아 그 클래스의 버그를 구조적으로 없앴다(`useUserStore`는 이 과정에서 읽는 곳이 없어져 삭제됨).
 
+### 라우트 가드
+
+`app/_layout.tsx`의 `RootNavigator`가 `(main)` 그룹을 `Stack.Protected guard={isAuthenticated}`로 감싼다. `app/index.tsx`의 리다이렉트는 `"/"`로 들어온 경우에만 동작하므로, 딥링크·웹 URL 직접 입력·푸시 알림처럼 `"/"`를 거치지 않는 진입은 검사를 건너뛰었다.
+
+- `(auth)`는 일부러 가드하지 않는다. 로그인된 사용자가 로그인 화면을 여는 걸 막을 실익이 없고, 가드하면 로그아웃 시 `(auth)`가 열리기 전에 `router.replace`가 나가 이동이 무시된다.
+- 반대 방향도 같은 이유로, 로그인·회원가입 성공 후 `(main)`으로 직접 가지 않고 항상 열려있는 `"/"`로 `replace`한다. 인증 상태가 리렌더에 반영되기 전에 가드된 라우트로 이동하면 무시될 수 있어서, 분기 판단을 `index.tsx` 한 곳에 맡긴다.
+- ⚠️ 웹 정적 렌더링(`expo export --platform web`)은 파일시스템 라우트 전부에 대해 HTML 셸을 생성한다. 가드는 클라이언트 런타임에서 동작하므로 `/map` 같은 URL의 빈 셸 자체는 존재하며, 실제 데이터는 백엔드 `FirebaseAuthGuard`가 막는다.
+
 ### 백엔드와의 관계
 
 - 백엔드는 `FirebaseAuthGuard`로 이 ID Token을 검증하고, 통과 시 `req.user = { uid, email }`을 주입 ([backend/docs/API.md](../../backend/docs/API.md) 참고)

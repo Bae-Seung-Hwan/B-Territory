@@ -24,9 +24,11 @@
 ```
 src/
 ├── app/
-│   ├── _layout.tsx              # Root: QueryClient + AuthProvider + SocketProvider + 전역 오버레이
+│   ├── _layout.tsx              # Root: QueryClient + AuthProvider + SocketProvider + 전역 오버레이.
+│   │                             # RootNavigator가 인증 로딩·조회실패를 먼저 처리하고,
+│   │                             # (main)을 Stack.Protected로 감싸 미인증 진입을 라우터에서 차단
 │   ├── index.tsx                # useAuth()에 따라 (auth)/(main) 리다이렉트.
-│   │                             # 프로필 조회 실패(네트워크/5xx)는 미가입과 구분해 재시도 화면을 띄운다
+│   │                             # 로그인·가입 성공 후에도 이 경로로 replace해 분기를 한 곳에 모은다
 │   ├── (auth)/
 │   │   ├── _layout.tsx
 │   │   ├── onboarding.tsx       # 시작 화면
