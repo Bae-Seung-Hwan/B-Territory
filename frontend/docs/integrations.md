@@ -52,12 +52,22 @@
 
 1. **로그인**: Firebase Authentication SDK(이메일/비밀번호, 소셜 로그인 등)로 로그인 → Firebase가 **ID Token** 발급
 2. **가입 여부 확인**: 로그인 화면에서 로그인 성공 직후, 발급받은 ID Token으로 `GET /api/auth/me` 호출 (`login.tsx:46-60`의 `finishLogin`에서만 호출됨)
-   - `200` → 이미 가입된 사용자. 응답 프로필(`id`/`email`/`nickname`/`nationality`/`team`)을 `useUserStore`에 채우고 바로 메인 화면 진입
-   - `404` → Firebase 계정은 있지만 백엔드 프로필이 없음. 예전엔 회원가입 화면으로 자동 이동시켰으나, 아래 "⚠️ Firebase ↔ 백엔드 계정 불일치" 문제 때문에 지금은 이메일/비밀번호를 다시 확인해달라는 alert만 띄우고 로그인 화면에 그대로 머무름
+   - `200` → 이미 가입된 사용자. 응답 프로필(`id`/`email`/`nickname`/`nationality`/`team`)이 `queryKeys.auth.me` 캐시에 담기고 바로 메인 화면 진입
+   - `404` → Firebase 계정은 있지만 백엔드 프로필이 없음. 예전엔 회원가입 화면으로 자동 이동시켰으나, 아래 "⚠️ Firebase ↔ 백엔드 계정 불일치" 문제 때문에 지금은 이메일/비밀번호를 다시 확인해달라는 alert만 띄우고 로그인 화면에 머무름. 이때 `signOut(auth)`으로 세션도 함께 정리해, 프로필 없는 토큰이 이후 요청에 계속 붙거나 다음 부팅 때 어정쩡한 상태로 남지 않게 한다
    - 신규 가입은 이 흐름과 별개로 진행됨: 로그인 화면의 "회원가입 하기" 링크 → 약관 동의 바텀시트 → `register.tsx`에서 `createUserWithEmailAndPassword` 후 `POST /api/auth/register` 호출 (최초 1회만; 재호출 시 `409`)
-3. **보관**: ID Token과 위에서 받은 프로필 값들을 클라이언트에 보관 (예: `useUserStore`)
+3. **보관**: ID Token은 Firebase SDK가 AsyncStorage에 보관하고, 프로필은 React Query 캐시(`queryKeys.auth.me`) **한 곳에만** 둔다. 별도 스토어로 복사하지 않는 이유는 아래 "인증 상태의 단일 소스" 참고
 4. **요청 시 첨부**: 인증이 필요한 API 호출 시 `Authorization: Bearer <idToken>` 헤더로 전송
 5. **갱신**: ID Token은 약 1시간 후 만료되므로, Firebase SDK의 갱신 함수로 주기적으로 재발급 필요
+
+### 인증 상태의 단일 소스
+
+"로그인되어 있는가"는 **Firebase 세션 + `queryKeys.auth.me` 캐시**에서만 파생시킨다. 화면이나 전역 스토어에 `isAuthenticated` 같은 사본을 두지 않는다.
+
+- `providers/AuthProvider.tsx` — Firebase 세션만 담당한다(`onAuthStateChanged`). 세션이 끊기거나 계정이 바뀌면 이전 사용자의 프로필 캐시를 제거한다(로그아웃 버튼을 거치지 않는 세션 만료·토큰 무효화 경로까지 한 곳에서 덮기 위함).
+- `hooks/use-auth.ts`의 `useAuth()` — 세션과 프로필 쿼리를 합쳐 `isAuthenticated`/`isLoading`/`isUnavailable`을 계산한다. `getMe`가 `404`만 `null`로 흡수하고 네트워크·5xx는 그대로 던지므로, **미가입(`null`)과 일시적 조회 실패(에러)를 구분**할 수 있다. 후자를 미가입으로 오판하면 정상 가입자가 오프라인 부팅만으로 온보딩으로 되돌아가므로 `app/index.tsx`는 이 경우 재시도 화면을 띄운다.
+- 회원가입은 `useRegisterMutation`이 `cancelQueries` → `setQueryData` 순서로 캐시를 채운다. 계정 생성 직후 `AuthProvider`가 감지해 시작한 `getMe`(이 시점엔 프로필이 없어 `404` → `null`)가 등록 성공보다 늦게 끝나면서 방금 받은 프로필을 덮어쓰던 레이스를 막기 위한 것이다.
+
+이전에는 `login.tsx`/`register.tsx`/`AuthProvider`가 각자 `getMe`를 호출해 `useUserStore`에 복사했고, 완료 순서에 따라 서로의 결과를 덮어쓰는 문제가 있었다. 쓰는 곳을 하나로 모아 그 클래스의 버그를 구조적으로 없앴다(`useUserStore`는 이 과정에서 읽는 곳이 없어져 삭제됨).
 
 ### 백엔드와의 관계
 
@@ -73,9 +83,8 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
 
 **A. Firebase 계정은 있는데 백엔드 프로필이 없음 (가입 중단)**
 - 원인: `register.tsx`는 `createUserWithEmailAndPassword`로 Firebase 계정을 만든 뒤 `POST /api/auth/register`를 호출하는데, 백엔드 호출이 동기적으로 실패하면 방금 만든 Firebase 계정을 롤백(`user.delete()`)하지만(`register.tsx:97-101`), 그 사이 앱이 강제 종료되거나 네트워크가 끊기는 등 **중단**이 발생하면 이 롤백이 실행되지 않아 "유령 Firebase 계정"이 남는다.
-- 현재 동작: 다음 로그인 시 `getMe()`가 `404` → 위에서 설명한 "이메일/비밀번호를 확인해달라"는 alert만 뜨고 로그인 화면에 머무름 (`login.tsx:46-60`).
-- 문제: 사용자가 가입을 재개할 방법이 없다. `register.tsx`로 다시 가서 같은 이메일/비밀번호를 입력해도 `createUserWithEmailAndPassword`가 `auth/email-already-in-use`로 실패한다.
-- 개선 방향(TODO): 로그인 직후엔 이미 유효한 Firebase 세션(`auth.currentUser`)이 있고 `apiClient`가 매 요청마다 이를 자동으로 첨부하므로(`src/lib/api-client.ts:14-17`), `register.tsx`에 "이어서 가입" 모드를 추가해 계정 재생성 없이 닉네임/국적만 입력받아 바로 `POST /api/auth/register`를 호출하도록 개선.
+- 현재 동작: 다음 로그인 시 `getMe()`가 `404` → 위에서 설명한 "이메일/비밀번호를 확인해달라"는 alert가 뜨고 세션도 정리된 채 로그인 화면에 머무름 (`login.tsx`의 `finishLogin`).
+- 복구 경로(해결됨): `register.tsx`에서 같은 이메일/비밀번호로 다시 가입을 시도하면 `createUserWithEmailAndPassword`가 `auth/email-already-in-use`로 실패하는데, 이때 같은 자격증명으로 `signInWithEmailAndPassword`를 시도한다. 성공하면 본인 계정이므로 계정을 새로 만들지 않고 `POST /api/auth/register`만 이어서 호출한다(비밀번호가 틀리면 남의 계정이라 여기서 실패하고 그대로 안내된다). 남아있는 세션에 기대지 않으므로 앱을 재시작한 뒤에도 복구된다. 이 경우는 이번 시도로 만든 계정이 아니므로 실패 시 롤백(`user.delete()`) 대상에서도 제외된다.
 
 **B. 백엔드 프로필은 있는데 Firebase 계정이 없음 (Firebase 콘솔 등에서 수동 삭제된 경우)**
 - 로그인 시도: `signInWithEmailAndPassword`가 즉시 실패(`auth/user-not-found` 또는 `auth/invalid-credential`) → A와 똑같은 "이메일/비밀번호를 확인해주세요" 메시지가 떠서 진짜 원인(계정 삭제)을 구분할 방법이 없음.
@@ -88,9 +97,9 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
 - [x] frontend에 Firebase SDK 설치 — `firebase`(JS SDK) + `@react-native-async-storage/async-storage`. Expo Go 유지 중이라 네이티브 모듈이 필요 없는 JS SDK를 선택했고, Dev Build 전환 후에도 그대로 사용 가능 ([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고)
 - [x] Firebase 프로젝트 설정값(`apiKey`/`authDomain`/`projectId`/`appId`) — `EXPO_PUBLIC_FIREBASE_*`로 `.env`/`.env.example`에 있음
 - [x] `src/lib/firebase.ts` — `initializeAuth(app, { persistence: getReactNativePersistence(AsyncStorage) })`로 세션 유지 설정 완료
-- [x] `login.tsx`/`register.tsx` — `signInWithEmailAndPassword`/`createUserWithEmailAndPassword` → ID Token → `src/api/auth.ts`의 `getMe`/`registerUser`(axios 기반, `src/lib/api-client.ts`) 호출 → `useUserStore` 저장 → 라우팅까지 연결됨
+- [x] `login.tsx`/`register.tsx` — `signInWithEmailAndPassword`/`createUserWithEmailAndPassword` → ID Token → `src/api/auth.ts`의 `getMe`/`registerUser`(axios 기반, `src/lib/api-client.ts`) 호출 → `queryKeys.auth.me` 캐시 → 라우팅까지 연결됨
 - [x] 토큰 만료 시 자동 갱신 — `src/lib/api-client.ts`의 axios 인터셉터가 요청마다 `getIdToken()`을, 401 응답 시 `getIdToken(true)`(강제 갱신) 후 원요청 1회 재시도
-- [x] React Query 레이어 — `src/lib/query-keys.ts`(queryKey factory), `src/api/auth.ts`(순수 함수), `src/hooks/use-auth.ts`(`useRegisterMutation`). 프로필 조회는 컴포넌트 라이프사이클에 안 묶인 1회성 호출이라 `queryClient.fetchQuery`로 처리 (로그인 성공 직후 `['auth','me']` 캐시를 채워 이후 화면이 재조회 없이 재사용 가능)
+- [x] React Query 레이어 — `src/lib/query-keys.ts`(queryKey factory), `src/api/auth.ts`(순수 함수), `src/hooks/use-auth.ts`(`useAuth` · `useRegisterMutation`). `['auth','me']` 캐시가 프로필의 유일한 보관처이고, 로그인 화면만 예외적으로 `queryClient.fetchQuery`로 즉시 결과가 필요한 1회성 조회를 한다(같은 키라 진행 중인 조회가 있으면 합쳐진다)
 - [x] 구글 로그인 훅 구현 — `src/hooks/use-google-login.ts`(`expo-auth-session` generic `useAuthRequest` + `GoogleAuthProvider.credential`). **단, 아래 ⚠️ 제약으로 현재 `login.tsx`에서 호출을 막아둔 상태**
 - [ ] Dev Build 전환 후 구글 로그인 재활성화 — `login.tsx`의 "준비 중" 스텁(`handleGoogleLogin`)을 `useGoogleLogin` 실제 호출로 되돌리기 (아래 ⚠️ Google 로그인 항목 참고)
 - [ ] "Firebase 계정은 있는데 백엔드 프로필 없음" 복구 — `register.tsx`에 "이어서 가입" 모드 추가 (위 ⚠️ A 항목)

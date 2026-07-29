@@ -54,6 +54,10 @@ export const en: Translations = {
       nationalityPlaceholder: 'Select a country',
       submit: 'Sign Up',
     },
+    session: {
+      loadFailed: 'Could not load your account.\nPlease check your network connection.',
+      retry: 'Retry',
+    },
     errors: {
       title: 'Error',
       invalidCredential: 'Incorrect email or password',

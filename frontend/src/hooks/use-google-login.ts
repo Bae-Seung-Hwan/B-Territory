@@ -29,7 +29,7 @@ interface UseGoogleLoginOptions {
  * (docs/decisions/0001-expo-go-vs-dev-build.md, docs/integrations.md 참고).
  */
 export function useGoogleLogin({ onSuccess, onError }: UseGoogleLoginOptions) {
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'b-territory' });
+  const redirectUri = useMemo(() => AuthSession.makeRedirectUri({ scheme: 'b-territory' }), []);
   // nonce는 요청마다 한 번만 생성해야 한다. 매 렌더링마다 새로 만들면
   // extraParams가 매번 다른 객체가 되어 useAuthRequest의 useEffect가 계속
   // 재실행 -> setRequest -> 리렌더 -> nonce 재생성으로 이어지는 무한 루프에

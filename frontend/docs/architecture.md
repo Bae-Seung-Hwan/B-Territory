@@ -24,8 +24,9 @@
 ```
 src/
 ├── app/
-│   ├── _layout.tsx              # Root: QueryClient + SocketProvider + 전역 오버레이
-│   ├── index.tsx                # 인증 상태(useUserStore.isAuthenticated)에 따라 (auth)/(main) 리다이렉트
+│   ├── _layout.tsx              # Root: QueryClient + AuthProvider + SocketProvider + 전역 오버레이
+│   ├── index.tsx                # useAuth()에 따라 (auth)/(main) 리다이렉트.
+│   │                             # 프로필 조회 실패(네트워크/5xx)는 미가입과 구분해 재시도 화면을 띄운다
 │   ├── (auth)/
 │   │   ├── _layout.tsx
 │   │   ├── onboarding.tsx       # 시작 화면
@@ -61,9 +62,14 @@ src/
 ├── store/
 │   ├── useGameStore.ts          # 점령 구역 · 팀 점수 · 수도. topTeam은 상태로 저장하지 않고
 │   │                             # getTopTeam(teamScores) 셀렉터로 매번 계산 (파생 상태 동기화 문제 방지)
-│   ├── useUserStore.ts          # 인증 · 국적 · 닉네임 · userId
 │   └── useOverlayStore.ts       # 오버레이 표시 상태
+│                                 # (인증·프로필은 스토어에 두지 않는다 — hooks/use-auth.ts 참고)
+├── hooks/
+│   └── use-auth.ts              # useAuth(): 인증 상태의 단일 소스. Firebase 세션과
+│                                 # queryKeys.auth.me 캐시에서 파생시킨다 (스토어 복사본 없음)
 ├── providers/
+│   ├── AuthProvider.tsx         # Firebase 세션만 담당(onAuthStateChanged). 세션이 끊기거나
+│   │                             # 계정이 바뀌면 이전 사용자 프로필 캐시를 제거
 │   └── SocketProvider.tsx       # Socket.io Context — ⚠️ 연결 시작(connect())·이벤트 배선 미구현,
 │                                 #    상세는 integrations.md 참고
 ├── hooks/

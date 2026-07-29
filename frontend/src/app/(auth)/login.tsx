@@ -11,12 +11,11 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { BottomSheetModal } from '@gorhom/bottom-sheet';
 import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
-import { useUserStore } from '@/store/useUserStore';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
 import { Button } from '@/components/ui/Button';
@@ -28,7 +27,6 @@ import { BrandColors } from '@/constants/theme';
 export default function LoginScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { setAuthenticated, setUserId, setNickname, setNationality } = useUserStore();
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -47,15 +45,15 @@ export default function LoginScreen() {
     if (profile === null) {
       // Firebase 계정은 있지만 백엔드 프로필이 없음 (가입 미완료). 가입 화면으로
       // 바로 넘기면 "왜 다시 가입하라는지" 혼란을 주므로, 이메일/비밀번호를
-      // 다시 확인하도록 안내한다.
+      // 다시 확인하도록 안내한다. 세션을 남겨두면 이후 모든 요청에 토큰이 붙고
+      // 다음 부팅 때 "세션은 유효한데 프로필은 없는" 상태를 다시 만나므로 정리한다.
+      await signOut(auth);
       Alert.alert(t('auth.errors.title'), t('auth.errors.invalidCredential'));
       return;
     }
 
-    setUserId(profile.id);
-    setNickname(profile.nickname);
-    setNationality(profile.nationality);
-    setAuthenticated(true);
+    // 프로필은 queryKeys.auth.me 캐시에 이미 담겼다. useAuth()가 그 캐시에서
+    // 인증 상태를 파생시키므로 여기서 따로 스토어에 복사하지 않는다.
     router.replace('/(main)/map');
   };
 

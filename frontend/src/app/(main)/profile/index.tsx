@@ -2,12 +2,9 @@ import { useMemo } from 'react';
 import { Text, View, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
-import { getMe } from '@/api/auth';
-import { queryKeys } from '@/lib/query-keys';
-import { useUserStore } from '@/store/useUserStore';
+import { useAuth } from '@/hooks/use-auth';
 import { useTranslation } from '@/i18n';
 import { BrandColors, Spacing } from '@/constants/theme';
 import { getCountryList } from '@/constants/countries';
@@ -17,16 +14,11 @@ import { Badge } from '@/components/ui/Badge';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const queryClient = useQueryClient();
-  const { logout } = useUserStore();
   const { t, locale } = useTranslation();
 
-  // 로그인 시 채워진 캐시(queryKeys.auth.me)를 그대로 재사용 — 재요청 없이 즉시 표시되고,
-  // store에는 없는 email/team까지 이 응답에 포함돼 있다.
-  const { data: profile, isLoading } = useQuery({
-    queryKey: queryKeys.auth.me,
-    queryFn: getMe,
-  });
+  // 인증 상태와 같은 소스(queryKeys.auth.me)를 그대로 읽는다 — 로그인 때 채워진
+  // 캐시라 재요청 없이 즉시 표시된다.
+  const { profile, isLoading } = useAuth();
 
   const countries = useMemo(() => getCountryList(locale), [locale]);
   const nationalityCountry = countries.find((c) => c.code === profile?.nationality) ?? null;
@@ -38,9 +30,9 @@ export default function ProfileScreen() {
         text: t('profile.logout'),
         style: 'destructive',
         onPress: async () => {
+          // 캐시 정리는 AuthProvider가 세션 변경을 보고 처리한다. 세션 만료처럼
+          // 이 화면을 거치지 않는 경로까지 한 곳에서 덮기 위함.
           await signOut(auth);
-          queryClient.removeQueries({ queryKey: queryKeys.auth.me });
-          logout();
           router.replace('/(auth)/login');
         },
       },

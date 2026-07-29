@@ -52,6 +52,10 @@ export const ko = {
       nationalityPlaceholder: '국가를 선택하세요',
       submit: '가입하기',
     },
+    session: {
+      loadFailed: '로그인 정보를 불러오지 못했습니다.\n네트워크 상태를 확인해주세요.',
+      retry: '다시 시도',
+    },
     errors: {
       title: '오류',
       invalidCredential: '이메일 또는 비밀번호가 올바르지 않습니다',
