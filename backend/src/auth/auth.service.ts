@@ -3,12 +3,10 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
 import { UsersService } from '../users/users.service';
-import { EmailService } from '../email/email.service';
 import { RegisterDto } from './dto/register.dto';
 import { User } from '../users/entities/user.entity';
 
@@ -16,14 +14,14 @@ const PG_UNIQUE_VIOLATION = '23505';
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
+  constructor(private readonly usersService: UsersService) {}
 
-  constructor(
-    private readonly usersService: UsersService,
-    private readonly emailService: EmailService,
-  ) {}
-
-  async register(dto: RegisterDto, firebaseUid: string, email?: string) {
+  async register(
+    dto: RegisterDto,
+    firebaseUid: string,
+    email?: string,
+    emailVerified?: boolean,
+  ) {
     // Firebase 토큰의 email은 optional이다(전화번호/익명/이메일 비공개 로그인).
     // users.email이 NOT NULL이라 그대로 진행하면 500이 나므로 명시적으로 거른다.
     if (!email) {
@@ -35,12 +33,10 @@ export class AuthService {
     const existing = await this.usersService.findByFirebaseUid(firebaseUid);
     if (existing) throw new ConflictException('이미 가입된 사용자입니다.');
 
-    // /api/email/send-link + verify-token으로 이 이메일을 방금 검증했는지 확인한다.
-    // 소비(삭제)하지 않고 존재만 확인 — 동시 register 경합(더블탭)의 승패는 여전히
-    // 아래 unique 제약이 가리므로, 여기서 먼저 지워버리면 레이스 패자가 기존의
-    // "이미 가입된 사용자" 대신 엉뚱하게 "인증 필요"를 받게 된다.
-    const verified = await this.emailService.wasVerified(email);
-    if (!verified) {
+    // Firebase가 검증한 ID Token의 email_verified 클레임으로 이메일 소유를 확인한다.
+    // 클라이언트는 가입 전 sendEmailVerification → 링크 클릭 → 토큰 강제 갱신을 거쳐야
+    // 이 값이 true가 된다. Firebase가 표준으로 제공하므로 별도 발송 인프라가 필요 없다.
+    if (!emailVerified) {
       throw new ForbiddenException(
         '이메일 인증이 필요합니다. 인증 메일의 링크를 먼저 확인해주세요.',
       );
@@ -54,10 +50,6 @@ export class AuthService {
         nickname: dto.nickname,
         nationality,
         team: nationality,
-      });
-      // 가입이 실제로 확정된 뒤에만 마커를 지운다 (실패해도 TTL로 자연 소멸하니 치명적이지 않음)
-      await this.emailService.clearVerification(email).catch((err) => {
-        this.logger.error(`이메일 인증 마커 정리 실패 email=${email}`, err);
       });
       return this.toProfile(user);
     } catch (err) {
