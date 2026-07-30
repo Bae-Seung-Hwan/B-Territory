@@ -124,6 +124,7 @@ export const en: Translations = {
       capitalDistrict: "This Week's Capital",
     },
     outOfBounds: 'Current location is not in Busan',
+    spotsLoadError: 'Failed to load tourist spots · Tap to retry',
   },
   overlay: {
     enemyAlert: {

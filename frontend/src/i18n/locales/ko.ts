@@ -120,6 +120,7 @@ export const ko = {
       capitalDistrict: '이번 주 수도',
     },
     outOfBounds: '현재 위치가 부산이 아닙니다',
+    spotsLoadError: '관광지 정보를 불러오지 못했습니다 · 탭하여 재시도',
   },
   overlay: {
     enemyAlert: {
