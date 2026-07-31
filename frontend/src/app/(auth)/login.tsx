@@ -74,6 +74,9 @@ export default function LoginScreen() {
     }
   };
 
+  // 실제 연동은 hooks/use-google-login.ts(useGoogleLogin)에 준비돼 있다. Expo Go
+  // 실기기에서 OAuth 화면을 닫을 때 앱이 꺼지는 문제 때문에 Dev Build 전환 전까지는
+  // 의도적으로 배선하지 않고 "준비 중" 스텁만 노출한다.
   const handleGoogleLogin = () => {
     Alert.alert(t('auth.login.googleComingSoonTitle'), t('auth.login.googleComingSoonMessage'));
   };

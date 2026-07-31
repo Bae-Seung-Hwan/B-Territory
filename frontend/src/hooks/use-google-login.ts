@@ -18,6 +18,9 @@ interface UseGoogleLoginOptions {
 /**
  * Google 로그인 (Firebase Auth 자격증명 교환).
  *
+ * 현재 어디서도 호출하지 않는다 — login.tsx의 handleGoogleLogin은 "준비 중" 스텁만
+ * 띄운다. Dev Build 전환 시 이 훅을 그 자리에 배선할 예정이라 미리 준비해둔 것.
+ *
  * expo-auth-session/providers/google 대신 generic useAuthRequest를 직접 쓴다 —
  * deprecated된 헬퍼는 플랫폼별 네이티브 클라이언트 ID를 요구하는데, 우리는
  * Web 클라이언트 ID 하나로 충분한 implicit id_token 플로우만 쓰기 때문.

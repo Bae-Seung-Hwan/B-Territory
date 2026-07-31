@@ -21,7 +21,10 @@ export default function ProfileScreen() {
   const { profile, isLoading } = useAuth();
 
   const countries = useMemo(() => getCountryList(locale), [locale]);
-  const nationalityCountry = countries.find((c) => c.code === profile?.nationality) ?? null;
+  const nationalityCountry = useMemo(
+    () => countries.find((c) => c.code === profile?.nationality) ?? null,
+    [countries, profile?.nationality],
+  );
 
   const handleLogout = () => {
     Alert.alert(t('profile.logoutConfirmTitle'), t('profile.logoutConfirmMessage'), [
