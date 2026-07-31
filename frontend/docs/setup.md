@@ -43,3 +43,23 @@ npx expo start
 ```bash
 npx tsc --noEmit
 ```
+
+## 트러블슈팅
+
+**`AsyncStorageError: Native module is null, cannot access legacy storage`**
+
+`npm install`은 `package.json`의 semver 범위(`^`)를 그대로 따르므로, Expo SDK가 기대하는
+버전과 다른(특히 major가 올라간) 네이티브 모듈이 설치될 수 있다. 아래로 실제 설치된
+버전과 SDK 56이 기대하는 버전을 비교해 확인한다.
+
+```bash
+npx expo install --check
+```
+
+불일치하는 패키지가 나오면(예: `@react-native-async-storage/async-storage`가 기대
+버전인 `2.2.0`이 아니라 `3.x`로 설치된 경우) 아래로 맞추고 캐시를 지운 뒤 재시작한다.
+
+```bash
+npx expo install @react-native-async-storage/async-storage@2.2.0
+npx expo start -c
+```
