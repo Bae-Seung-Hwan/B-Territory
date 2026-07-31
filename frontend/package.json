@@ -5,9 +5,14 @@
   "dependencies": {
     "@expo/ui": "~56.0.18",
     "@expo/vector-icons": "^15.0.2",
+    "@gorhom/bottom-sheet": "^5.2.14",
+    "@react-native-async-storage/async-storage": "^3.1.1",
     "@tanstack/react-query": "^5.101.2",
+    "axios": "^1.18.1",
     "expo": "~56.0.12",
+    "expo-auth-session": "~56.0.15",
     "expo-constants": "~56.0.18",
+    "expo-crypto": "~56.0.4",
     "expo-device": "~56.0.4",
     "expo-font": "~56.0.7",
     "expo-glass-effect": "~56.0.4",
@@ -21,6 +26,8 @@
     "expo-symbols": "~56.0.6",
     "expo-system-ui": "~56.0.5",
     "expo-web-browser": "~56.0.5",
+    "firebase": "^12.16.0",
+    "i18n-iso-countries": "^7.14.0",
     "i18n-js": "^4.5.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -64,5 +71,10 @@
       "\\.css$": "<rootDir>/__mocks__/fileMock.js",
       "^@/(.*)$": "<rootDir>/src/$1"
     }
+  },
+  "allowScripts": {
+    "@firebase/util@1.15.1": true,
+    "protobufjs@7.6.5": true,
+    "unrs-resolver@1.12.2": true
   }
 }

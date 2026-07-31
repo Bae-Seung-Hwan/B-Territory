@@ -10,13 +10,11 @@ import { UsersModule } from './users/users.module';
 import { SpotsModule } from './spots/spots.module';
 import { FirebaseModule } from './common/firebase/firebase.module';
 import { RedisModule } from './common/redis/redis.module';
-import { MailModule } from './common/mail/mail.module';
 import { ClaimsModule } from './claims/claims.module';
 import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
-import { EmailModule } from './email/email.module';
 
 @Module({
   imports: [
@@ -59,7 +57,6 @@ import { EmailModule } from './email/email.module';
     }),
     FirebaseModule,
     RedisModule,
-    MailModule,
     AuthModule,
     UsersModule,
     SpotsModule,
@@ -68,7 +65,6 @@ import { EmailModule } from './email/email.module';
     RealtimeModule,
     ScoresModule,
     DistrictsModule,
-    EmailModule,
   ],
   controllers: [AppController],
   providers: [AppService],
