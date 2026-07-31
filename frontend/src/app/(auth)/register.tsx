@@ -184,7 +184,10 @@ export default function RegisterScreen() {
   const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
     try {
-      await submit(email.trim(), password, nickname.trim(), selectedCode);
+      const result = await submit(email.trim(), password, nickname.trim(), selectedCode);
+      if (result === 'verificationSendFailed') {
+        Alert.alert(t('auth.errors.title'), t('auth.emailVerification.sendFailed'));
+      }
     } catch (err) {
       handleAuthError(err, 'auth.errors.registerFailed');
     } finally {
@@ -205,6 +208,8 @@ export default function RegisterScreen() {
           t('auth.emailVerification.notYetTitle'),
           t('auth.emailVerification.notYetMessage'),
         );
+      } else if (result === 'no-session') {
+        Alert.alert(t('auth.errors.title'), t('auth.errors.sessionExpired'));
       }
     } catch (err) {
       handleAuthError(err, 'auth.errors.registerFailed');
@@ -315,7 +320,7 @@ export default function RegisterScreen() {
           }
           onPress={step === 'form' ? handleSubmit : handleConfirmVerification}
           disabled={step === 'form' ? !canSubmit : !canConfirm}
-          loading={step === 'form' ? isSubmitting || isRegistering : isCheckingVerification || isRegistering}
+          loading={isRegistering || (step === 'form' ? isSubmitting : isCheckingVerification)}
           style={styles.submitButton}
         />
       </ScrollView>

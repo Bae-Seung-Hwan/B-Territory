@@ -109,7 +109,7 @@ describe('신규 가입', () => {
     expect(authApi.registerUser as jest.Mock).not.toHaveBeenCalled();
   });
 
-  it('발송이 실패해도 대기 단계로 전환된다(폼에 갇히지 않는다)', async () => {
+  it('발송이 실패해도 예외를 던지지 않고 대기 단계로 전환된다(가입 실패 알럿과 모순되지 않는다)', async () => {
     const user = createUser({ emailVerified: false });
     mockedCreateUser.mockResolvedValue({ user });
     const sendVerificationEmail = jest.fn().mockRejectedValue(new Error('send failed'));
@@ -122,12 +122,12 @@ describe('신규 가입', () => {
 
     const { result } = await renderFlow();
 
+    let submitResult;
     await act(async () => {
-      await expect(
-        result.current.submit('a@b.com', 'pw123456', 'nick', 'KR'),
-      ).rejects.toThrow('send failed');
+      submitResult = await result.current.submit('a@b.com', 'pw123456', 'nick', 'KR');
     });
 
+    expect(submitResult).toBe('verificationSendFailed');
     expect(result.current.step).toBe('awaitingVerification');
   });
 });

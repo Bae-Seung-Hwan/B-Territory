@@ -12,6 +12,7 @@ import { useSendFirebaseVerificationEmail } from '@/hooks/use-firebase-email-ver
 
 export type RegistrationStep = 'form' | 'awaitingVerification';
 export type ConfirmVerificationResult = 'no-session' | 'not-verified' | 'registered';
+export type SubmitResult = 'awaitingVerification' | 'verificationSendFailed';
 
 interface UseRegistrationFlowOptions {
   /** 백엔드 register()가 성공한 뒤 호출된다(라우팅은 호출자 책임 — 훅을 라우터에 결합하지 않기 위함). */
@@ -78,7 +79,12 @@ export function useRegistrationFlow({ onRegistered }: UseRegistrationFlowOptions
   );
 
   const submit = useCallback(
-    async (email: string, password: string, nickname: string, nationality: string) => {
+    async (
+      email: string,
+      password: string,
+      nickname: string,
+      nationality: string,
+    ): Promise<SubmitResult | undefined> => {
       setIsSubmitting(true);
       try {
         // Firebase 계정은 있는데 백엔드 프로필이 없는 사용자(이전 가입 시도가 중단됐거나,
@@ -104,14 +110,21 @@ export function useRegistrationFlow({ onRegistered }: UseRegistrationFlowOptions
           return;
         }
 
+        // 발송이 실패해도 대기 단계로 넘어간다 — 계정은 이미 생겼으므로 폼에 머물면
+        // 재제출 시 createUserWithEmailAndPassword가 다시 email-already-in-use를
+        // 던져 createdAccount 판정이 꼬인다. 재발송은 대기 화면에서 다시 시도하면 된다.
+        // 이 실패를 그대로 rethrow하면 "계정은 생성됨"과 "가입 실패" 알럿이 동시에
+        // 뜨는 모순이 생기므로, 결과값으로만 알려주고 여기서는 삼킨다.
+        let sendFailed = false;
         try {
           await sendVerificationEmail(user);
+        } catch (sendErr) {
+          console.warn('Failed to send verification email after account creation', sendErr);
+          sendFailed = true;
         } finally {
-          // 발송이 실패해도 대기 단계로 넘어간다 — 계정은 이미 생겼으므로 폼에 머물면
-          // 재제출 시 createUserWithEmailAndPassword가 다시 email-already-in-use를
-          // 던져 createdAccount 판정이 꼬인다. 재발송은 대기 화면에서 다시 시도하면 된다.
           setStep('awaitingVerification');
         }
+        return sendFailed ? 'verificationSendFailed' : 'awaitingVerification';
       } finally {
         setIsSubmitting(false);
       }
