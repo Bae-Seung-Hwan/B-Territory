@@ -48,11 +48,6 @@ jobs:
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       TOUR_API_KEY: ci-dummy
-      # MailService(Resend)는 생성자에서 RESEND_API_KEY가 없으면 throw 한다.
-      # app/claims e2e는 실제 AppModule을 부팅하되 MailService를 오버라이드하지
-      # 않으므로(메일을 실제로 보내지 않음) 부팅만 되도록 더미 키를 넣는다.
-      RESEND_API_KEY: ci-dummy
-      FRONTEND_URL: http://localhost:5173
       FIREBASE_PROJECT_ID: ci-dummy
       FIREBASE_CLIENT_EMAIL: ci-dummy@example.com
       # CI 전용 더미 키 (실제 계정과 무관, 여기서만 사용) — firebase-admin의 cert()가
