@@ -14,15 +14,11 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { isAxiosError } from 'axios';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, User } from 'firebase/auth';
 import { BottomSheetModal, BottomSheetFlatList, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { auth } from '@/lib/firebase';
-import { useRegisterMutation } from '@/hooks/use-auth';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
-import { useSendVerificationLink } from '@/hooks/use-email-verification';
+import { useRegistrationFlow } from '@/hooks/use-registration-flow';
 import { useRegisterDraft } from '@/hooks/use-register-draft';
-import { clearRegisterDraft } from '@/lib/register-draft';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { getCountryList, type Country } from '@/constants/countries';
@@ -109,14 +105,20 @@ function PasswordField({
 export default function RegisterScreen() {
   const router = useRouter();
   const { t, locale } = useTranslation();
-  const registerMutation = useRegisterMutation();
   const handleAuthError = useHandleAuthError();
   const {
-    sendLink,
-    isSending: isSendingLink,
-    hasSent: hasSentLink,
-    cooldown,
-  } = useSendVerificationLink();
+    step,
+    submit,
+    confirmVerification,
+    resendVerificationEmail,
+    isSubmitting,
+    isCheckingVerification,
+    isRegistering,
+    isSendingVerification,
+    hasSentVerification,
+    verificationCooldown,
+  } = useRegistrationFlow({ onRegistered: () => router.replace('/') });
+
   const countrySheetRef = useRef<BottomSheetModal>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -167,6 +169,7 @@ export default function RegisterScreen() {
   };
 
   const passwordMismatch = confirmPassword.length > 0 && password !== confirmPassword;
+  const isBusy = isSubmitting || isCheckingVerification || isRegistering;
 
   const canSubmit =
     email.trim().length > 0 &&
@@ -174,81 +177,47 @@ export default function RegisterScreen() {
     password === confirmPassword &&
     nickname.trim().length >= 2 &&
     selectedCode !== null &&
-    !registerMutation.isPending;
+    !isBusy;
 
-  const handleSendVerificationLink = async () => {
-    try {
-      // 연타로 무시된 호출(false)에서는 보내지도 않고 "보냈습니다"를 띄우면 안 된다.
-      const sent = await sendLink(email.trim());
-      if (!sent) return;
-      Alert.alert(
-        t('auth.emailVerification.sentTitle'),
-        t('auth.emailVerification.sentMessage'),
-      );
-    } catch (err) {
-      handleAuthError(err, 'auth.emailVerification.sendFailed');
-    }
-  };
+  const canConfirm = nickname.trim().length >= 2 && selectedCode !== null && !isBusy;
 
   const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
     try {
-      const trimmedEmail = email.trim();
+      await submit(email.trim(), password, nickname.trim(), selectedCode);
+    } catch (err) {
+      handleAuthError(err, 'auth.errors.registerFailed');
+    } finally {
+      // 계정이 생겼든 실패했든, 방금 시도한 비밀번호를 평문으로 오래 남겨둘 이유가
+      // 없다 — 인증 대기 단계로 넘어갔다면 더 이상 필요 없고, 실패했다면 다시
+      // 입력받는 편이 안전하다.
+      setPassword('');
+      setConfirmPassword('');
+    }
+  };
 
-      // Firebase 계정은 이미 있는데 백엔드 프로필이 없는 사용자(이전 가입 시도가 중단됐거나,
-      // 로그인 화면에서 404를 받고 넘어온 경우)는 createUserWithEmailAndPassword가
-      // auth/email-already-in-use로 막혀 가입을 끝낼 방법이 없었다. 같은 이메일/비밀번호로
-      // 로그인이 되면 본인 계정이므로 계정을 새로 만들지 않고 가입만 이어서 진행한다.
-      // 남아있는 세션(auth.currentUser)에 기대지 않으므로 앱을 재시작한 뒤에도 복구된다.
-      let user: User;
-      let createdAccount = false;
-      try {
-        user = (await createUserWithEmailAndPassword(auth, trimmedEmail, password)).user;
-        createdAccount = true;
-      } catch (createErr) {
-        if ((createErr as { code?: string } | null)?.code !== 'auth/email-already-in-use') {
-          throw createErr;
-        }
-        // 비밀번호가 틀리면 남의 계정이므로 여기서 실패하고 그대로 사용자에게 안내된다.
-        user = (await signInWithEmailAndPassword(auth, trimmedEmail, password)).user;
-      }
-      try {
-        // 성공 시 프로필은 mutation의 onSuccess가 queryKeys.auth.me 캐시에 넣는다
-        // (진행 중인 조회를 취소한 뒤 넣으므로 뒤늦은 404 응답에 덮이지 않는다).
-        // useAuth()가 그 캐시에서 인증 상태를 파생시키므로 스토어 복사는 없다.
-        await registerMutation.mutateAsync({
-          nickname: nickname.trim(),
-          nationality: selectedCode,
-        });
-        // 가입이 확정된 뒤에만 초안을 지운다 — 실패 시엔 재입력 없이 다시 시도할 수 있어야 한다.
-        void clearRegisterDraft();
-        // (main)은 가드되어 있어 인증 상태가 리렌더에 반영되기 전까진 열리지 않으므로,
-        // 항상 열려있는 "/"로 보내 index가 판단하게 한다.
-        router.replace('/');
-      } catch (backendErr) {
-        // 백엔드가 4xx로 명확히 거부한 경우(409 제외)에만 서버에 아무 부작용도
-        // 없었다고 확신할 수 있어 Firebase 계정을 롤백한다. 네트워크/타임아웃/5xx는
-        // 백엔드에 유저 row가 실제로 생겼을 수 있으므로 롤백하지 않는다. 이번 시도로
-        // 만든 계정이 아니면(이어서 가입) 남의 계정을 지우는 셈이므로 제외한다.
-        const shouldRollback =
-          createdAccount &&
-          isAxiosError(backendErr) &&
-          backendErr.response &&
-          backendErr.response.status >= 400 &&
-          backendErr.response.status < 500 &&
-          backendErr.response.status !== 409;
-
-        if (shouldRollback) {
-          try {
-            await user.delete();
-          } catch (deleteErr) {
-            console.warn('Failed to rollback Firebase user after registration failure', deleteErr);
-          }
-        }
-        throw backendErr;
+  const handleConfirmVerification = async () => {
+    if (!canConfirm || !selectedCode) return;
+    try {
+      const result = await confirmVerification(nickname.trim(), selectedCode);
+      if (result === 'not-verified') {
+        Alert.alert(
+          t('auth.emailVerification.notYetTitle'),
+          t('auth.emailVerification.notYetMessage'),
+        );
       }
     } catch (err) {
       handleAuthError(err, 'auth.errors.registerFailed');
+    }
+  };
+
+  const handleResend = async () => {
+    try {
+      const sent = await resendVerificationEmail();
+      if (!sent) return;
+      Alert.alert(t('auth.emailVerification.sentTitle'), t('auth.emailVerification.sentMessage'));
+    } catch (err) {
+      handleAuthError(err, 'auth.emailVerification.sendFailed');
     }
   };
 
@@ -261,50 +230,64 @@ export default function RegisterScreen() {
         <Text style={styles.title}>{t('auth.register.title')}</Text>
         <Text style={styles.subtitle}>{t('auth.register.subtitle')}</Text>
 
-        <TextInput
-          style={styles.input}
-          placeholder={t('auth.login.emailPlaceholder')}
-          placeholderTextColor="#666"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          editable={!registerMutation.isPending}
-        />
-
-        <Text style={styles.verifyHint}>{t('auth.emailVerification.hint')}</Text>
-        <Button
-          title={
-            cooldown > 0
-              ? t('auth.emailVerification.resendIn', { seconds: cooldown })
-              : t('auth.emailVerification.send')
-          }
-          onPress={handleSendVerificationLink}
-          variant="secondary"
-          disabled={email.trim().length === 0 || cooldown > 0 || registerMutation.isPending}
-          loading={isSendingLink}
-          style={styles.verifyButton}
-        />
-        {hasSentLink && (
-          <Text style={styles.verifySent}>{t('auth.emailVerification.sentMessage')}</Text>
+        {step === 'form' ? (
+          <>
+            <TextInput
+              style={styles.input}
+              placeholder={t('auth.login.emailPlaceholder')}
+              placeholderTextColor="#666"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              editable={!isBusy}
+            />
+            <PasswordField
+              value={password}
+              onChangeText={setPassword}
+              placeholder={t('auth.login.passwordPlaceholder')}
+              editable={!isBusy}
+            />
+            <PasswordField
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              placeholder={t('auth.register.confirmPasswordPlaceholder')}
+              editable={!isBusy}
+              style={passwordMismatch && styles.inputError}
+            />
+            {passwordMismatch && (
+              <Text style={styles.errorText}>{t('auth.register.passwordMismatch')}</Text>
+            )}
+          </>
+        ) : (
+          <View style={styles.pendingBox}>
+            <Text style={styles.pendingTitle}>{t('auth.emailVerification.pendingTitle')}</Text>
+            <Text style={styles.pendingMessage}>
+              {t('auth.emailVerification.pendingMessage', {
+                email: auth.currentUser?.email ?? '',
+              })}
+            </Text>
+            <Button
+              title={
+                verificationCooldown > 0
+                  ? t('auth.emailVerification.resendIn', { seconds: verificationCooldown })
+                  : t('auth.emailVerification.send')
+              }
+              onPress={handleResend}
+              variant="secondary"
+              disabled={verificationCooldown > 0 || isBusy}
+              loading={isSendingVerification}
+              style={styles.verifyButton}
+            />
+            {hasSentVerification && (
+              <Text style={styles.verifySent}>{t('auth.emailVerification.sentMessage')}</Text>
+            )}
+          </View>
         )}
 
-        <PasswordField
-          value={password}
-          onChangeText={setPassword}
-          placeholder={t('auth.login.passwordPlaceholder')}
-          editable={!registerMutation.isPending}
-        />
-        <PasswordField
-          value={confirmPassword}
-          onChangeText={setConfirmPassword}
-          placeholder={t('auth.register.confirmPasswordPlaceholder')}
-          editable={!registerMutation.isPending}
-          style={passwordMismatch && styles.inputError}
-        />
-        {passwordMismatch && (
-          <Text style={styles.errorText}>{t('auth.register.passwordMismatch')}</Text>
-        )}
+        {/* 닉네임/국적은 두 단계 모두에서 노출한다 — 인증 대기 중 앱이 꺼졌다 재시작돼도
+            초안(최대 24시간 보관)이 만료돼 비어있을 수 있는데, 여기서 바로 채워 넣으면
+            폼 단계로 되돌아갈 필요 없이 이어서 완료할 수 있다. */}
         <TextInput
           style={styles.input}
           placeholder={t('auth.register.nicknamePlaceholder')}
@@ -312,16 +295,12 @@ export default function RegisterScreen() {
           value={nickname}
           onChangeText={setNicknameInput}
           maxLength={20}
-          editable={!registerMutation.isPending}
+          editable={!isBusy}
         />
 
         <Text style={styles.sectionLabel}>{t('auth.register.nationalityLabel')}</Text>
         <Text style={styles.sectionHint}>{t('auth.register.nationalityHint')}</Text>
-        <TouchableOpacity
-          style={styles.dropdown}
-          onPress={openCountryPicker}
-          disabled={registerMutation.isPending}
-        >
+        <TouchableOpacity style={styles.dropdown} onPress={openCountryPicker} disabled={isBusy}>
           <Text style={selectedCountry ? styles.dropdownValue : styles.dropdownPlaceholder}>
             {selectedCountry
               ? `${selectedCountry.flag} ${selectedCountry.name}`
@@ -331,10 +310,12 @@ export default function RegisterScreen() {
         </TouchableOpacity>
 
         <Button
-          title={t('auth.register.submit')}
-          onPress={handleSubmit}
-          disabled={!canSubmit}
-          loading={registerMutation.isPending}
+          title={
+            step === 'form' ? t('auth.register.submit') : t('auth.emailVerification.confirmButton')
+          }
+          onPress={step === 'form' ? handleSubmit : handleConfirmVerification}
+          disabled={step === 'form' ? !canSubmit : !canConfirm}
+          loading={step === 'form' ? isSubmitting || isRegistering : isCheckingVerification || isRegistering}
           style={styles.submitButton}
         />
       </ScrollView>
@@ -389,13 +370,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   inputError: { borderColor: BrandColors.danger },
-  verifyHint: {
-    alignSelf: 'flex-start',
-    fontSize: 12,
-    color: '#888',
-    lineHeight: 17,
-    marginTop: -4,
-    marginBottom: 8,
+  pendingBox: { width: '100%', marginBottom: 12 },
+  pendingTitle: { fontSize: 16, fontWeight: '600', color: '#fff', marginBottom: 6 },
+  pendingMessage: {
+    fontSize: 13,
+    color: '#ccc',
+    lineHeight: 19,
+    marginBottom: 12,
   },
   verifyButton: { marginBottom: 12 },
   verifySent: {

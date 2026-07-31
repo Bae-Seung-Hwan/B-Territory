@@ -59,20 +59,18 @@ export const en: Translations = {
       retry: 'Retry',
     },
     emailVerification: {
-      hint: "Email verification is required to sign up. Tap the link in the email, then tap Sign Up.\nIf you've already verified, you don't need another email.",
       send: 'Send verification email',
       resendIn: 'Resend available in {{seconds}}s',
       sentTitle: 'Verification email sent',
       sentMessage:
-        'Check your inbox and tap the verification link.\nOnce verified, tap Sign Up. (Link valid for 10 minutes)',
+        'Check your inbox and tap the verification link.\nOnce verified, tap "I\'ve verified my email".',
       sendFailed: 'Failed to send the verification email.',
-      verifyingTitle: 'Verifying email',
-      successTitle: 'Email verified',
-      successMessage: 'Verification complete.\nReturn to the app to finish signing up.',
-      failedTitle: 'Verification failed',
-      failedMessage: 'This link is invalid or expired.\nPlease request a new verification email.',
-      missingToken: 'This address has no verification token.\nPlease open the link from your email.',
-      goToRegister: 'Go to sign up',
+      pendingTitle: 'Verify your email',
+      pendingMessage:
+        'We sent a verification email to {{email}}.\nTap the link in the email, then press the button below.',
+      confirmButton: "I've verified my email",
+      notYetTitle: 'Not verified yet',
+      notYetMessage: 'Please tap the verification link in your email first, then try again.',
     },
     errors: {
       title: 'Error',

@@ -69,22 +69,24 @@
 
 이전에는 `login.tsx`/`register.tsx`/`AuthProvider`가 각자 `getMe`를 호출해 `useUserStore`에 복사했고, 완료 순서에 따라 서로의 결과를 덮어쓰는 문제가 있었다. 쓰는 곳을 하나로 모아 그 클래스의 버그를 구조적으로 없앴다(`useUserStore`는 이 과정에서 읽는 곳이 없어져 삭제됨).
 
-### 이메일 인증 매직 링크
+### 이메일 인증 (Firebase 내장)
 
-백엔드 `register()`가 "이 이메일을 방금 인증했는가"를 게이트로 걸기 때문에(`auth.service.ts`), 인증을 거치지 않으면 가입이 `403`으로 거부된다. 프론트 흐름은 다음과 같다.
+과거엔 Resend로 자체 발송하는 매직링크(`/api/email/send-link`+`verify-token`, `app/verify.tsx`)를 썼으나, 발신 도메인 구매·DKIM 설정 없이는 실사용이 불가능해(테스트 모드는 계정 소유자 본인에게만 발송) **Firebase 내장 이메일 인증(`email_verified` 클레임)으로 전환했다.** 백엔드 PR #26(`feature/Bae/firebase-email-verification`)이 짝을 이루는 변경이며, 반드시 함께 머지돼야 한다(한쪽만 가면 프론트는 새 흐름인데 백엔드는 옛 마커를 찾다가 403, 또는 그 반대로 마커 없이도 통과되는 구멍이 생긴다).
 
-1. `register.tsx`의 **인증 메일 발송** 버튼 → `POST /api/email/send-link`. 백엔드가 60초 재발송 쿨다운(`429`)을 걸어서, `useSendVerificationLink`가 같은 길이의 카운트다운으로 버튼을 잠근다(최종 판정은 서버).
-   - 백엔드는 메일을 **보내기 전에** 락을 먼저 잡는다. 그래서 발송이 실패해 `5xx`가 나도, 또 `429`를 받아도 그 60초 동안 재요청은 무조건 `429`다. 성공에만 쿨다운을 걸면 실패 직후 버튼이 되살아나 헛된 요청과 알럿만 쌓이므로, 이 두 경우에도 잠근다. 반면 `400`(이메일 형식)은 락을 잡기 전에 거부되고 네트워크 오류는 서버 도달 여부를 알 수 없어 잠그지 않는다.
-   - 버튼의 `disabled`는 리렌더를 거쳐야 반영돼서 연타하면 그 사이로 press가 빠져나간다. 훅이 진행 중 요청을 ref로 감지해 겹친 호출을 **큐에 쌓지 않고 버리고**, 이때 `sendLink`가 `false`를 돌려줘 호출부가 "보냈습니다" 알럿을 띄우지 않는다.
-2. 사용자가 메일의 링크(`${FRONTEND_URL}/verify?token=...`)를 연다 → `app/verify.tsx` → `POST /api/email/verify-token`. 토큰은 **1회용**이라 이 화면은 자동 재시도를 켜지 않고, StrictMode의 이펙트 이중 실행도 ref로 막는다.
-3. 검증 성공 시 서버가 `email-verified:<email>` 마커를 30분간 남긴다. **인증 상태는 클라이언트가 아니라 서버에 이메일 기준으로 남으므로**, 링크를 폰 브라우저에서 열고 앱으로 돌아와 가입을 이어가도 인정된다(딥링크 설정이 없어도 동작하는 이유).
-4. 인증 없이 가입을 시도하면 `403` → `api-errors.ts`가 "이메일 인증이 필요합니다"로 매핑. 이 경우 백엔드에 아무것도 생기지 않았으므로 `register.tsx`의 롤백 조건에 걸려 방금 만든 Firebase 계정은 삭제된다.
+`register()`가 여전히 게이트를 걸지만(`auth.service.ts`), 이제 확인하는 값이 Redis 마커가 아니라 `FirebaseAuthGuard`가 디코딩한 ID Token의 `email_verified` 클레임이다(`req.user.email_verified`). `/api/email/*` 엔드포인트와 `EmailService`/`MailService`는 백엔드에서 완전히 삭제됐다.
 
-**앱을 종료했다 돌아와도 이어서 가입할 수 있다.** 인증 상태가 서버에 있으므로 가입 자체는 30분 안에 아무 때나 마치면 되고, `canSubmit`도 "이번 실행에서 메일을 보냈는가"를 조건에 넣지 않는다(넣으면 이미 인증한 사용자가 막힌다). 다만 입력값은 컴포넌트 상태라 종료 시 사라지므로, `use-register-draft.ts`가 이메일·닉네임·국적을 AsyncStorage에 임시 보관했다가 복원한다. **비밀번호는 담지 않아** 복원 후 다시 입력해야 하고, 초안은 하루가 지나면 폐기한다(인증 창은 30분이라 그보다 오래된 값이 되살아나는 게 더 혼란스럽다). 초안은 가입이 확정된 뒤에만 삭제한다.
+**프론트 상태기계** (오케스트레이션은 `hooks/use-registration-flow.ts`, 재발송은 `hooks/use-firebase-email-verification.ts`, 렌더링만 `app/(auth)/register.tsx`):
 
-앱은 인증 여부를 알 수 없다 — 백엔드에 상태 조회 엔드포인트가 없고 `verify-token`은 1회용이라서다. 그래서 안내 문구로 "이미 인증을 마쳤다면 메일을 다시 받지 않아도 된다"고 알린다. 메일을 다시 보내도 새 토큰이 발급될 뿐 기존 마커는 유효하다.
+1. 폼 제출 → `createUserWithEmailAndPassword` (또는 `auth/email-already-in-use`면 같은 자격증명으로 `signInWithEmailAndPassword`, "이어서 가입")
+2. 계정이 이미 `emailVerified`면 곧장 3번으로. 아니면 `sendEmailVerification(user)` 호출(Firebase가 자체 호스팅 페이지로 링크를 보낸다 — 우리 쪽에 `/verify` 라우트 불필요) 후 "인증 대기" 단계로 전환
+3. 사용자가 메일 링크를 클릭하고 앱으로 돌아와 "인증 완료했어요"를 누르면: `user.reload()` → `emailVerified` 확인 → **`user.getIdToken(true)`로 강제 토큰 갱신** → `POST /api/auth/register`
+4. 강제 갱신이 핵심 gotcha다 — `api-client.ts`의 요청 인터셉터는 캐시된(강제 아닌) `getIdToken()`을 쓰므로, 이걸 빼먹으면 방금 인증한 사용자도 낡은 토큰(`email_verified:false`) 때문에 정상 인증자인데 403을 받는다.
+5. 미인증 상태에서 "완료" 클릭 → 안내 알럿만 띄우고 `register` 호출 없음. 발송 실패해도 대기 단계로는 넘어간다(계정은 이미 생겼으므로 폼에 갇히면 재제출 시 롤백 판정이 꼬인다) — 재발송은 대기 화면에서 다시 시도.
+6. 인증 없이 가입을 시도하면(이론상 위 상태기계에서 도달 불가) `403` → `api-errors.ts`가 "이메일 인증이 필요합니다"로 매핑(방어용으로 유지).
 
-⚠️ **백엔드 CORS 필요.** 매직 링크는 브라우저에서 열리므로 `/verify` 화면이 API를 교차 출처로 호출한다. 네이티브 앱만 쓸 때는 CORS가 필요 없어 설정이 없었고, 그 상태에서는 이 기능이 preflight에서 막혀 아예 동작하지 않는다. `backend/src/app-setup.ts`에 `CORS_ORIGINS`(없으면 `FRONTEND_URL`) 기반 `enableCors`를 추가했다. `FRONTEND_URL`은 Expo 웹 개발 서버 포트(기본 8081)와 맞아야 링크가 실제로 열린다.
+**콜드스타트(앱 재시작) 복귀.** 계정 생성까지 마쳤지만 미인증인 상태로 앱이 완전히 꺼졌다 켜지면, `AuthProvider`(세션 확인 전엔 화면 자체를 마운트하지 않음)가 이미 확정한 `auth.currentUser`를 `useRegistrationFlow`가 **lazy initializer**로 읽어 첫 렌더부터 곧장 "인증 대기" 단계로 시작한다(깜빡임 없이). 이번 컴포넌트 인스턴스가 계정을 만든 게 아니므로 롤백(`user.delete()`) 대상에서는 제외된다. 닉네임/국적 입력창은 폼·대기 두 단계 모두에서 노출해, `use-register-draft.ts`의 초안(최대 24시간 보관)이 그새 만료돼 비어있어도 그 자리에서 다시 채워 이어서 완료할 수 있다.
+
+**앱을 종료했다 돌아와도 이어서 가입할 수 있다.** 위 콜드스타트 복귀 덕분에 가입 자체는 아무 때나 마치면 된다. 다만 비밀번호는 `use-register-draft.ts`에 담기지 않으므로 복원 후 다시 입력해야 한다.
 
 ### 라우트 가드
 
@@ -127,6 +129,7 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
 - [x] 토큰 만료 시 자동 갱신 — `src/lib/api-client.ts`의 axios 인터셉터가 요청마다 `getIdToken()`을, 401 응답 시 `getIdToken(true)`(강제 갱신) 후 원요청 1회 재시도
 - [x] React Query 레이어 — `src/lib/query-keys.ts`(queryKey factory), `src/api/auth.ts`(순수 함수), `src/hooks/use-auth.ts`(`useAuth` · `useRegisterMutation`). `['auth','me']` 캐시가 프로필의 유일한 보관처이고, 로그인 화면만 예외적으로 `queryClient.fetchQuery`로 즉시 결과가 필요한 1회성 조회를 한다(같은 키라 진행 중인 조회가 있으면 합쳐진다)
 - [x] 구글 로그인 훅 구현 — `src/hooks/use-google-login.ts`(`expo-auth-session` generic `useAuthRequest` + `GoogleAuthProvider.credential`). **단, 아래 ⚠️ 제약으로 현재 `login.tsx`에서 호출을 막아둔 상태**
+- [x] 이메일 인증을 Resend 매직링크에서 Firebase 내장(`email_verified`)으로 전환 — 백엔드 PR #26과 함께 머지 필요(위 "이메일 인증 (Firebase 내장)" 섹션 참고). worktree로 PR #26 백엔드를 별도로 띄워 실제 가입→인증→완료 흐름 e2e 확인 필요(아직 미완료)
 - [ ] Dev Build 전환 후 구글 로그인 재활성화 — `login.tsx`의 "준비 중" 스텁(`handleGoogleLogin`)을 `useGoogleLogin` 실제 호출로 되돌리기 (아래 ⚠️ Google 로그인 항목 참고)
 - [ ] "Firebase 계정은 있는데 백엔드 프로필 없음" 복구 — `register.tsx`에 "이어서 가입" 모드 추가 (위 ⚠️ A 항목)
 - [ ] "백엔드 프로필은 있는데 Firebase 계정 없음" 복구 — 유령 유저 정리 배치 또는 재가입 시 안내 개선 (위 ⚠️ B 항목)
