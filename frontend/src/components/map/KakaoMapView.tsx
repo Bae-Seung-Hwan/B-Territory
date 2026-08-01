@@ -227,7 +227,7 @@ const MAP_HTML = `
     //                  노출 기준을 바꾸려면 여기 숫자만 고치면 되고, 아래 함수는 손댈 필요 없다.
     //                  (레벨은 숫자가 클수록 축소. 실측상 레벨 7부터 화면 폭이 1km를 넘어간다)
     var CATEGORY_META = {
-      '12': { label: '관광지',      color: '#3987e5', emoji: '📍', hideFromLevel: 9 },
+      '12': { label: '관광지',      color: '#3987e5', emoji: '📍', hideFromLevel: 8 },
       '14': { label: '문화시설',    color: '#9085e9', emoji: '🏛', hideFromLevel: 8 },
       '15': { label: '축제공연행사', color: '#d55181', emoji: '🎪', hideFromLevel: 8 },
       '25': { label: '여행코스',    color: '#199e70', emoji: '🚶', hideFromLevel: 8 },
