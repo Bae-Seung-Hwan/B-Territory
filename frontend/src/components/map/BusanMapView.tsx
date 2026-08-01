@@ -1,7 +1,12 @@
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
 import { StyleProp, StyleSheet, View, ViewStyle, useWindowDimensions } from 'react-native';
-import MapView, { PROVIDER_GOOGLE, type MapMarker, type Region } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE, type Region } from 'react-native-maps';
+import type { BottomSheetModal } from '@gorhom/bottom-sheet';
+import { useQuery } from '@tanstack/react-query';
 import type { Spot } from '@/api/spots';
+import { fetchSpotClaim } from '@/api/claims';
+import { queryKeys } from '@/lib/query-keys';
+import { useTranslation } from '@/i18n';
 import {
   BUSAN_BOUNDS,
   BUSAN_CENTER,
@@ -14,6 +19,7 @@ import { CATEGORY_META, DEFAULT_CATEGORY_KEY } from '@/constants/mapCategories';
 import { CategoryFilterPanel } from './CategoryFilterPanel';
 import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { DistrictPolygons } from './DistrictPolygons';
+import { SpotDetailSheet } from './SpotDetailSheet';
 import { buildSpotMarkers } from './SpotMarkers';
 
 // 한때 react-native-map-clustering으로 마커를 군집화했으나 제거했다. 그 라이브러리는 개별 마커를
@@ -78,6 +84,7 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
 ) {
   const mapRef = useRef<MapView>(null);
   const regionRef = useRef<Region>(INITIAL_REGION);
+  const { t } = useTranslation();
   // 뷰포트 필터링용 — 화면에 보이는 영역이 바뀌면 렌더링할 마커 집합도 다시 계산해야 하므로
   // ref가 아니라 state로 들고 있어야 한다(팬만 해도 갱신되어야 하니 zoom과는 별개).
   const [visibleRegion, setVisibleRegion] = useState<Region>(INITIAL_REGION);
@@ -98,9 +105,52 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
   const [zoom, setZoom] = useState(initialZoom);
   // 최신 zoom을 콜백에서 stale closure 없이 읽기 위한 사본
   const zoomRef = useRef(initialZoom);
-  // 현재 말풍선이 열려 있는 마커. 줌이 바뀌어 이 마커가 화면에서 빠지기 전에 말풍선을 닫아야
-  // 하는데(SpotMarkers.tsx 참고), 선택된 상태로 제거되면 네이티브 마커 뷰가 지도에 남는다.
-  const openMarkerRef = useRef<MapMarker | null>(null);
+  // 상세 시트를 띄울 관광지. 시트는 ref로 present/dismiss하고(Gorhom 표준), 이 state는
+  // 시트 안에 무엇을 그릴지와 상세 조회(GET /api/spots/:id)를 켜는 스위치 역할을 한다.
+  const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null);
+  const detailSheetRef = useRef<BottomSheetModal>(null);
+
+  // 말풍선에 띄울 점령 현황. 마커 컴포넌트가 아니라 여기서 들고 있는 이유:
+  //  - 마커를 탭하면 Android가 말풍선을 보이려 카메라를 살짝 옮기고, 그러면 뷰포트 필터가
+  //    다시 돌면서 그 마커가 잠깐 언마운트될 수 있다. 상태를 마커 안에 두면 그때 초기화되어
+  //    조회가 영영 시작되지 않는다.
+  //  - 점령 API는 관광지별 개별 엔드포인트뿐이라 화면의 모든 마커가 각자 조회하면 요청이
+  //    폭증한다. 마지막으로 탭한 하나만 조회한다.
+  const [claimSpotId, setClaimSpotId] = useState<number | null>(null);
+  const {
+    data: claim,
+    isError: isClaimError,
+    isFetching: isClaimFetching,
+    dataUpdatedAt: claimDataUpdatedAt,
+    errorUpdatedAt: claimErrorUpdatedAt,
+    refetch: refetchClaim,
+  } = useQuery({
+    queryKey: queryKeys.claims.spot(claimSpotId ?? 0),
+    queryFn: () => fetchSpotClaim(claimSpotId!),
+    enabled: claimSpotId != null,
+    // 점령 상태는 수시로 바뀌므로 탭할 때마다 항상 새로 받는다. 캐시를 남기면 다음 탭에서
+    // 낡은 값이 먼저 보이므로 보관하지 않는다.
+    staleTime: 0,
+    gcTime: 0,
+    // 실패 시 기본 3회 재시도는 말풍선이 뜨기까지 너무 오래 걸린다(백오프 포함 ~7초).
+    retry: 1,
+  });
+
+  // 조회가 끝났을 때만(성공이든 실패든) 문구를 만든다. 조회 중에는 null을 유지해서,
+  // 마커가 말풍선을 아직 열지 않도록 한다 — Android 말풍선은 열리는 순간의 내용을 비트맵으로
+  // 한 번 찍고 그 뒤로는 갱신되지 않기 때문에, 완성된 내용을 갖춘 뒤에 열어야 한다.
+  const isClaimSettled = claimSpotId != null && !isClaimFetching && (claim !== undefined || isClaimError);
+  const claimText = !isClaimSettled
+    ? null
+    : isClaimError
+      ? t('map.claim.loadFailed')
+      : claim?.team
+        ? t('map.claim.claimedBy', { team: claim.team })
+        : t('map.claim.unclaimed');
+  // 말풍선을 열 시점을 알리는 신호. 문구가 아니라 "조회가 끝난 시각"을 쓰는 이유는, 같은 마커를
+  // 다시 탭했을 때 결과가 이전과 같으면(예: 계속 미점령) 문구가 안 바뀌어 열림 신호를 놓치기 때문이다.
+  // 이 값은 조회가 성공/실패로 끝날 때마다 갱신된다.
+  const claimSettledAt = isClaimSettled ? Math.max(claimDataUpdatedAt, claimErrorUpdatedAt) : 0;
 
   useImperativeHandle(
     ref,
@@ -128,10 +178,6 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
       const rawZoom = zoomFromLongitudeDelta(region.longitudeDelta, width);
       const nextZoom = Math.floor(rawZoom);
       if (nextZoom !== zoomRef.current) {
-        // 마커가 필터에서 빠지기 전에 열려 있는 말풍선을 먼저 닫는다 — 순서가 반대면
-        // 선택된 마커의 네이티브 뷰가 지도에 남아 축소 후에도 계속 보인다.
-        openMarkerRef.current?.hideCallout();
-        openMarkerRef.current = null;
         // showFromZoom(mapCategories.ts) 기준값을 실기기에서 맞출 때 참고용 — 프로덕션엔 남기지
         // 않는다. 내림 전 원본도 같이 남겨야 "13.9라서 아직 13단계다" 같은 판단이 가능하다.
         if (__DEV__) {
@@ -158,11 +204,32 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
     });
   }, []);
 
-  const handleMarkerOpen = useCallback((marker: MapMarker | null) => {
-    openMarkerRef.current = marker;
+  // 같은 마커를 다시 탭하면 id가 그대로라 쿼리가 저절로 다시 돌지 않으므로 명시적으로 refetch한다.
+  const handleSpotPress = useCallback(
+    (spot: Spot) => {
+      if (spot.id === claimSpotId) refetchClaim();
+      else setClaimSpotId(spot.id);
+    },
+    [claimSpotId, refetchClaim],
+  );
+
+  const handleSpotSelect = useCallback((spot: Spot) => {
+    setSelectedSpot(spot);
+    detailSheetRef.current?.present();
   }, []);
 
-  const spotMarkers = buildSpotMarkers(spots, activeCategories, zoom, visibleRegion, handleMarkerOpen);
+  const handleDetailDismiss = useCallback(() => setSelectedSpot(null), []);
+
+  const spotMarkers = buildSpotMarkers(spots, {
+    activeCategories,
+    zoom,
+    region: visibleRegion,
+    claimSpotId,
+    claimText,
+    claimSettledAt,
+    onPress: handleSpotPress,
+    onSelect: handleSpotSelect,
+  });
 
   return (
     <View style={style}>
@@ -191,6 +258,13 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
         onToggleCategory={handleToggleCategory}
         onToggleAll={handleToggleAll}
         zoom={zoom}
+      />
+      <SpotDetailSheet
+        ref={detailSheetRef}
+        spot={selectedSpot}
+        // 다른 마커를 탭해 claimSpotId가 옮겨간 뒤라면 이 시트의 관광지와 맞지 않으므로 숨긴다
+        claimText={selectedSpot != null && selectedSpot.id === claimSpotId ? claimText : null}
+        onDismiss={handleDetailDismiss}
       />
     </View>
   );
