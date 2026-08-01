@@ -157,7 +157,12 @@ export class ClaimsService {
       // 점령 처리 + 점수 지급을 한 트랜잭션으로 묶는다 — 실패 시 이번 요청에서 새로 만든 방어 키만 롤백
       // (같은 팀 재방문 시 기존 방어 타이머를 지우면 진행 중이던 방어가 무효화됨)
       try {
-        const weight = this.districtsService.getWeight(sigungucode);
+        // 점수 배수 = 구 가중치(foreign_visitor_share 기반) × 수도 배수(이번 주 수도면 1.2x).
+        // 개인·팀 점수에 동일하게 적용한다. 수도 배수는 모든 인스턴스가 공유하는 Redis 값을 읽는다.
+        const capitalMultiplier =
+          await this.districtsService.getCapitalMultiplier(sigungucode);
+        const weight =
+          this.districtsService.getWeight(sigungucode) * capitalMultiplier;
         const outcome = await this.dataSource.transaction(async (manager) => {
           // 같은 유저·같은 관광지의 동시 요청(더블탭·재시도)을 직렬화한다.
           // 이 트랜잭션 잠금이 없으면 두 요청이 모두 "오늘 미채점"을 읽고 각각 점수를

@@ -1,10 +1,25 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, MoreThanOrEqual } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { District } from './entities/district.entity';
+import { CapitalDesignation } from './entities/capital-designation.entity';
+import { RedisService } from '../common/redis/redis.service';
+import { startOfKstWeek } from '../common/utils/kst.util';
+
+// 수도로 지정된 구에서 점령하는 모든 팀의 점수(개인·팀)에 곱해지는 배수.
+export const CAPITAL_MULTIPLIER = 1.2;
+
+// 현재 수도(sigunguCode)를 담는 Redis 공유 키 — 모든 인스턴스가 이 값을 단일 소스로 읽는다.
+// 인메모리 캐시로 두면 수도를 지정한 인스턴스만 갱신돼 다른 인스턴스가 최대 일주일간 stale해진다.
+const CAPITAL_CURRENT_KEY = 'capital:current';
+// 이번 주 지정을 여러 인스턴스가 동시에 시도할 때 하나만 확정하도록 하는 주(week) 락 키.
+const CAPITAL_WEEK_LOCK_KEY = (weekStartIso: string) =>
+  `capital:week:${weekStartIso}`;
+// 주 1회 갱신되므로 2주 TTL이면 정상 운영 중엔 만료되지 않고, 지정이 멈추면 자동 정리된다.
+const CAPITAL_TTL_SEC = 14 * 24 * 60 * 60;
 
 interface DistrictCsvRow {
   sigunguCode: string;
@@ -32,14 +47,18 @@ function toNum(v: string): number | null {
 @Injectable()
 export class DistrictsService implements OnModuleInit {
   private readonly logger = new Logger(DistrictsService.name);
-  // 런타임 가중치 조회용 캐시 (sigunguCode → weight)
+  // 런타임 가중치 조회용 캐시 (sigunguCode → weight). 부팅 시 CSV에서 로드되는 정적 값이라
+  // 인스턴스별 메모리 캐시로 충분하다(모든 인스턴스가 같은 CSV로 동일하게 로드).
   private weightCache = new Map<string, number>();
 
   constructor(
     @InjectRepository(District)
     private readonly districtRepo: Repository<District>,
+    @InjectRepository(CapitalDesignation)
+    private readonly capitalRepo: Repository<CapitalDesignation>,
     private readonly dataSource: DataSource,
     private readonly config: ConfigService,
+    private readonly redis: RedisService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -53,6 +72,11 @@ export class DistrictsService implements OnModuleInit {
         `District 가중치 캐시가 비어 있습니다 — CSV 시딩 실패로 점령 점수 가중치가 모두 1.0이 됩니다. CSV 경로 확인 필요: ${this.csvPath()}`,
       );
     }
+
+    // 수도 공유 캐시(Redis)를 DB 원장에서 워밍한다. 아직 지정 전이면 비어 있는 게 정상
+    // (pre-season·최초 부팅)이므로 fail-fast하지 않는다. Redis에 이미 값이 있으면(다른
+    // 인스턴스가 먼저 세팅) 덮어쓰지 않는다.
+    await this.warmCapitalCache();
 
     // 정합성 검증은 경고성이므로 실패해도 부팅은 계속한다 (가중치 동작과 무관).
     try {
@@ -170,6 +194,139 @@ export class DistrictsService implements OnModuleInit {
 
   getWeightMap(): ReadonlyMap<string, number> {
     return this.weightCache;
+  }
+
+  /**
+   * Redis 공유 캐시가 비어 있으면 DB 원장의 최신 지정으로 워밍한다(부팅·Redis 재시작 대비).
+   * 이미 값이 있으면(다른 인스턴스가 세팅) 덮어쓰지 않는다.
+   */
+  private async warmCapitalCache(): Promise<void> {
+    const cached = await this.redis.get(CAPITAL_CURRENT_KEY);
+    if (cached !== null) {
+      this.logger.log(`현재 수도(Redis): ${cached}`);
+      return;
+    }
+    const latest = await this.capitalRepo.findOne({
+      where: {},
+      order: { designatedAt: 'DESC' },
+    });
+    if (latest) {
+      await this.redis.set(
+        CAPITAL_CURRENT_KEY,
+        latest.sigunguCode,
+        CAPITAL_TTL_SEC,
+      );
+      this.logger.log(`현재 수도(DB→Redis 워밍): ${latest.sigunguCode}`);
+    } else {
+      this.logger.log('현재 수도: (미지정)');
+    }
+  }
+
+  /**
+   * 이번 주 수도 sigunguCode. 모든 인스턴스가 공유하는 Redis 값을 단일 소스로 읽는다.
+   * Redis 미스(재시작/최초) 시 DB 원장에서 복구하고 재적재한다. 지정 전이면 null.
+   */
+  async getCurrentCapital(): Promise<string | null> {
+    const cached = await this.redis.get(CAPITAL_CURRENT_KEY);
+    if (cached !== null) return cached;
+    const latest = await this.capitalRepo.findOne({
+      where: {},
+      order: { designatedAt: 'DESC' },
+    });
+    if (!latest) return null;
+    await this.redis.set(
+      CAPITAL_CURRENT_KEY,
+      latest.sigunguCode,
+      CAPITAL_TTL_SEC,
+    );
+    return latest.sigunguCode;
+  }
+
+  /** 수도 점수 배수. 현재 수도인 구는 CAPITAL_MULTIPLIER, 그 외 1.0. */
+  async getCapitalMultiplier(
+    sigunguCode: string | null | undefined,
+  ): Promise<number> {
+    if (!sigunguCode) return 1;
+    const current = await this.getCurrentCapital();
+    return current === sigunguCode ? CAPITAL_MULTIPLIER : 1;
+  }
+
+  /**
+   * 주간 수도 지정 — 점령 가능한 구 하나를 무작위로 뽑아 이력(DB)에 append하고 현재 수도
+   * (Redis 공유 키)를 갱신한다. "점수가 가장 높은 구"가 아니라 매주 무작위로 뽑는 것이 확정 기획.
+   * 매주 월요일 00:00 KST 배치(capital-designation 큐)가 호출한다.
+   *
+   * - 멱등: 이번 주(월요일 00:00 KST 기준)에 이미 지정됐으면 재지정하지 않는다(DB 이력 기준).
+   *   Bull 재시도(attempts:3)로 프로세서가 다시 실행돼도 수도가 주중에 바뀌지 않는다.
+   * - 동시성: 다중 인스턴스가 같은 주에 동시에 지정을 시도하면 Redis 주(week) 락(SET NX)으로
+   *   하나만 확정하고 나머지는 그 결과를 채택한다 — 이력 중복/수도 불일치를 막는다.
+   * - 후보 제한: 좌표 있는 spot을 최소 1개 가진 구 중에서만 뽑는다. spot이 없는 구가 수도가
+   *   되면 그 주 내내 버프가 아무에게도 적용되지 않기 때문.
+   */
+  async designateWeeklyCapital(
+    now: Date = new Date(),
+  ): Promise<{ sigunguCode: string } | null> {
+    const weekStart = startOfKstWeek(now);
+    const existing = await this.capitalRepo.findOne({
+      where: { designatedAt: MoreThanOrEqual(weekStart) },
+      order: { designatedAt: 'DESC' },
+    });
+    if (existing) {
+      await this.redis.set(
+        CAPITAL_CURRENT_KEY,
+        existing.sigunguCode,
+        CAPITAL_TTL_SEC,
+      );
+      this.logger.log(
+        `이번 주 수도 이미 지정됨: ${existing.sigunguCode} — 재지정 건너뜀`,
+      );
+      return { sigunguCode: existing.sigunguCode };
+    }
+
+    // 점령 가능한(좌표 있는) spot을 가진 구만 후보. EXISTS로 구당 1행이라 spot 수와
+    // 무관하게 구 단위 균등 무작위가 된다.
+    const picked = await this.dataSource.query<{ sigunguCode: string }[]>(
+      `SELECT d."sigunguCode" AS "sigunguCode"
+         FROM districts d
+        WHERE EXISTS (
+          SELECT 1 FROM spots s
+           WHERE s.sigungucode = d."sigunguCode"
+             AND s."mapX" IS NOT NULL AND s."mapY" IS NOT NULL
+        )
+        ORDER BY RANDOM()
+        LIMIT 1`,
+    );
+    if (picked.length === 0) {
+      this.logger.warn(
+        '점령 가능한 spot을 가진 구가 없어 수도 지정을 건너뜁니다.',
+      );
+      return null;
+    }
+    const { sigunguCode } = picked[0];
+
+    // 이번 주 지정 권한을 Redis NX로 확정(픽한 sigunguCode를 락 값으로 저장). 진 인스턴스는
+    // 이긴 인스턴스가 저장한 값을 채택하고 DB 이력은 추가하지 않는다.
+    const weekLockKey = CAPITAL_WEEK_LOCK_KEY(weekStart.toISOString());
+    const won = await this.redis.tryAcquireLock(
+      weekLockKey,
+      CAPITAL_TTL_SEC,
+      sigunguCode,
+    );
+    if (!won) {
+      const winner = (await this.redis.get(weekLockKey)) ?? sigunguCode;
+      await this.redis.set(CAPITAL_CURRENT_KEY, winner, CAPITAL_TTL_SEC);
+      this.logger.log(
+        `이번 주 수도 동시 지정 경합 — 다른 인스턴스 결과 채택: ${winner}`,
+      );
+      return { sigunguCode: winner };
+    }
+
+    await this.capitalRepo.insert({ sigunguCode });
+    await this.redis.set(CAPITAL_CURRENT_KEY, sigunguCode, CAPITAL_TTL_SEC);
+    this.logger.log(
+      `이번 주 수도 지정: ${sigunguCode} — 배수 ${CAPITAL_MULTIPLIER}x`,
+    );
+    return { sigunguCode };
   }
 
   /**
