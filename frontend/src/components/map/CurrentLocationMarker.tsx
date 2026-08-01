@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import { StyleSheet } from 'react-native';
 import { Marker } from 'react-native-maps';
+import { BrandColors, withAlpha } from '@/constants/theme';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -15,7 +16,9 @@ interface CurrentLocationMarkerProps {
 
 // 카카오맵 CustomOverlay + CSS pulse 애니메이션(my-location-dot)을 reanimated로 재구현.
 // 마커가 이 하나뿐이라 tracksViewChanges={true}를 상시 켜도 500개 POI 마커와 달리 성능 부담이 없다.
-export function CurrentLocationMarker({ coordinate }: CurrentLocationMarkerProps) {
+export const CurrentLocationMarker = memo(function CurrentLocationMarker({
+  coordinate,
+}: CurrentLocationMarkerProps) {
   const progress = useSharedValue(0);
 
   useEffect(() => {
@@ -35,7 +38,7 @@ export function CurrentLocationMarker({ coordinate }: CurrentLocationMarkerProps
       </Animated.View>
     </Marker>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrapper: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
@@ -43,7 +46,7 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#208AEF',
+    backgroundColor: BrandColors.accent,
     borderWidth: 2,
     borderColor: '#fff',
   },
@@ -52,6 +55,6 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: 'rgba(32,138,239,0.25)',
+    backgroundColor: withAlpha(BrandColors.accent, 0.25),
   },
 });

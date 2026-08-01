@@ -141,7 +141,6 @@ export const ko = {
     claim: {
       claimedBy: '{{team}} 점령 중',
       unclaimed: '미점령',
-      loading: '점령 현황 확인 중…',
       loadFailed: '점령 현황을 불러오지 못했습니다',
     },
     spotDetail: {

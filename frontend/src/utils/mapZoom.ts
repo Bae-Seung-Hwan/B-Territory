@@ -8,7 +8,9 @@ export function isCategoryVisible(
   zoom: number,
   activeCategories: Record<string, boolean>,
 ): boolean {
-  if (!activeCategories[categoryKey(contenttypeid)]) return false;
+  // `!== false`인 이유: 값이 없는 카테고리는 "켜짐"으로 본다. CategoryFilterPanel도 같은 규약을
+  // 쓰므로 초기 상태를 빈 객체로 둘 수 있고, 키를 빠뜨렸을 때 해당 카테고리가 통째로 숨는 일이 없다.
+  if (activeCategories[categoryKey(contenttypeid)] === false) return false;
   const { showFromZoom } = getCategoryMeta(contenttypeid);
   return showFromZoom == null || zoom >= showFromZoom;
 }

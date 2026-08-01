@@ -143,7 +143,6 @@ export const en: Translations = {
     claim: {
       claimedBy: 'Claimed by {{team}}',
       unclaimed: 'Unclaimed',
-      loading: 'Checking claim status…',
       loadFailed: 'Failed to load claim status',
     },
     spotDetail: {

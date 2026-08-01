@@ -1,6 +1,6 @@
 import { metersToLatDelta } from '@/utils/geo';
 
-// KakaoMapView(지도 중심/드래그 제한)와 map/index.tsx(현재 위치가 부산 범위 밖인지 판정)가
+// BusanMapView(지도 중심/드래그 제한)와 map/index.tsx(현재 위치가 부산 범위 밖인지 판정)가
 // 동일한 좌표 기준을 공유해야 하므로 단일 소스로 둔다.
 export const BUSAN_CENTER = { lat: 35.1796, lng: 129.0756 };
 

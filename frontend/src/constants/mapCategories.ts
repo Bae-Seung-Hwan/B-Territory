@@ -8,7 +8,7 @@
 //                 건드리지 않고 남북으로 팬하기만 해도 값이 흔들렸다(부산 남단↔북단 0.75%).
 //                 카메라 zoom은 팬에 전혀 영향받지 않아 축척 판정의 올바른 기준이다.
 // label(카테고리 표시 이름)은 여기 두지 않는다 — i18n/locales/{ko,en}.ts의
-// map.categoryFilter.categories.<id>가 단일 소스이고, CategoryFilterPanel이 useTranslation()으로
+// map.categories.<id>가 단일 소스이고, CategoryFilterPanel이 useTranslation()으로
 // 직접 조회한다(색/이모지는 언어와 무관해 그대로 여기 남긴다).
 export interface CategoryMeta {
   color: string;
@@ -27,7 +27,7 @@ export const CATEGORY_META: Record<string, CategoryMeta> = {
   '39': { color: '#008300', emoji: '🍴', showFromZoom: 13 },
 };
 
-export const DEFAULT_CATEGORY_META: CategoryMeta = {
+const DEFAULT_CATEGORY_META: CategoryMeta = {
   color: '#898781',
   emoji: '📌',
   showFromZoom: 14,

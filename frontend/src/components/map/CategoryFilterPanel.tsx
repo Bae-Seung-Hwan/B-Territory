@@ -1,13 +1,14 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CATEGORY_META } from '@/constants/mapCategories';
 import { isCategoryZoomHidden } from '@/utils/mapZoom';
 import { useTranslation } from '@/i18n';
-import { BrandColors } from '@/constants/theme';
+import { BrandColors, withAlpha } from '@/constants/theme';
 
 const HEADER_HEIGHT = 32;
 const PANEL_GAP = 6;
+const BOTTOM_OFFSET = 18;
 
 interface CategoryFilterPanelProps {
   activeCategories: Record<string, boolean>;
@@ -16,7 +17,7 @@ interface CategoryFilterPanelProps {
   zoom: number;
 }
 
-export function CategoryFilterPanel({
+export const CategoryFilterPanel = memo(function CategoryFilterPanel({
   activeCategories,
   onToggleCategory,
   onToggleAll,
@@ -32,7 +33,7 @@ export function CategoryFilterPanel({
   // 리스트는 그 위에 뜨는 독립된 박스라 접힘 상태가 헤더의 위치·크기에 전혀 영향을 주지 않는다.
   return (
     <>
-      <View style={[styles.header, { bottom: insets.bottom + 18 }]}>
+      <View style={[styles.panelBox, styles.header, { bottom: insets.bottom + BOTTOM_OFFSET }]}>
         <Pressable style={styles.headerInner} onPress={() => setCollapsed((c) => !c)}>
           <Text style={styles.headerTitle}>{t('map.categoryFilter.title')}</Text>
           <Pressable style={styles.allButton} onPress={onToggleAll} hitSlop={6}>
@@ -41,7 +42,13 @@ export function CategoryFilterPanel({
         </Pressable>
       </View>
       {!collapsed && (
-        <View style={[styles.list, { bottom: insets.bottom + 18 + HEADER_HEIGHT + PANEL_GAP }]}>
+        <View
+          style={[
+            styles.panelBox,
+            styles.list,
+            { bottom: insets.bottom + BOTTOM_OFFSET + HEADER_HEIGHT + PANEL_GAP },
+          ]}
+        >
           {Object.entries(CATEGORY_META).map(([id, meta]) => {
             const active = activeCategories[id] !== false;
             const zoomHidden = active && isCategoryZoomHidden(id, zoom);
@@ -63,22 +70,25 @@ export function CategoryFilterPanel({
       )}
     </>
   );
-}
+});
 
 const styles = StyleSheet.create({
-  header: {
+  // 헤더 박스와 리스트 박스가 공유하는 표면 스타일
+  panelBox: {
     position: 'absolute',
     left: 10,
-    height: HEADER_HEIGHT,
     borderRadius: 12,
-    justifyContent: 'center',
-    backgroundColor: `${BrandColors.background}D9`, // 0.85 alpha
+    backgroundColor: withAlpha(BrandColors.background, 0.85),
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    // OutOfBoundsBanner(bottom, left/right 12 - 화면 거의 전체 폭)가 이 헤더와 같은 높이대에
-    // 겹치는데 둘 다 zIndex 10이면 JSX상 나중에 렌더되는 배너가 위에 깔려 탭을 가로챈다.
-    // 배너는 탭 불필요한 정보성 UI이고 이쪽은 실제 조작이 필요한 컨트롤이라 더 높은 zIndex로 우선시킨다.
+    borderColor: withAlpha('#ffffff', 0.12),
+    // OutOfBoundsBanner(bottom, left/right 12 - 화면 거의 전체 폭)가 같은 높이대에 겹치는데
+    // 둘 다 zIndex 10이면 JSX상 나중에 렌더되는 배너가 위에 깔려 탭을 가로챈다. 배너는 탭이
+    // 필요 없는 정보성 UI이고 이쪽은 실제 조작이 필요한 컨트롤이라 더 높은 zIndex로 우선시킨다.
     zIndex: 20,
+  },
+  header: {
+    height: HEADER_HEIGHT,
+    justifyContent: 'center',
   },
   headerInner: {
     flexDirection: 'row',
@@ -96,15 +106,8 @@ const styles = StyleSheet.create({
   },
   allButtonText: { fontSize: 10, color: '#fff' },
   list: {
-    position: 'absolute',
-    left: 10,
-    borderRadius: 12,
     padding: 6,
     gap: 3,
-    backgroundColor: `${BrandColors.background}D9`, // 0.85 alpha
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    zIndex: 20, // header와 동일한 이유로 OutOfBoundsBanner보다 위에 있어야 한다
   },
   chip: {
     flexDirection: 'row',
@@ -116,7 +119,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
   chipOff: { opacity: 0.35 },
-  dot: { width: 9, height: 9, borderRadius: 5 },
+  dot: { width: 9, height: 9, borderRadius: 999 },
   emoji: { fontSize: 12 },
   label: { fontSize: 12, color: '#fff' },
   labelZoomHidden: { textDecorationLine: 'line-through', opacity: 0.6 },

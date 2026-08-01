@@ -4,7 +4,7 @@ import { BottomSheetModal, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { Image } from 'expo-image';
 import { useQuery } from '@tanstack/react-query';
 import { BottomSheet } from '@/components/ui/BottomSheet';
-import { BrandColors } from '@/constants/theme';
+import { BrandColors, withAlpha } from '@/constants/theme';
 import { getCategoryMeta } from '@/constants/mapCategories';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchSpotDetail, type Spot } from '@/api/spots';
@@ -38,6 +38,9 @@ export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps
       queryKey: queryKeys.spots.detail(spot?.id ?? 0),
       queryFn: () => fetchSpotDetail(spot!.id),
       enabled: spot != null,
+      // 설명·이용시간·홈페이지는 사실상 고정값이라 시트를 다시 열 때마다 받아올 이유가 없다
+      // (점령 현황과 달리 실시간성이 필요 없다).
+      staleTime: 5 * 60 * 1000,
     });
 
     const meta = getCategoryMeta(spot?.contenttypeid);
@@ -127,7 +130,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 999,
-    backgroundColor: `${BrandColors.accent}26`, // 0.15 alpha
+    backgroundColor: withAlpha(BrandColors.accent, 0.15),
   },
   claimText: { color: BrandColors.accent, fontSize: 12, fontWeight: '700' },
   loading: { marginTop: 12 },
@@ -137,7 +140,7 @@ const styles = StyleSheet.create({
   fieldValue: { color: '#e6e6e6', fontSize: 14 },
   link: { color: BrandColors.accent, fontSize: 14, textDecorationLine: 'underline' },
   errorBox: {
-    backgroundColor: `${BrandColors.danger}26`,
+    backgroundColor: withAlpha(BrandColors.danger, 0.15),
     borderRadius: 10,
     padding: 12,
     gap: 4,
