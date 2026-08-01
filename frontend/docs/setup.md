@@ -10,7 +10,6 @@ cp .env.example .env
 
 ```
 EXPO_PUBLIC_API_URL=http://localhost:3000
-EXPO_PUBLIC_KAKAO_MAP_KEY=<카카오 JavaScript 키>
 
 # Firebase Authentication
 EXPO_PUBLIC_FIREBASE_API_KEY=<Firebase 프로젝트 apiKey>
@@ -20,10 +19,14 @@ EXPO_PUBLIC_FIREBASE_APP_ID=<Firebase appId>
 
 # Google 로그인 — Firebase 콘솔에서 Google Provider 활성화 시 자동 발급되는 Web client ID
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=<Google OAuth Web client ID>
+
+# Google Maps SDK — react-native-maps용. prebuild 시점에만 읽히므로 EXPO_PUBLIC_ 접두사 없음
+GOOGLE_MAPS_ANDROID_API_KEY=<Google Maps Android 키>
+GOOGLE_MAPS_IOS_API_KEY=<Google Maps iOS 키>
 ```
 
-> 카카오 개발자 콘솔 → 플랫폼 → Web → 사이트 도메인에 `http://localhost` 등록 필요
 > Firebase/Google 값은 [integrations.md](./integrations.md)의 "Firebase Authentication" 절 참고. `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`가 비어 있으면 로그인 화면의 Google 버튼이 "준비 중" alert로 폴백된다.
+> Google Maps 키 발급/제한 방법은 [integrations.md](./integrations.md)의 "Google Maps" 절 참고. 네이티브 모듈이라 Dev Build가 필요하다([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md)).
 
 ## 실행
 

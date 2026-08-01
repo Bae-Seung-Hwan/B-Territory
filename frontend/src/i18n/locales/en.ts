@@ -125,6 +125,20 @@ export const en: Translations = {
     },
     outOfBounds: 'Current location is not in Busan',
     spotsLoadError: 'Failed to load tourist spots · Tap to retry',
+    categoryFilter: {
+      title: 'Categories',
+      all: 'All',
+      categories: {
+        '12': 'Attractions',
+        '14': 'Culture',
+        '15': 'Festivals & Events',
+        '25': 'Travel Courses',
+        '28': 'Leisure Sports',
+        '32': 'Lodging',
+        '38': 'Shopping',
+        '39': 'Restaurants',
+      },
+    },
   },
   overlay: {
     enemyAlert: {

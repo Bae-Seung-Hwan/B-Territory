@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { KakaoMapView, KakaoMapViewHandle } from '@/components/map/KakaoMapView';
+import { BusanMapView, BusanMapViewHandle } from '@/components/map/BusanMapView';
 import { MapHUD } from '@/components/map/MapHUD';
 import { OutOfBoundsBanner } from '@/components/map/OutOfBoundsBanner';
 import { SpotsErrorBanner } from '@/components/map/SpotsErrorBanner';
@@ -21,11 +21,11 @@ export default function MapScreen() {
   } = useQuery({ queryKey: ['spots', 'busan'], queryFn: fetchBusanSpots });
   const { coords } = useLocation();
   const isOutsideBusan = coords != null && !isWithinBusanBounds(coords.latitude, coords.longitude);
-  const mapRef = useRef<KakaoMapViewHandle>(null);
+  const mapRef = useRef<BusanMapViewHandle>(null);
 
   return (
     <View style={styles.container}>
-      <KakaoMapView ref={mapRef} style={StyleSheet.absoluteFill} spots={spots} coords={coords} />
+      <BusanMapView ref={mapRef} style={StyleSheet.absoluteFill} spots={spots} coords={coords} />
       <MapHUD />
       <LocateMeButton onPress={() => coords && mapRef.current?.panTo(coords)} disabled={!coords} />
       {isOutsideBusan && <OutOfBoundsBanner />}

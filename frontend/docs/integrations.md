@@ -1,30 +1,25 @@
 # 외부 연동
 
-## 카카오맵
+## Google Maps
 
-- 구현 위치: `src/components/map/KakaoMapView.tsx` (WebView + 카카오 JS SDK)
+- 구현 위치: `src/components/map/BusanMapView.tsx` (react-native-maps 네이티브)
+  - `DistrictPolygons.tsx` — 구 경계 폴리곤(그래프 컬러링 폴백 팔레트, 향후 점령 상태 연동 지점)
+  - `SpotMarkers.tsx` — 관광지 마커(react-native-svg 커스텀 핀, 카테고리 필터/줌 자동 숨김, 뷰포트 필터링)
+  - `CategoryFilterPanel.tsx` — 카테고리 on/off 오버레이
+  - `CurrentLocationMarker.tsx` — 현재 위치 pulse 마커(react-native-reanimated)
 - HUD: `src/components/map/MapHUD.tsx` (1위팀 · 이번주 수도 표시)
-- 필요 환경변수: `EXPO_PUBLIC_KAKAO_MAP_KEY` ([setup.md](./setup.md) 참고)
-- 카카오 개발자 콘솔 → 플랫폼 → Web → 사이트 도메인에 사용 도메인 등록 필요
+- 필요 환경변수: `GOOGLE_MAPS_ANDROID_API_KEY` / `GOOGLE_MAPS_IOS_API_KEY` ([setup.md](./setup.md) 참고). `EXPO_PUBLIC_` 접두사가 없어 클라이언트 JS 번들에 노출되지 않고, `app.config.js`의 `react-native-maps` config plugin이 prebuild 시점에 네이티브 매니페스트/Info.plist에만 주입한다.
+- Google Cloud Console에서 "Maps SDK for Android"/"Maps SDK for iOS" 활성화, API 키를 패키지명(`com.bterritory.app`) + SHA-1(Android) / Bundle ID(iOS)로 제한해서 발급받는다.
+- Dev Build 필요(WebView JS SDK와 달리 네이티브 모듈) — 전환 배경은 [decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고.
 
-### API 키 노출 대응
+### 이전 방식(카카오맵 WebView)에서 전환한 이유
 
-> ⚠️ `EXPO_PUBLIC_` 접두사 환경변수는 클라이언트 번들에 그대로 포함되어 누구나 추출 가능. 이 키는 **JavaScript 키**(WebView JS SDK용)로, 카카오 콘솔에서 지원하는 제한 방식 중:
-> - **네이티브 앱 키 제한(Android 패키지명/iOS Bundle ID)** → JS 키에는 적용 불가
-> - **사이트 도메인 제한** → 이론상 적용되지만, `baseUrl`이 `KakaoMapView.tsx`에 하드코딩된 `'http://localhost'`(실제 서버 주소가 아니라 WebView가 자체 선언하는 가상 origin)라서, 키를 탈취한 누구든 동일하게 `baseUrl: 'http://localhost'`인 WebView를 만들면 도메인 검사를 그대로 통과함 → **사실상 무력화**
->
-> 즉 이 구조(JS 키 + WebView + 고정 `localhost` origin)에서 네이티브 제한도 도메인 제한도 실효성이 없어, 아래 사용량 기반 대응이 실질적인 방어선.
+기존엔 `KakaoMapView.tsx`가 WebView에 카카오맵 JS SDK를 주입하는 방식이었는데, `EXPO_PUBLIC_KAKAO_MAP_KEY`가 클라이언트 번들에 그대로 노출되고 WebView `baseUrl`이 고정된 `'http://localhost'`라 사이트 도메인 제한도 사실상 무력화되는 문제가 있었다. 네이티브 지도 SDK(Dev Build)로 전환하면서 앱 서명(패키지명/SHA-1, Bundle ID) 기반의 실효성 있는 키 제한이 가능해졌다.
 
-**대응 방법**
-1. 카카오 콘솔 사용량 모니터링 설정 — 비정상 트래픽 감지
-2. 쿼터 제한 설정 — 일정량 초과 시 자동 차단
-3. 앱 배포 시 번들 ID 등록 — Android 패키지명, iOS Bundle ID를 카카오 콘솔에 등록 (단, 위 이유로 WebView JS SDK에는 이 제한이 적용되지 않아 심리적 안전판 이상의 효과는 없음)
+### 확장 포인트 (점령 시각화 / 실시간 소켓)
 
-### 필요 작업 (TODO)
-
-- [ ] 카카오 콘솔에 일일/월간 쿼터 제한값 설정 및 초과 시 알림 채널 연결
-- [ ] 사용량 모니터링 대시보드/알림 주기 확인 방법 정리
-- [ ] (선택) 근본적 해결이 필요해지면 ① 지도 타일/API 요청을 백엔드 프록시로 우회해 키를 클라이언트에 노출하지 않는 방식, ② WebView JS SDK 대신 네이티브 지도 SDK(Dev Build 필요, `docs/decisions/0001-expo-go-vs-dev-build.md` 참고)로 전환해 실제 앱 서명 기반 제한을 받는 방식 중 검토
+- `BusanMapView`는 `occupiedDistricts?: Record<string, string>` / `onDistrictPress?: (sigCd: string) => void` prop을 옵셔널로 받는다. 지금은 아무도 값을 넘기지 않아 `src/utils/districtColors.ts#getDistrictFillColor`가 그래프 컬러링 폴백 팔레트만 반환하지만, `useGameStore`의 `occupiedDistricts`가 실제로 채워지면 이 prop에 연결해 국적/팀별 색상으로 교체하면 된다.
+- `BusanMapView`는 `useSocket()`이나 어떤 스토어도 직접 구독하지 않는 controlled 컴포넌트로 유지했다. 실시간 플레이어 위치 같은 데이터가 필요해지면 `spots`/`coords`와 동일한 패턴으로 신규 prop을 추가하면 되고, 소켓 배선 자체는 `map/index.tsx`(또는 상위)에서 처리한다.
 
 ## 실시간 통신 (Socket.io)
 
