@@ -21,12 +21,12 @@ const DISTRICT_FALLBACK_COLORS: Record<string, string> = {
 
 const DEFAULT_FALLBACK_COLOR = '#4FC3F7';
 
-// TODO: 실제 점령(occupy) 기능이 붙으면 국적/팀 코드 → 색상 매핑을 정의하고, occupiedDistricts에
-// sigCd 항목이 있을 때 그 매핑을 우선 사용하도록 이 함수를 확장한다. 지금은 occupiedDistricts가
-// 항상 undefined로 넘어오므로 그래프 컬러링 폴백 팔레트만 쓰인다.
-export function getDistrictFillColor(
-  sigCd: string,
-  _occupiedDistricts?: Record<string, string>,
-): string {
+/** 구 경계선 색 — 채움 팔레트와 같은 곳에 둬서 "구를 어떻게 칠하는가"가 한 파일에 모이게 한다 */
+export const DISTRICT_STROKE_COLOR = DEFAULT_FALLBACK_COLOR;
+
+// TODO: 실제 점령(occupy) 기능이 붙으면 국적/팀 코드 → 색상 매핑을 정의해 이 함수를 확장한다.
+// 점령 상태는 useGameStore.occupiedDistricts가 이미 들고 있으므로(MapHUD가 같은 방식으로 읽는다)
+// DistrictPolygons가 그 스토어를 직접 구독하면 된다 — prop으로 내려보낼 필요가 없다.
+export function getDistrictFillColor(sigCd: string): string {
   return DISTRICT_FALLBACK_COLORS[sigCd] || DEFAULT_FALLBACK_COLOR;
 }
