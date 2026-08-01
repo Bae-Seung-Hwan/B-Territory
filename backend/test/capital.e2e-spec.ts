@@ -120,6 +120,14 @@ describe('Capital (e2e)', () => {
     });
     nonCapitalSpotId = nonCapitalSpot.id;
 
+    // 방어 키(defense:<spotId>)는 spot ID로만 키잉되는데 spot ID가 RESTART IDENTITY로
+    // 다른 e2e 스펙과 겹친다. 앞선 스펙(예: claims)이 같은 ID에 남긴 방어 키가 있으면
+    // 이 스펙의 점령이 방어에 막혀 409가 나므로, 쓰기 전에 선제 정리한다(실행 순서 독립).
+    await Promise.all([
+      redisService.del(`defense:${capitalSpotId}`),
+      redisService.del(`defense:${nonCapitalSpotId}`),
+    ]);
+
     // 이번 주 수도를 지정한다. 후보가 16 하나뿐이라 결정적으로 16이 뽑힌다.
     const designated = await districtsService.designateWeeklyCapital();
     if (!designated) {
