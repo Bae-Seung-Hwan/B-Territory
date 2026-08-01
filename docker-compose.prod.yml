@@ -1,0 +1,120 @@
+# dev용 docker-compose.yml과 컨테이너/볼륨 이름이 겹치지 않도록 별도 프로젝트명을 둔다.
+# (dev는 프로젝트명 b-territory, prod는 b-territory-prod → 볼륨이 서로 다른 실체가 되고
+#  한 호스트에서 두 스택을 동시에 띄울 수 있다.)
+name: b-territory-prod
+
+# 도커 기본 json-file 로그는 용량 무제한이라 EBS를 조용히 채운다 — 전 서비스에 상한을 건다.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+# 앱(backend)과 일회성 시딩(seed)이 공유하는 빌드·환경. 같은 image 태그를 재사용해
+# 이미지를 한 번만 빌드하고 디스크에도 하나만 남긴다(t3.micro EBS 절약).
+x-backend-base: &backend-base
+  build:
+    context: ./backend
+  image: b-territory-prod-backend
+  env_file:
+    - ./backend/.env
+  environment:
+    NODE_ENV: production
+    DB_HOST: postgres
+    REDIS_HOST: redis
+    # Caddyfile이 backend:3000으로 프록시하므로, 서버 .env의 PORT 값과 무관하게 여기서 고정한다.
+    PORT: 3000
+  logging: *default-logging
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: b-territory-prod-postgres
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-b_territory}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-b_territory}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: b-territory-prod-redis
+    # RAM 1GB를 Postgres/Node/Caddy와 나눠 쓰므로 상한을 둔다. Bull 큐 데이터가 유실되면
+    # 안 되므로 eviction 대신 noeviction(한도 초과 시 쓰기 거부)으로 예측 가능하게 실패시킨다.
+    command: ['redis-server', '--maxmemory', '256mb', '--maxmemory-policy', 'noeviction']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  backend:
+    <<: *backend-base
+    container_name: b-territory-prod-backend
+    volumes:
+      # DistrictsService가 부팅 시 data/busan_districts.csv를 읽어 구 가중치를 시딩하고,
+      # CSV를 못 읽으면 fail-fast로 부팅을 중단한다. CSV는 이미지에 없으므로(빌드 컨텍스트
+      # 밖) 호스트 레포의 data/를 읽기전용으로 제공한다. 시딩 완료 후에는 캐시를 DB에서
+      # 로드하지만, 매 부팅 재시딩하므로 상시 필요하다.
+      - ./data:/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 관광지 CSV 일회성 시딩 전용 서비스. profiles로 묶여 있어 `up`으로는 뜨지 않고
+  # `--profile seed run`으로 명시 실행할 때만 동작한다 — 상시 backend에 data 마운트를
+  # 붙이지 않기 위해 분리했다(앱 런타임은 data/ 불필요). backend와 동일 이미지를 쓴다.
+  # 실행: docker compose --env-file backend/.env -f docker-compose.prod.yml --profile seed run --rm seed
+  seed:
+    <<: *backend-base
+    profiles: ['seed']
+    volumes:
+      # seed:spots가 읽는 CSV(scripts 기준 ../../data → 컨테이너 /data)를 호스트 레포의 data/로 제공.
+      - ./data:/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ['npm', 'run', 'seed:spots']
+    restart: 'no'
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: b-territory-prod-caddy
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      # Let's Encrypt 인증서 만료/문제 알림 수신 이메일 (backend/.env 또는 셸 환경에서 주입).
+      # 미설정/빈 값이면 도메인 기반 기본값으로 대체한다 — Caddyfile의 email 지시어에 빈 값이
+      # 들어가면 파싱 에러로 Caddy가 기동하지 못하므로, 컨테이너에는 항상 유효한 주소를 넘긴다.
+      ACME_EMAIL: ${ACME_EMAIL:-admin@b-territory.duckdns.org}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+    logging: *default-logging
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
