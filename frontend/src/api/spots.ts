@@ -14,6 +14,13 @@ export interface Spot {
   sigungucode: string | null;
 }
 
+/** GET /api/spots/:id — 목록 필드 전부 + 상세 필드 */
+export interface SpotDetail extends Spot {
+  overview: string | null;
+  usetime: string | null;
+  homepage: string | null;
+}
+
 interface SpotListResponse {
   items: Spot[];
   total: number;
@@ -28,4 +35,10 @@ export async function fetchBusanSpots(): Promise<Spot[]> {
   if (!res.ok) throw new Error(`관광지 목록 조회 실패: ${res.status}`);
   const data: SpotListResponse = await res.json();
   return data.items;
+}
+
+export async function fetchSpotDetail(id: number): Promise<SpotDetail> {
+  const res = await fetch(`${API_URL}/api/spots/${id}`);
+  if (!res.ok) throw new Error(`관광지 상세 조회 실패: ${res.status}`);
+  return res.json();
 }

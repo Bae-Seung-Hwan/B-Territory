@@ -9,6 +9,7 @@ import { LocateMeButton } from '@/components/map/LocateMeButton';
 import { BrandColors } from '@/constants/theme';
 import { isWithinBusanBounds } from '@/constants/busan';
 import { useLocation } from '@/hooks/use-location';
+import { queryKeys } from '@/lib/query-keys';
 import { fetchBusanSpots } from '@/api/spots';
 
 export default function MapScreen() {
@@ -18,7 +19,7 @@ export default function MapScreen() {
     data: spots,
     isError: isSpotsError,
     refetch: refetchSpots,
-  } = useQuery({ queryKey: ['spots', 'busan'], queryFn: fetchBusanSpots });
+  } = useQuery({ queryKey: queryKeys.spots.busan, queryFn: fetchBusanSpots });
   const { coords } = useLocation();
   const isOutsideBusan = coords != null && !isWithinBusanBounds(coords.latitude, coords.longitude);
   const mapRef = useRef<BusanMapViewHandle>(null);
