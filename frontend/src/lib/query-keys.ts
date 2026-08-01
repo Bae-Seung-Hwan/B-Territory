@@ -8,5 +8,9 @@ export const queryKeys = {
   },
   claims: {
     spot: (spotId: number) => ['claims', 'spot', spotId] as const,
+    district: (sigunguCode: string) => ['claims', 'district', sigunguCode] as const,
+  },
+  districts: {
+    detail: (sigunguCode: string) => ['districts', 'detail', sigunguCode] as const,
   },
 } as const;

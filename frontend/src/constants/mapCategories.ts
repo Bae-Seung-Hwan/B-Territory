@@ -35,6 +35,17 @@ const DEFAULT_CATEGORY_META: CategoryMeta = {
 
 export const DEFAULT_CATEGORY_KEY = 'default';
 
+/**
+ * 어떤 카테고리든 마커가 보이기 시작하는 가장 낮은 줌. 이보다 축소하면 지도에 마커가 하나도 없다.
+ * 값을 따로 적지 않고 위 표에서 파생시키는 이유: 노출 기준을 조정할 때 "마커가 없는 축척"의
+ * 정의가 저절로 따라오게 하기 위함이다(지도는 그 구간에서 구 단위 조작으로 전환된다).
+ */
+export const MIN_CATEGORY_SHOW_ZOOM = Math.min(
+  ...[...Object.values(CATEGORY_META), DEFAULT_CATEGORY_META]
+    .map((meta) => meta.showFromZoom)
+    .filter((zoom): zoom is number => zoom != null),
+);
+
 export function getCategoryMeta(contenttypeid: string | null | undefined): CategoryMeta {
   return (contenttypeid && CATEGORY_META[contenttypeid]) || DEFAULT_CATEGORY_META;
 }

@@ -26,6 +26,7 @@ const DISTRICT_RINGS = (busanSigGeoJson as { features: GeoJsonFeature[] }).featu
     const fillColor = withAlpha(getDistrictFillColor(sigCd), 0.1);
     return outerRingsOf(feature.geometry).map((ring, i) => ({
       key: `${sigCd}-${i}`,
+      sigCd,
       fillColor,
       coordinates: ring.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
     }));
@@ -34,17 +35,32 @@ const DISTRICT_RINGS = (busanSigGeoJson as { features: GeoJsonFeature[] }).featu
 
 const STROKE_COLOR = withAlpha(DISTRICT_STROKE_COLOR, 0.9);
 
-// props가 없어 memo 하나로 리렌더가 완전히 차단된다.
-export const DistrictPolygons = memo(function DistrictPolygons() {
+interface DistrictPolygonsProps {
+  /**
+   * 구 탭을 받을지 여부. 마커가 보이는 축척에서는 꺼서, 마커를 누르려다 그 아래 폴리곤이
+   * 대신 눌리는 일이 없게 한다.
+   */
+  tappable?: boolean;
+  onDistrictPress?: (sigCd: string) => void;
+}
+
+// memo가 있어 tappable/onDistrictPress가 그대로면 팬·줌·GPS 갱신에도 리렌더되지 않는다
+// (좌표는 모듈 스코프에서 한 번만 만들어 둔다).
+export const DistrictPolygons = memo(function DistrictPolygons({
+  tappable = false,
+  onDistrictPress,
+}: DistrictPolygonsProps) {
   return (
     <>
-      {DISTRICT_RINGS.map(({ key, coordinates, fillColor }) => (
+      {DISTRICT_RINGS.map(({ key, sigCd, coordinates, fillColor }) => (
         <Polygon
           key={key}
           coordinates={coordinates}
           strokeWidth={2}
           strokeColor={STROKE_COLOR}
           fillColor={fillColor}
+          tappable={tappable}
+          onPress={tappable ? () => onDistrictPress?.(sigCd) : undefined}
         />
       ))}
     </>

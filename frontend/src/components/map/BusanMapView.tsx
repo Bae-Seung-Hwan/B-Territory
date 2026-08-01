@@ -12,9 +12,11 @@ import {
   BUSAN_MIN_ZOOM_LEVEL,
 } from '@/constants/busan';
 import { zoomFromLongitudeDelta } from '@/utils/geo';
-import { CATEGORY_META, DEFAULT_CATEGORY_KEY } from '@/constants/mapCategories';
+import { CATEGORY_META, DEFAULT_CATEGORY_KEY, MIN_CATEGORY_SHOW_ZOOM } from '@/constants/mapCategories';
 import { CategoryFilterPanel } from './CategoryFilterPanel';
 import { CurrentLocationMarker } from './CurrentLocationMarker';
+import { toSigunguCode } from '@/constants/districts';
+import { DistrictDetailSheet } from './DistrictDetailSheet';
 import { DistrictPolygons } from './DistrictPolygons';
 import { SpotDetailSheet } from './SpotDetailSheet';
 import { buildSpotMarkers, toSpotPoints } from './SpotMarkers';
@@ -99,6 +101,13 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
   const detailSheetRef = useRef<BottomSheetModal>(null);
   const { claim, select: selectClaimSpot } = useSpotClaim();
 
+  // 마커가 하나도 보이지 않는 축척에서만 구 폴리곤을 탭할 수 있게 한다. 마커가 있는 상태에서
+  // 켜두면 마커를 누르려다 그 아래 폴리곤이 대신 눌린다. 기준값을 직접 적지 않고 카테고리
+  // 노출 설정에서 파생시켜(MIN_CATEGORY_SHOW_ZOOM), 노출 기준을 조정해도 저절로 따라오게 한다.
+  const isDistrictMode = zoom < MIN_CATEGORY_SHOW_ZOOM;
+  const [selectedSigCd, setSelectedSigCd] = useState<string | null>(null);
+  const districtSheetRef = useRef<BottomSheetModal>(null);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -141,6 +150,13 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
 
   const handleDetailDismiss = useCallback(() => setSelectedSpot(null), []);
 
+  const handleDistrictPress = useCallback((sigCd: string) => {
+    setSelectedSigCd(sigCd);
+    districtSheetRef.current?.present();
+  }, []);
+
+  const handleDistrictDismiss = useCallback(() => setSelectedSigCd(null), []);
+
   // 좌표 파싱은 관광지 목록이 바뀔 때만 하면 된다. 렌더마다 하면 500개 × 2회 파싱이 반복되고,
   // 매번 새 coordinate 객체가 생겨 SpotMarker의 memo가 무력화된다.
   const spotPoints = useMemo(() => toSpotPoints(spots), [spots]);
@@ -171,7 +187,7 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
         onRegionChangeComplete={handleRegionChangeComplete}
         onMapReady={onReady}
       >
-        <DistrictPolygons />
+        <DistrictPolygons tappable={isDistrictMode} onDistrictPress={handleDistrictPress} />
         {spotMarkers}
         {coords && <CurrentLocationMarker coordinate={coords} />}
       </MapView>
@@ -187,6 +203,12 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
         // 다른 마커를 탭해 선택이 옮겨간 뒤라면 이 시트의 관광지와 맞지 않으므로 숨긴다
         claimText={claim?.spotId === selectedSpot?.id ? (claim?.text ?? null) : null}
         onDismiss={handleDetailDismiss}
+      />
+      <DistrictDetailSheet
+        ref={districtSheetRef}
+        sigCd={selectedSigCd}
+        sigunguCode={selectedSigCd ? toSigunguCode(selectedSigCd) : null}
+        onDismiss={handleDistrictDismiss}
       />
     </View>
   );

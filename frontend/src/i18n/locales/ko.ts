@@ -143,6 +143,14 @@ export const ko = {
       unclaimed: '미점령',
       loadFailed: '점령 현황을 불러오지 못했습니다',
     },
+    districtDetail: {
+      claimTeam: '점령 팀',
+      claimedAt: '점령 확정 시각',
+      notAggregated: '아직 점령 이력이 없습니다',
+      scoreWeight: '점수 가중치',
+      loadFailed: '구 정보를 불러오지 못했습니다',
+      retry: '다시 시도',
+    },
     spotDetail: {
       loadFailed: '상세 정보를 불러오지 못했습니다',
       retry: '다시 시도',

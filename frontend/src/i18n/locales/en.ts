@@ -145,6 +145,14 @@ export const en: Translations = {
       unclaimed: 'Unclaimed',
       loadFailed: 'Failed to load claim status',
     },
+    districtDetail: {
+      claimTeam: 'Holding team',
+      claimedAt: 'Claimed at',
+      notAggregated: 'Never claimed',
+      scoreWeight: 'Score weight',
+      loadFailed: 'Failed to load district info',
+      retry: 'Retry',
+    },
     spotDetail: {
       loadFailed: 'Failed to load details',
       retry: 'Retry',
