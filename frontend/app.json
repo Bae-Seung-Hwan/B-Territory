@@ -8,9 +8,11 @@
     "scheme": "b-territory",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/icon.png"
+      "icon": "./assets/images/icon.png",
+      "bundleIdentifier": "com.bterritory.app"
     },
     "android": {
+      "package": "com.bterritory.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -35,11 +37,19 @@
           }
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e0b841b9-e9dd-46f7-b29f-950f51b178dc"
+      }
+    },
+    "owner": "rsh_17"
   }
 }
