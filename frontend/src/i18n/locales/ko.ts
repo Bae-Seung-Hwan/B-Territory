@@ -121,19 +121,39 @@ export const ko = {
     },
     outOfBounds: '현재 위치가 부산이 아닙니다',
     spotsLoadError: '관광지 정보를 불러오지 못했습니다 · 탭하여 재시도',
+    // TourAPI contenttypeid → 카테고리 이름. 필터 패널과 마커 말풍선이 함께 쓰므로
+    // 어느 한쪽에 종속되지 않도록 map 바로 아래에 둔다. default는 미분류 유형용.
+    categories: {
+      '12': '관광지',
+      '14': '문화시설',
+      '15': '축제공연행사',
+      '25': '여행코스',
+      '28': '레포츠',
+      '32': '숙박',
+      '38': '쇼핑',
+      '39': '음식점',
+      default: '기타',
+    },
+    callout: {
+      address: '주소',
+      claimStatus: '점령 현황',
+    },
+    claim: {
+      claimedBy: '{{team}} 점령 중',
+      unclaimed: '미점령',
+      loading: '점령 현황 확인 중…',
+      loadFailed: '점령 현황을 불러오지 못했습니다',
+    },
+    spotDetail: {
+      loadFailed: '상세 정보를 불러오지 못했습니다',
+      retry: '다시 시도',
+      usetime: '이용 시간',
+      homepage: '홈페이지',
+      noOverview: '등록된 상세 설명이 없습니다',
+    },
     categoryFilter: {
       title: '카테고리',
       all: '전체',
-      categories: {
-        '12': '관광지',
-        '14': '문화시설',
-        '15': '축제공연행사',
-        '25': '여행코스',
-        '28': '레포츠',
-        '32': '숙박',
-        '38': '쇼핑',
-        '39': '음식점',
-      },
     },
   },
   overlay: {

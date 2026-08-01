@@ -54,7 +54,7 @@ export function CategoryFilterPanel({
                 <View style={[styles.dot, { backgroundColor: meta.color }]} />
                 <Text style={styles.emoji}>{meta.emoji}</Text>
                 <Text style={[styles.label, zoomHidden && styles.labelZoomHidden]}>
-                  {t(`map.categoryFilter.categories.${id}`)}
+                  {t(`map.categories.${id}`)}
                 </Text>
               </Pressable>
             );
