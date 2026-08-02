@@ -21,8 +21,15 @@ const DISTRICT_FALLBACK_COLORS: Record<string, string> = {
 
 const DEFAULT_FALLBACK_COLOR = '#4FC3F7';
 
-/** 구 경계선 색 — 채움 팔레트와 같은 곳에 둬서 "구를 어떻게 칠하는가"가 한 파일에 모이게 한다 */
-export const DISTRICT_STROKE_COLOR = DEFAULT_FALLBACK_COLOR;
+// 아래 세 값은 "구를 어떻게 칠하는가"를 채움 팔레트와 한 파일에 모아두기 위해 여기 둔다.
+
+/** 구 경계선 색. 옅은 채움 위에서도 경계가 또렷하게 읽히도록 검정에 가깝게 쓴다. */
+export const DISTRICT_STROKE_COLOR = '#4e4b4b';
+export const DISTRICT_STROKE_WIDTH = 1;
+
+/** 부산 바깥을 덮는 마스크 색 — 구 경계 안쪽만 밝게 남겨 시선을 부산으로 모은다 */
+export const OUTSIDE_MASK_COLOR = '#000000';
+export const OUTSIDE_MASK_ALPHA = 0.45;
 
 // TODO: 실제 점령(occupy) 기능이 붙으면 국적/팀 코드 → 색상 매핑을 정의해 이 함수를 확장한다.
 // 점령 상태는 useGameStore.occupiedDistricts가 이미 들고 있으므로(MapHUD가 같은 방식으로 읽는다)
