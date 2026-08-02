@@ -1,13 +1,16 @@
-import { forwardRef } from 'react';
+import { forwardRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, Linking } from 'react-native';
 import { BottomSheetModal, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { Image } from 'expo-image';
 import { useQuery } from '@tanstack/react-query';
 import { BottomSheet } from '@/components/ui/BottomSheet';
+import { Button } from '@/components/ui/Button';
 import { BrandColors, withAlpha } from '@/constants/theme';
 import { getCategoryMeta } from '@/constants/mapCategories';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchSpotDetail, type Spot } from '@/api/spots';
+import { availableMissions, missionButtonKey } from '@/constants/claimMissions';
+import { useClaimAttempt } from '@/hooks/use-claim-attempt';
 import { useTranslation } from '@/i18n';
 
 interface SpotDetailSheetProps {
@@ -18,6 +21,8 @@ interface SpotDetailSheetProps {
    * 마쳤으므로, 여기서 다시 요청하지 않고 부모가 갖고 있는 값을 그대로 받아 쓴다.
    */
   claimText: string | null;
+  /** 점령 미션(현재는 GPS 방문 인증)이 필요로 하는 현재 위치 */
+  coords: { latitude: number; longitude: number } | null;
   onDismiss: () => void;
 }
 
@@ -27,8 +32,9 @@ interface SpotDetailSheetProps {
  * GET /api/spots/:id로 따로 받아 채운다 — 네트워크를 기다리는 동안 빈 화면을 보이지 않기 위함.
  */
 export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps>(
-  function SpotDetailSheet({ spot, claimText, onDismiss }, ref) {
+  function SpotDetailSheet({ spot, claimText, coords, onDismiss }, ref) {
     const { t } = useTranslation();
+    const { attempt, isPending, reset, feedback, feedbackSpotId } = useClaimAttempt();
     const {
       data: detail,
       isLoading,
@@ -45,6 +51,14 @@ export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps
 
     const meta = getCategoryMeta(spot?.contenttypeid);
     const homepageUrl = extractUrl(detail?.homepage);
+
+    // 시트를 닫으면(spot → null) 지난 시도 결과를 버린다. 같은 관광지를 다시 열었을 때
+    // 이미 지나간 "점령 성공"이 그대로 떠 있으면 방금 성공한 것처럼 보인다.
+    useEffect(() => reset(), [spot?.id, reset]);
+
+    // 결과 문구는 그 시도를 한 관광지에서만 보여준다.
+    const attemptFeedback = feedbackSpotId === spot?.id ? feedback : null;
+    const missions = availableMissions({ coords });
 
     return (
       <BottomSheet ref={ref} snapPoints={['60%', '90%']} onDismiss={onDismiss} scrollable>
@@ -66,6 +80,35 @@ export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps
                 <View style={styles.claimBadge}>
                   <Text style={styles.claimText}>{claimText}</Text>
                 </View>
+              )}
+
+              {/* 자격 판정은 서버가 하므로(방문 인증이면 50m) 여기서는 증빙이 아직 준비되지
+                  않은 경우(blockedReasonKey)만 눌리지 않게 하고 이유를 안내한다. */}
+              {missions.map(({ type, mission, blockedReasonKey }) => (
+                <View key={type}>
+                  <Button
+                    title={t(missionButtonKey(type))}
+                    onPress={() => mission && attempt({ spotId: spot.id, mission })}
+                    disabled={mission == null}
+                    loading={isPending}
+                    style={styles.missionButton}
+                  />
+                  {blockedReasonKey && (
+                    <Text style={styles.missionHint}>{t(blockedReasonKey)}</Text>
+                  )}
+                </View>
+              ))}
+              {attemptFeedback && (
+                <Text
+                  style={[
+                    styles.attemptFeedback,
+                    attemptFeedback.tone === 'success'
+                      ? styles.attemptSuccess
+                      : styles.attemptError,
+                  ]}
+                >
+                  {attemptFeedback.text}
+                </Text>
               )}
 
               {isLoading && <ActivityIndicator style={styles.loading} color={BrandColors.accent} />}
@@ -133,6 +176,11 @@ const styles = StyleSheet.create({
     backgroundColor: withAlpha(BrandColors.accent, 0.15),
   },
   claimText: { color: BrandColors.accent, fontSize: 12, fontWeight: '700' },
+  missionButton: { marginTop: 6 },
+  missionHint: { marginTop: 4, color: '#888', fontSize: 12, textAlign: 'center' },
+  attemptFeedback: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  attemptSuccess: { color: BrandColors.accent },
+  attemptError: { color: BrandColors.danger },
   loading: { marginTop: 12 },
   overview: { color: '#e6e6e6', fontSize: 14, lineHeight: 21, marginTop: 4 },
   field: { gap: 2, marginTop: 6 },

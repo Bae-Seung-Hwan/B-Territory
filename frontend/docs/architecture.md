@@ -98,4 +98,5 @@ src/
 ## 관련 문서
 
 - 실행 환경 전환 계획: [decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md)
+- 점령 미션 확장성(프론트엔드만): [decisions/0002-claim-mission-extensibility.md](./decisions/0002-claim-mission-extensibility.md)
 - 외부 연동(Google Maps, 소켓, Firebase): [integrations.md](./integrations.md)

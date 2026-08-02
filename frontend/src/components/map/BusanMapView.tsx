@@ -202,6 +202,7 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
         spot={selectedSpot}
         // 다른 마커를 탭해 선택이 옮겨간 뒤라면 이 시트의 관광지와 맞지 않으므로 숨긴다
         claimText={claim?.spotId === selectedSpot?.id ? (claim?.text ?? null) : null}
+        coords={coords}
         onDismiss={handleDetailDismiss}
       />
       <DistrictDetailSheet

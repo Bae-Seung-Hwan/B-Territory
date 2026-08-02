@@ -160,6 +160,20 @@ export const en: Translations = {
       homepage: 'Website',
       noOverview: 'No description available',
     },
+    missions: {
+      GPS_VISIT: {
+        button: 'Claim this spot',
+        rejected: 'You must be within 50m of the spot to claim it',
+        blocked: 'Getting your location…',
+      },
+    },
+    claimAttempt: {
+      success: 'Claimed! +{{points}} pts',
+      loginRequired: 'Sign in required',
+      penalty: 'You cannot claim while under a duel-loss penalty',
+      spotNotFound: 'Spot not found',
+      failed: 'Claim failed',
+    },
     categoryFilter: {
       title: 'Categories',
       all: 'All',
