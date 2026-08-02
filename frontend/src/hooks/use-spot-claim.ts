@@ -9,11 +9,16 @@ export interface SpotClaimState {
   spotId: number;
   text: string;
   /**
-   * 조회가 끝난 시각. 마커가 말풍선을 열 시점을 판단하는 신호로 쓴다.
-   * 문구가 아니라 시각을 쓰는 이유는, 같은 마커를 다시 탭했을 때 결과가 이전과 같으면
-   * (예: 계속 미점령) 문구에 변화가 없어 열림 신호를 놓치기 때문이다.
+   * 이 결과를 부른 탭의 일련번호. 마커는 이 값이 바뀔 때만 말풍선을 연다.
+   *
+   * 문구가 아니라 번호인 이유: 같은 마커를 다시 탭했을 때 결과가 이전과 같으면
+   * (예: 계속 미점령) 문구에 변화가 없어 열림 신호를 놓친다.
+   * "조회가 끝난 시각"이 아니라 탭 횟수인 이유: 점령 시도 성공처럼 탭과 무관하게 일어나는
+   * 재조회(invalidate)까지 열림 신호로 잡히면, 상세 시트를 띄우느라 방금 닫은 말풍선을
+   * 곧바로 다시 열게 된다. 그러면 아직 네이티브에서 분리되지 않은 말풍선 뷰를 Google Maps가
+   * 다시 붙이려다 IllegalStateException("child already has a parent")으로 앱이 죽는다.
    */
-  settledAt: number;
+  openSeq: number;
 }
 
 /**
@@ -27,8 +32,10 @@ export interface SpotClaimState {
 export function useSpotClaim() {
   const { t } = useTranslation();
   const [spotId, setSpotId] = useState<number | null>(null);
+  // 탭 횟수. 조회 결과에 실려 마커까지 내려가 말풍선 열림 신호가 된다(SpotClaimState.openSeq 참고).
+  const [openSeq, setOpenSeq] = useState(0);
 
-  const { data, isError, dataUpdatedAt, errorUpdatedAt, refetch } = useQuery({
+  const { data, isError, refetch } = useQuery({
     queryKey: queryKeys.claims.spot(spotId ?? 0),
     queryFn: () => fetchSpotClaim(spotId!),
     enabled: spotId != null,
@@ -43,6 +50,7 @@ export function useSpotClaim() {
   // 같은 마커를 다시 탭하면 id가 그대로라 쿼리가 저절로 다시 돌지 않으므로 명시적으로 refetch한다.
   const select = useCallback(
     (nextSpotId: number) => {
+      setOpenSeq((seq) => seq + 1);
       if (nextSpotId === spotId) refetch();
       else setSpotId(nextSpotId);
     },
@@ -52,7 +60,7 @@ export function useSpotClaim() {
   // 재조회 중에도(직전 결과가 있으면) 문구를 유지한다. isFetching 동안 null로 떨어뜨리면
   // <Callout>이 언마운트되는데, 같은 마커를 다시 탭하는 순간엔 네이티브가 이미 그 Callout으로
   // 말풍선을 연 뒤라, 내용 뷰만 빠진 빈 흰 박스가 남는다. 한 번 뜬 마커의 Callout은 계속
-  // 마운트해 두고, 새 결과가 오면 아래 settledAt 변화로 다시 그리게 한다.
+  // 마운트해 두고, 다시 열지 말지는 위 openSeq가 정한다.
   const settled = spotId != null && (data !== undefined || isError);
   const claim: SpotClaimState | null = settled
     ? {
@@ -62,7 +70,7 @@ export function useSpotClaim() {
           : data?.team
             ? t('map.claim.claimedBy', { team: data.team })
             : t('map.claim.unclaimed'),
-        settledAt: Math.max(dataUpdatedAt, errorUpdatedAt),
+        openSeq,
       }
     : null;
 

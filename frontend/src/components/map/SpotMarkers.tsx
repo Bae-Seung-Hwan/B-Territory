@@ -75,7 +75,7 @@ const SpotMarker = memo(function SpotMarker({
   const [tracksViewChanges, setTracksViewChanges] = useState(true);
   const markerRef = useRef<MapMarker>(null);
   const meta = getCategoryMeta(spot.contenttypeid);
-  const claimSettledAt = claim?.settledAt ?? 0;
+  const claimOpenSeq = claim?.openSeq ?? 0;
 
   // Android 말풍선은 열리는 순간의 내용을 비트맵으로 한 번 찍고 그 뒤로는 갱신되지 않는다
   // (redrawCallout이 네이티브에서 빈 함수이고, 열린 상태로 showInfoWindow()를 다시 불러도
@@ -85,13 +85,18 @@ const SpotMarker = memo(function SpotMarker({
   // 호출보다 늦게 일어나면 닫기가 헛돌고 빈 말풍선이 그대로 굳는 경합이 있었다. 그래서 아예
   // 보여줄 것을 주지 않는다 — claim이 준비되기 전에는 <Callout>을 마운트하지 않으므로
   // (title/description도 없다) 탭해도 열릴 내용이 없고, 조회가 끝난 뒤 여기서 연다.
-  const prevSettledAtRef = useRef(claimSettledAt);
+  //
+  // 열림 신호로 "조회가 끝났다"가 아니라 "탭했다"(openSeq)를 쓰는 것이 중요하다. 점령 시도
+  // 성공 후의 재조회처럼 탭 없이 결과가 갱신되는 경로가 있는데, 그때까지 말풍선을 열면
+  // 상세 시트를 띄우느라 방금 닫은 말풍선을 곧바로 다시 열게 된다 — 아직 네이티브에서 분리되지
+  // 않은 뷰를 Google Maps가 다시 붙이려다 앱이 죽는다(child already has a parent).
+  const prevOpenSeqRef = useRef(claimOpenSeq);
   useEffect(() => {
-    const settledChanged = prevSettledAtRef.current !== claimSettledAt;
-    prevSettledAtRef.current = claimSettledAt;
+    const openRequested = prevOpenSeqRef.current !== claimOpenSeq;
+    prevOpenSeqRef.current = claimOpenSeq;
     // 마운트 직후엔 열지 않는다 — 이미 조회된 마커가 팬으로 언마운트됐다 다시 마운트될 때
     // 탭하지도 않은 말풍선이 저절로 열리는 걸 막기 위함.
-    if (!settledChanged || !claimSettledAt) return;
+    if (!openRequested || !claimOpenSeq) return;
 
     // 이미 열려 있는 말풍선은 내용이 바뀌어도 다시 그려지지 않으므로 일단 닫는다(닫혀 있으면 무해).
     // 열기는 다음 틱으로 미룬다 — 같은 틱에 닫고 열면 네이티브 명령 큐에서 상쇄되고,
@@ -99,7 +104,7 @@ const SpotMarker = memo(function SpotMarker({
     markerRef.current?.hideCallout();
     const timer = setTimeout(() => markerRef.current?.showCallout(), 0);
     return () => clearTimeout(timer);
-  }, [claimSettledAt]);
+  }, [claimOpenSeq]);
 
   const handleLayout = useCallback(() => setTracksViewChanges(false), []);
 
