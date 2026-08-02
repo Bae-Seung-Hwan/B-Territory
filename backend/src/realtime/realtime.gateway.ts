@@ -24,6 +24,7 @@ import {
   ENCOUNTER_COOLDOWN_TTL,
   NOTIFICATION_QUEUE_TTL,
 } from '../duels/constants';
+import { ErrorCode, errBody } from '../common/errors/error-code';
 
 interface AuthenticatedUser {
   id: string;
@@ -68,7 +69,13 @@ export class RealtimeGateway
 
   private getUser(client: Socket): AuthenticatedUser {
     const user = (client.data as SocketData).user;
-    if (!user) throw new WsException('인증되지 않은 연결입니다.');
+    if (!user)
+      throw new WsException(
+        errBody(
+          ErrorCode.UNAUTHENTICATED_CONNECTION,
+          '인증되지 않은 연결입니다.',
+        ),
+      );
     return user;
   }
 
