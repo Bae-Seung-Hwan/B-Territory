@@ -19,6 +19,11 @@ export interface SpotDetail extends Spot {
   overview: string | null;
   usetime: string | null;
   homepage: string | null;
+  // PR #30(백엔드, 다국어 설명)부터 내려주는 필드. 머지 전 백엔드에서는 undefined로 온다 —
+  // description을 항상 optional chaining으로 읽고 overview로 폴백해야 하는 이유.
+  overviewEn?: string | null;
+  description?: string | null;
+  lang?: 'ko' | 'en';
 }
 
 interface SpotListResponse {
@@ -37,7 +42,10 @@ export async function fetchBusanSpots(): Promise<Spot[]> {
   return data.items;
 }
 
-export async function fetchSpotDetail(id: number): Promise<SpotDetail> {
-  const { data } = await apiClient.get<SpotDetail>(`/api/spots/${id}`);
+/** lang: 'ko'/'en' 또는 국가코드. 생략 시 백엔드 기본(ko) — 구 백엔드는 이 파라미터를 무시한다. */
+export async function fetchSpotDetail(id: number, lang?: string): Promise<SpotDetail> {
+  const { data } = await apiClient.get<SpotDetail>(`/api/spots/${id}`, {
+    params: lang ? { lang } : undefined,
+  });
   return data;
 }

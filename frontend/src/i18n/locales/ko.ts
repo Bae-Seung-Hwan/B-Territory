@@ -173,6 +173,7 @@ export const ko = {
       loginRequired: '로그인이 필요합니다',
       penalty: '결투 패배 페널티 중에는 점령할 수 없습니다',
       spotNotFound: '관광지를 찾을 수 없습니다',
+      dailyLimit: '이 관광지는 오늘 이미 점령했습니다 (KST 자정에 초기화)',
       failed: '점령에 실패했습니다',
     },
     categoryFilter: {

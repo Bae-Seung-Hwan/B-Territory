@@ -5,10 +5,21 @@ export interface SpotClaim {
   spotId: number;
   team: string | null;
   claimedAt: string | null;
+  // PR #30(백엔드, 다국어 설명)부터 내려주는 필드. 머지 전 백엔드에서는 undefined로 온다.
+  spot?: {
+    id: number;
+    title: string;
+    overview: string | null;
+    overviewEn: string | null;
+    description: string | null;
+  } | null;
 }
 
-export async function fetchSpotClaim(spotId: number): Promise<SpotClaim> {
-  const { data } = await apiClient.get<SpotClaim>(`/api/claims/spots/${spotId}`);
+/** lang: 'ko'/'en' 또는 국가코드. 생략 시 백엔드 기본(ko) — 구 백엔드는 이 파라미터를 무시한다. */
+export async function fetchSpotClaim(spotId: number, lang?: string): Promise<SpotClaim> {
+  const { data } = await apiClient.get<SpotClaim>(`/api/claims/spots/${spotId}`, {
+    params: lang ? { lang } : undefined,
+  });
   return data;
 }
 

@@ -172,6 +172,7 @@ export const en: Translations = {
       loginRequired: 'Sign in required',
       penalty: 'You cannot claim while under a duel-loss penalty',
       spotNotFound: 'Spot not found',
+      dailyLimit: 'You already claimed this spot today (resets at midnight KST)',
       failed: 'Claim failed',
     },
     categoryFilter: {

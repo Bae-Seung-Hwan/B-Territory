@@ -3,6 +3,7 @@ import { isAxiosError } from 'axios';
 import { attemptClaim, type ClaimMission } from '@/api/claims';
 import { missionRejectedKey } from '@/constants/claimMissions';
 import { queryKeys } from '@/lib/query-keys';
+import { getApiErrorCode } from '@/lib/api-errors';
 import { useTranslation } from '@/i18n';
 
 type Translate = ReturnType<typeof useTranslation>['t'];
@@ -26,13 +27,15 @@ interface AttemptVariables {
  * queryKeys.claims.spot을 보고 있어, 방금 내 팀이 가져갔다는 사실이 그대로 반영된다.
  */
 export function useClaimAttempt() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const queryClient = useQueryClient();
 
   const { mutate, data, error, variables, isPending, reset } = useMutation({
     mutationFn: ({ spotId, mission }: AttemptVariables) => attemptClaim(spotId, mission),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.claims.spot(result.spotId) });
+      // queryKeys.claims.spot이 lang을 키에 포함하므로(SpotClaim에 언어별 description이 실림),
+      // 지금 locale 기준 키만 무효화한다 — 다른 locale로 조회한 캐시가 있어도 이 세션에선 안 쓴다.
+      queryClient.invalidateQueries({ queryKey: queryKeys.claims.spot(result.spotId, locale) });
     },
   });
 
@@ -59,9 +62,19 @@ function errorMessage(
 ): string {
   if (!isAxiosError(error)) return t('map.claimAttempt.failed');
 
+  // code가 있으면(PR #30 이후 백엔드) 상태코드만으론 못 갈랐던 409(방어 중 vs 일일 점령
+  // 제한)를 정확히 나눈다. code가 없는 구 백엔드는 아래 상태코드 기반 분기로 폴백한다.
+  const code = getApiErrorCode(error);
+  if (code === 'DAILY_CLAIM_LIMIT') return t('map.claimAttempt.dailyLimit');
+  if (code === 'DEFENSE_ACTIVE') {
+    // 어느 팀이 몇 초 남았는지는 서버 메시지에만 있어 번역하지 않고 그대로 보여준다.
+    return serverMessage(error.response?.data) ?? t('map.claimAttempt.failed');
+  }
+
   // 서버 메시지는 한국어 고정이라, 상태 코드만으로 원인이 특정되는 경우엔 번역문을 쓴다.
-  // 409만 예외로 서버 메시지를 그대로 보여준다 — "방어 시간 중"과 "일일 점령 제한"이 같은
-  // 코드를 쓰고 남은 방어 시간(초)까지 문구에 들어 있어, 코드만으로는 구분할 수 없다.
+  // 409만 예외로 서버 메시지를 그대로 보여준다 — code가 없는 구 백엔드에서는 "방어 시간 중"과
+  // "일일 점령 제한"이 같은 상태코드를 쓰고 남은 방어 시간(초)까지 문구에 들어 있어, 상태
+  // 코드만으로는 구분할 수 없다.
   switch (error.response?.status) {
     case 400:
       // 자격 미달의 사유는 미션마다 다르다(방문 인증이면 거리, 퀴즈면 오답 …).

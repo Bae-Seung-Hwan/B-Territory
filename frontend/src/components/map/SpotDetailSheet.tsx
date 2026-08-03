@@ -33,7 +33,7 @@ interface SpotDetailSheetProps {
  */
 export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps>(
   function SpotDetailSheet({ spot, claimText, coords, onDismiss }, ref) {
-    const { t } = useTranslation();
+    const { t, locale } = useTranslation();
     const { attempt, isPending, reset, feedback, feedbackSpotId } = useClaimAttempt();
     const {
       data: detail,
@@ -41,8 +41,8 @@ export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps
       isError,
       refetch,
     } = useQuery({
-      queryKey: queryKeys.spots.detail(spot?.id ?? 0),
-      queryFn: () => fetchSpotDetail(spot!.id),
+      queryKey: queryKeys.spots.detail(spot?.id ?? 0, locale),
+      queryFn: () => fetchSpotDetail(spot!.id, locale),
       enabled: spot != null,
       // 설명·이용시간·홈페이지는 사실상 고정값이라 시트를 다시 열 때마다 받아올 이유가 없다
       // (점령 현황과 달리 실시간성이 필요 없다).
@@ -123,7 +123,11 @@ export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps
               {detail && (
                 <>
                   <Text style={styles.overview}>
-                    {detail.overview?.trim() || t('map.spotDetail.noOverview')}
+                    {/* description은 lang에 맞춰 백엔드가 골라준 텍스트(영문 없으면 한국어로
+                        폴백). 구 백엔드(PR #30 머지 전)는 이 필드가 없으므로 overview로 폴백한다. */}
+                    {detail.description?.trim() ||
+                      detail.overview?.trim() ||
+                      t('map.spotDetail.noOverview')}
                   </Text>
 
                   {detail.usetime && (

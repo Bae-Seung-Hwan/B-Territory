@@ -30,14 +30,14 @@ export interface SpotClaimState {
  * 마커 수만큼 생기던 쿼리 구독도 하나로 줄어든다.
  */
 export function useSpotClaim() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [spotId, setSpotId] = useState<number | null>(null);
   // 탭 횟수. 조회 결과에 실려 마커까지 내려가 말풍선 열림 신호가 된다(SpotClaimState.openSeq 참고).
   const [openSeq, setOpenSeq] = useState(0);
 
   const { data, isError, refetch } = useQuery({
-    queryKey: queryKeys.claims.spot(spotId ?? 0),
-    queryFn: () => fetchSpotClaim(spotId!),
+    queryKey: queryKeys.claims.spot(spotId ?? 0, locale),
+    queryFn: () => fetchSpotClaim(spotId!, locale),
     enabled: spotId != null,
     // 점령 상태는 수시로 바뀌므로 탭할 때마다 항상 새로 받는다. 캐시를 남기면 다음 탭에서
     // 낡은 값이 먼저 보인다.
