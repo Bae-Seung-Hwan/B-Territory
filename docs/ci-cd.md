@@ -31,7 +31,9 @@
    mkdir -p ~/actions-runner && cd ~/actions-runner
    curl -o actions-runner-linux-x64.tar.gz -L <GitHub가_준_URL>
    tar xzf actions-runner-linux-x64.tar.gz
-   ./config.sh --url https://github.com/<owner>/<repo> --token <GitHub가_준_토큰>
+   # --labels b-territory-prod 는 필수 — deploy.yml의 runs-on: [self-hosted, b-territory-prod]와
+   # 일치해야 이 러너가 배포 job을 받는다. 라벨이 다르면 job이 큐에 걸린 채 실행되지 않는다.
+   ./config.sh --url https://github.com/<owner>/<repo> --token <GitHub가_준_토큰> --labels b-territory-prod
    ```
 
 2. **서비스로 등록**해 부팅 시 자동 시작 + 상시 대기하게 한다(터미널을 닫아도 유지):

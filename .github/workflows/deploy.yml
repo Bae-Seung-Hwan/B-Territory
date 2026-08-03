@@ -23,7 +23,13 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted]
+    # 이 레포 전용 러너에만 잡히도록 고유 라벨을 요구한다. 조직/다른 레포가 self-hosted 러너를
+    # 추가로 등록해도, DEPLOY_DIR·docker가 없는 엉뚱한 러너로 디스패치되지 않는다.
+    # (러너 등록 시 config.sh --labels b-territory-prod 로 같은 라벨을 부여해야 한다. docs/ci-cd.md)
+    runs-on: [self-hosted, b-territory-prod]
+    # 멈춘 build/migration이 concurrency 락(deploy-develop)을 기본 6시간 동안 쥐고 있어 이후 배포를
+    # 통째로 막는 것을 방지한다. 정상 배포는 수 분이라 20분이면 충분하다.
+    timeout-minutes: 20
     env:
       # 서버의 상시 배포 디렉터리(레포 clone). backend/.env·data/·Caddyfile 등 git에 없는
       # 서버 전용 파일이 여기 있으므로, 러너 워크스페이스가 아니라 이 경로에서 직접 배포한다.
