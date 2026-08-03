@@ -22,6 +22,13 @@ export class CapitalDesignation {
   @Column()
   sigunguCode: string;
 
+  // 이번 주(월요일 00:00 KST) 시작 시각 — 주 단위 유일 키. 이 컬럼의 UNIQUE 제약이
+  // "이번 주 수도"를 DB에서 원자적으로 1행만 확정하는 승자 결정 수단이다. 동시 지정/재시도가
+  // 겹쳐도 하나의 insert만 성공하고 나머지는 unique 위반으로 걸러진다 — Redis 락과 DB insert의
+  // 비원자성으로 생기던 "유령 수도"(Redis엔 잡혔지만 DB 이력엔 없는 상태)를 원천 차단한다.
+  @Column({ type: 'timestamptz', unique: true })
+  weekStart: Date;
+
   // district_claim_history.capturedAt과 동일하게 timestamptz로 저장 — 최신 지정 판정이
   // DB 세션 타임존과 무관하게 절대 시각을 보존하도록 한다.
   @CreateDateColumn({ type: 'timestamptz' })

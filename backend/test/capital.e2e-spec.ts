@@ -207,4 +207,38 @@ describe('Capital (e2e)', () => {
     expect(body.pointsAwarded).toBe(100);
     expect(body.teamPointsAwarded).toBe(100);
   });
+
+  it('동시 지정 경합 → weekStart UNIQUE로 정확히 1행만 확정, Redis도 DB와 일치 (유령 수도 방지)', async () => {
+    // 이번 주 이력·Redis 캐시를 비우고 여러 지정을 동시에 실행한다. 예전 구현(Redis 주 락으로
+    // 승자 결정)에선 락만 잡히고 DB insert가 없는 "유령 수도"가 생길 수 있었다. 이제 승자는
+    // weekStart UNIQUE insert 성공으로만 결정되므로, 경합 패자는 unique 위반 경로로 확정된
+    // 행을 채택하고 DB엔 정확히 1행만 남아야 한다 — Redis는 항상 그 DB 상태를 뒤따른다.
+    await dataSource.query(
+      'TRUNCATE TABLE "capital_designations" RESTART IDENTITY',
+    );
+    await redisService.del('capital:current');
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        districtsService.designateWeeklyCapital(),
+      ),
+    );
+
+    // 후보가 16 하나뿐이라 경합자 전원이 16을 확정해야 한다.
+    for (const r of results) expect(r?.sigunguCode).toBe(capitalSigungucode);
+
+    // DB엔 이번 주 이력이 정확히 1행 — 경합 패자는 insert하지 않는다.
+    const count = await dataSource.query<{ count: string }[]>(
+      'SELECT COUNT(*)::int AS count FROM capital_designations',
+    );
+    expect(Number(count[0].count)).toBe(1);
+
+    // Redis 현재값이 DB 확정 수도와 일치 — 락만 잡히고 DB엔 없는 유령 수도가 아니다.
+    const dbRow = await dataSource.query<{ sigunguCode: string }[]>(
+      'SELECT "sigunguCode" FROM capital_designations LIMIT 1',
+    );
+    const redisCurrent = await redisService.get('capital:current');
+    expect(redisCurrent).toBe(dbRow[0].sigunguCode);
+    expect(redisCurrent).toBe(capitalSigungucode);
+  });
 });

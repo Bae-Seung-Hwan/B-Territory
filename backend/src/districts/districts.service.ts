@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, MoreThanOrEqual } from 'typeorm';
+import { Repository, DataSource, QueryFailedError } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
@@ -15,11 +15,10 @@ export const CAPITAL_MULTIPLIER = 1.2;
 // 현재 수도(sigunguCode)를 담는 Redis 공유 키 — 모든 인스턴스가 이 값을 단일 소스로 읽는다.
 // 인메모리 캐시로 두면 수도를 지정한 인스턴스만 갱신돼 다른 인스턴스가 최대 일주일간 stale해진다.
 const CAPITAL_CURRENT_KEY = 'capital:current';
-// 이번 주 지정을 여러 인스턴스가 동시에 시도할 때 하나만 확정하도록 하는 주(week) 락 키.
-const CAPITAL_WEEK_LOCK_KEY = (weekStartIso: string) =>
-  `capital:week:${weekStartIso}`;
 // 주 1회 갱신되므로 2주 TTL이면 정상 운영 중엔 만료되지 않고, 지정이 멈추면 자동 정리된다.
 const CAPITAL_TTL_SEC = 14 * 24 * 60 * 60;
+// Postgres unique_violation — weekStart UNIQUE 충돌(동시 지정 경합 패자) 판정에 사용.
+const PG_UNIQUE_VIOLATION = '23505';
 
 interface DistrictCsvRow {
   sigunguCode: string;
@@ -258,8 +257,11 @@ export class DistrictsService implements OnModuleInit {
    *
    * - 멱등: 이번 주(월요일 00:00 KST 기준)에 이미 지정됐으면 재지정하지 않는다(DB 이력 기준).
    *   Bull 재시도(attempts:3)로 프로세서가 다시 실행돼도 수도가 주중에 바뀌지 않는다.
-   * - 동시성: 다중 인스턴스가 같은 주에 동시에 지정을 시도하면 Redis 주(week) 락(SET NX)으로
-   *   하나만 확정하고 나머지는 그 결과를 채택한다 — 이력 중복/수도 불일치를 막는다.
+   * - 동시성/원자성: 이번 주 확정은 오직 weekStart UNIQUE 컬럼의 insert 성공으로만 이뤄진다.
+   *   다중 인스턴스가 같은 주에 동시에 지정하거나 재시도가 겹쳐도 하나의 insert만 성공하고
+   *   나머지는 unique 위반으로 걸러진 뒤 확정된 행을 채택한다. Redis(capital:current)는
+   *   "확정된 DB 상태"를 반영하는 캐시일 뿐 승자 결정 권한이 없어, 락은 잡혔지만 DB 이력엔
+   *   없는 "유령 수도" 상태가 생기지 않는다(일시적 DB 실패는 예외 전파 → Bull 재시도로 흡수).
    * - 후보 제한: 좌표 있는 spot을 최소 1개 가진 구 중에서만 뽑는다. spot이 없는 구가 수도가
    *   되면 그 주 내내 버프가 아무에게도 적용되지 않기 때문.
    */
@@ -267,10 +269,7 @@ export class DistrictsService implements OnModuleInit {
     now: Date = new Date(),
   ): Promise<{ sigunguCode: string } | null> {
     const weekStart = startOfKstWeek(now);
-    const existing = await this.capitalRepo.findOne({
-      where: { designatedAt: MoreThanOrEqual(weekStart) },
-      order: { designatedAt: 'DESC' },
-    });
+    const existing = await this.capitalRepo.findOne({ where: { weekStart } });
     if (existing) {
       await this.redis.set(
         CAPITAL_CURRENT_KEY,
@@ -304,24 +303,27 @@ export class DistrictsService implements OnModuleInit {
     }
     const { sigunguCode } = picked[0];
 
-    // 이번 주 지정 권한을 Redis NX로 확정(픽한 sigunguCode를 락 값으로 저장). 진 인스턴스는
-    // 이긴 인스턴스가 저장한 값을 채택하고 DB 이력은 추가하지 않는다.
-    const weekLockKey = CAPITAL_WEEK_LOCK_KEY(weekStart.toISOString());
-    const won = await this.redis.tryAcquireLock(
-      weekLockKey,
-      CAPITAL_TTL_SEC,
-      sigunguCode,
-    );
-    if (!won) {
-      const winner = (await this.redis.get(weekLockKey)) ?? sigunguCode;
-      await this.redis.set(CAPITAL_CURRENT_KEY, winner, CAPITAL_TTL_SEC);
-      this.logger.log(
-        `이번 주 수도 동시 지정 경합 — 다른 인스턴스 결과 채택: ${winner}`,
-      );
-      return { sigunguCode: winner };
+    // weekStart UNIQUE insert가 이번 주 승자를 원자적으로 확정한다. insert가 성공한 뒤에만
+    // Redis 현재값을 세팅하므로 Redis는 항상 DB 이력을 뒤따른다. unique 위반이면 다른
+    // 인스턴스/재시도가 먼저 확정한 것이므로 그 행을 읽어 채택한다.
+    try {
+      await this.capitalRepo.insert({ sigunguCode, weekStart });
+    } catch (err) {
+      if (
+        err instanceof QueryFailedError &&
+        (err.driverError as { code?: string })?.code === PG_UNIQUE_VIOLATION
+      ) {
+        const winner = await this.capitalRepo.findOne({ where: { weekStart } });
+        const winnerCode = winner?.sigunguCode ?? sigunguCode;
+        await this.redis.set(CAPITAL_CURRENT_KEY, winnerCode, CAPITAL_TTL_SEC);
+        this.logger.log(
+          `이번 주 수도 동시 지정 경합 — 확정된 수도 채택: ${winnerCode}`,
+        );
+        return { sigunguCode: winnerCode };
+      }
+      throw err;
     }
 
-    await this.capitalRepo.insert({ sigunguCode });
     await this.redis.set(CAPITAL_CURRENT_KEY, sigunguCode, CAPITAL_TTL_SEC);
     this.logger.log(
       `이번 주 수도 지정: ${sigunguCode} — 배수 ${CAPITAL_MULTIPLIER}x`,
