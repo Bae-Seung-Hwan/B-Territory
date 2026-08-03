@@ -1,4 +1,8 @@
-import { secondsUntilKstMidnight } from './kst.util';
+import {
+  secondsUntilKstMidnight,
+  kstDateString,
+  kstYyyymmdd,
+} from './kst.util';
 
 describe('secondsUntilKstMidnight', () => {
   it('KST 23:59:30에는 30초를 반환한다', () => {
@@ -24,5 +28,29 @@ describe('secondsUntilKstMidnight', () => {
     expect(
       secondsUntilKstMidnight(new Date('2026-07-16T14:59:59.999Z')),
     ).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('kstDateString', () => {
+  it('UTC 자정 직후를 KST 날짜(+9h)로 넘긴다', () => {
+    // 2026-08-03T15:30Z → KST 2026-08-04T00:30 → 8/4
+    expect(kstDateString(new Date('2026-08-03T15:30:00Z'))).toBe('2026-08-04');
+  });
+
+  it('KST 자정 직전은 전날로 판정한다', () => {
+    // 2026-08-03T14:30Z → KST 2026-08-03T23:30 → 8/3
+    expect(kstDateString(new Date('2026-08-03T14:30:00Z'))).toBe('2026-08-03');
+  });
+});
+
+describe('kstYyyymmdd', () => {
+  it('KST 날짜를 YYYYMMDD로 압축한다', () => {
+    expect(kstYyyymmdd(new Date('2026-08-03T15:30:00Z'))).toBe('20260804');
+  });
+
+  it('offsetDays로 과거/미래 날짜를 계산한다', () => {
+    const base = new Date('2026-08-03T15:30:00Z'); // KST 8/4
+    expect(kstYyyymmdd(base, -1)).toBe('20260803');
+    expect(kstYyyymmdd(base, 30)).toBe('20260903');
   });
 });

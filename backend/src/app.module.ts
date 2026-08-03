@@ -15,6 +15,7 @@ import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
+import { FestivalsModule } from './festivals/festivals.module';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { DistrictsModule } from './districts/districts.module';
     RealtimeModule,
     ScoresModule,
     DistrictsModule,
+    FestivalsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
