@@ -71,6 +71,11 @@ export const en: Translations = {
       confirmButton: "I've verified my email",
       notYetTitle: 'Not verified yet',
       notYetMessage: 'Please tap the verification link in your email first, then try again.',
+      changeEmail: 'Use a different email',
+      changeEmailConfirmTitle: 'Sign up with a different email?',
+      changeEmailConfirmMessage:
+        "The account created with this email will be deleted, and you'll need to start over.",
+      cancel: 'Cancel',
     },
     errors: {
       title: 'Error',

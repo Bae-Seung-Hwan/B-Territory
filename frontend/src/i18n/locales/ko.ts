@@ -67,6 +67,10 @@ export const ko = {
       confirmButton: '인증 완료했어요',
       notYetTitle: '아직 인증되지 않았어요',
       notYetMessage: '메일함에서 인증 링크를 먼저 눌러주세요.\n인증 후 다시 시도해주세요.',
+      changeEmail: '다른 이메일로 가입',
+      changeEmailConfirmTitle: '다른 이메일로 다시 가입하시겠어요?',
+      changeEmailConfirmMessage: '지금 이메일로 만든 계정은 삭제되고, 처음부터 다시 입력하게 됩니다.',
+      cancel: '취소',
     },
     errors: {
       title: '오류',
