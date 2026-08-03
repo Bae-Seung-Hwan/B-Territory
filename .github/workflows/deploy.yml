@@ -1,0 +1,70 @@
+name: Deploy (develop → EC2)
+
+# develop에 push되면 EC2에 설치된 self-hosted 러너가 프로덕션 스택을 재빌드·재기동한다.
+# 러너가 서버 안에서 GitHub로 아웃바운드 폴링만 하므로 인바운드 SSH(22) 개방이 필요 없다
+# (보안그룹의 "22=관리자 IP만" 규칙을 그대로 유지). 상세 셋업: docs/ci-cd.md
+on:
+  push:
+    branches: [develop]
+    # 백엔드 스택에 영향을 주는 변경일 때만 배포한다(프론트 전용 커밋은 재배포 불필요).
+    paths:
+      - 'backend/**'
+      - 'docker-compose.prod.yml'
+      - 'Caddyfile'
+      - 'data/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+# 배포가 겹치면 빌드/마이그레이션이 충돌하므로 한 번에 하나만. 진행 중인 배포는 끊지 않는다
+# (마이그레이션 도중 취소는 위험).
+concurrency:
+  group: deploy-develop
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted]
+    env:
+      # 서버의 상시 배포 디렉터리(레포 clone). backend/.env·data/·Caddyfile 등 git에 없는
+      # 서버 전용 파일이 여기 있으므로, 러너 워크스페이스가 아니라 이 경로에서 직접 배포한다.
+      DEPLOY_DIR: /home/ubuntu/B-Territory
+      COMPOSE: docker compose --env-file backend/.env -f docker-compose.prod.yml
+    steps:
+      # actions/checkout을 쓰지 않는다 — 체크아웃하면 러너 워크스페이스에 받아지는데, 배포는
+      # backend/.env·data/가 있는 DEPLOY_DIR에서 돌아야 하기 때문. 그 디렉터리에서 직접 pull한다.
+      - name: Sync develop
+        run: |
+          cd "$DEPLOY_DIR"
+          git fetch --prune origin develop
+          # 서버 클론을 develop과 정확히 일치시킨다. 추적 파일의 서버 로컬 수정은 버려지지만,
+          # gitignore 대상(backend/.env 등)은 보존된다. 서버는 develop의 순수 반영이어야 하므로 의도된 동작.
+          git reset --hard origin/develop
+
+      - name: Build backend image
+        run: |
+          cd "$DEPLOY_DIR"
+          $COMPOSE build
+
+      - name: Run migrations (앱 기동 전)
+        # 새 스키마를 앱보다 먼저 적용한다(migrate-before-serve). run --rm 일회성 컨테이너는
+        # 앱 부팅(main.ts) 대신 migration:run만 실행하므로, 최초 배포(빈 DB)에서도
+        # DistrictsService의 부팅 시 시딩(테이블 필요)에 걸리지 않고 테이블을 먼저 만든다.
+        # depends_on으로 postgres가 healthy해질 때까지 기다린다. migration:run은 멱등이라
+        # 반영할 마이그레이션이 없으면 그대로 통과한다.
+        run: |
+          cd "$DEPLOY_DIR"
+          $COMPOSE run --rm backend npm run migration:run
+
+      - name: Up (backend + caddy)
+        run: |
+          cd "$DEPLOY_DIR"
+          $COMPOSE up -d --remove-orphans
+
+      - name: Prune dangling images
+        # 매 배포의 이전 빌드 레이어가 쌓여 EBS를 채우는 것을 막는다(t3.micro).
+        if: always()
+        run: docker image prune -f
+
+# 참고: 관광지 CSV 시딩(--profile seed)은 자동화하지 않는다 — 데이터 변경이 드물고
+# spot_claims 정리 등 수동 확인이 필요하다(backend/docs/DEPLOY_CHECKLIST.md). 데이터 갱신 시
+# 서버에서 수동 실행: docker compose --env-file backend/.env -f docker-compose.prod.yml --profile seed run --rm seed
