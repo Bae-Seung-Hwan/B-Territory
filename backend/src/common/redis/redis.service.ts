@@ -89,6 +89,46 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.releaseLock(this.dailyClaimKey(userId, spotId), token);
   }
 
+  private missionDailyKey(
+    mission: string,
+    userId: string,
+    spotId: number,
+  ): string {
+    return `mission:${mission}:daily:${userId}:${spotId}`;
+  }
+
+  /**
+   * 미션(사진·리뷰) 일일 게이트 — 관광지별 인당 하루 1회. markDailyClaim과 동일한
+   * 토큰 기반 SET NX/CAS 패턴이라, 이후 단계 실패 시 clearMissionDaily로 이번 요청이
+   * 만든 키만 롤백한다(자정 경계에서 다음날 키를 지우지 않기 위함).
+   */
+  async markMissionDaily(
+    mission: string,
+    userId: string,
+    spotId: number,
+    ttlSeconds: number,
+  ): Promise<{ created: boolean; token: string }> {
+    const token = randomUUID();
+    const created = await this.tryAcquireLock(
+      this.missionDailyKey(mission, userId, spotId),
+      ttlSeconds,
+      token,
+    );
+    return { created, token };
+  }
+
+  async clearMissionDaily(
+    mission: string,
+    userId: string,
+    spotId: number,
+    token: string,
+  ): Promise<void> {
+    await this.releaseLock(
+      this.missionDailyKey(mission, userId, spotId),
+      token,
+    );
+  }
+
   /**
    * 패턴에 맞는 키 일괄 삭제 (KEYS와 달리 SCAN 기반이라 서버를 블로킹하지 않음).
    * 더 이상 소유 코드가 없는 leftover 키 정리용. 삭제한 키 수를 반환한다.
