@@ -13,6 +13,7 @@ import { RedisModule } from './common/redis/redis.module';
 import { ClaimsModule } from './claims/claims.module';
 import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { ChatModule } from './chat/chat.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
 
@@ -63,6 +64,7 @@ import { DistrictsModule } from './districts/districts.module';
     ClaimsModule,
     DuelsModule,
     RealtimeModule,
+    ChatModule,
     ScoresModule,
     DistrictsModule,
   ],

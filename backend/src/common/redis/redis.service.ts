@@ -155,6 +155,30 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * 고정 윈도우 레이트리밋 — windowSeconds 동안 limit회까지 허용. 허용되면 true.
+   * INCR + (첫 요청에만) EXPIRE를 Lua로 원자 실행해, EXPIRE 누락으로 키가 영구히
+   * 남는 경합을 막는다. 채팅/위치 릴레이 도배 방지용.
+   */
+  async consumeRateLimit(
+    key: string,
+    limit: number,
+    windowSeconds: number,
+  ): Promise<boolean> {
+    const lua = `
+      local c = redis.call('INCR', KEYS[1])
+      if c == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])) end
+      return c
+    `;
+    const count = (await this.client.eval(
+      lua,
+      1,
+      key,
+      String(windowSeconds),
+    )) as number;
+    return count <= limit;
+  }
+
   private static readonly GEO_KEY = 'geo:users';
   // GEO 멤버 자체는 개별 TTL을 가질 수 없어, 정리를 위해 마지막 갱신 시각을 별도 ZSET에 기록해둔다.
   private static readonly LASTSEEN_KEY = 'geo:lastseen';

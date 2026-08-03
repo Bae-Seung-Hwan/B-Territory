@@ -6,14 +6,20 @@ import {
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
-  WsException,
 } from '@nestjs/websockets';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { Namespace, Socket } from 'socket.io';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
 import { sortedPairKey } from '../common/utils/pair-key.util';
+import {
+  SocketData,
+  authenticateSocket,
+  getSocketUser,
+  setSocketUser,
+  wsValidationPipe,
+} from '../common/ws/ws-auth';
 import { DuelsService } from '../duels/duels.service';
 import { LocationUpdateDto } from '../duels/dto/location-update.dto';
 import { DuelRequestDto } from '../duels/dto/duel-request.dto';
@@ -24,24 +30,6 @@ import {
   ENCOUNTER_COOLDOWN_TTL,
   NOTIFICATION_QUEUE_TTL,
 } from '../duels/constants';
-
-interface AuthenticatedUser {
-  id: string;
-  team: string;
-  nickname: string;
-}
-
-type SocketData = { user?: AuthenticatedUser };
-
-// NOTE: 클래스 레벨 @UsePipes로 적용하면 @ConnectedSocket()의 Socket 파라미터까지 검증 대상이 되어
-// (whitelist+forbidNonWhitelisted 조합이 class-validator 데코레이터가 없는 Socket의 모든 속성을
-// "허용되지 않음"으로 판단해 예외를 던짐) 모든 핸들러가 실패한다. @MessageBody() 파라미터에만
-// 개별적으로 붙여서 DTO만 검증되도록 한다.
-const wsValidationPipe = new ValidationPipe({
-  transform: true,
-  whitelist: true,
-  forbidNonWhitelisted: true,
-});
 
 @WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
 export class RealtimeGateway
@@ -64,16 +52,6 @@ export class RealtimeGateway
     this.duelsService.setNotifier((userId, event, payload) =>
       this.notifyUser(userId, event, payload),
     );
-  }
-
-  private getUser(client: Socket): AuthenticatedUser {
-    const user = (client.data as SocketData).user;
-    if (!user) throw new WsException('인증되지 않은 연결입니다.');
-    return user;
-  }
-
-  private setUser(client: Socket, user: AuthenticatedUser): void {
-    (client.data as SocketData).user = user;
   }
 
   /**
@@ -105,18 +83,12 @@ export class RealtimeGateway
 
   async handleConnection(client: Socket): Promise<void> {
     try {
-      const token = client.handshake.auth?.token as string | undefined;
-      if (!token) throw new Error('missing token');
-
-      const decoded = await this.firebaseService.verifyIdToken(token);
-      const user = await this.usersService.findByFirebaseUid(decoded.uid);
-      if (!user || !user.team) throw new Error('unregistered user');
-
-      this.setUser(client, {
-        id: user.id,
-        team: user.team,
-        nickname: user.nickname,
-      });
+      const user = await authenticateSocket(
+        this.firebaseService,
+        this.usersService,
+        client,
+      );
+      setSocketUser(client, user);
 
       const pending = await this.redis.drainNotifications(user.id);
       for (const { event, payload } of pending) {
@@ -143,7 +115,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody(wsValidationPipe) dto: LocationUpdateDto,
   ) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
     await this.redis.geoAdd(user.id, dto.lat, dto.lng, user.team, client.id);
 
     const opponents = await this.duelsService.findNearbyOpponents(
@@ -199,7 +171,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody(wsValidationPipe) dto: DuelRequestDto,
   ) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
     const duel = await this.duelsService.requestDuel(user, dto.targetUserId);
 
     await this.notifyUser(dto.targetUserId, 'duel:requested', {
@@ -252,7 +224,7 @@ export class RealtimeGateway
   }
 
   private async respondToDuel(client: Socket, duelId: number, accept: boolean) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
     const duel = await this.duelsService.respondDuel(duelId, user.id, accept);
 
     const event = accept ? 'duel:accepted' : 'duel:rejected';
@@ -268,7 +240,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody(wsValidationPipe) dto: DuelResultDto,
   ) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
     const outcome = await this.duelsService.submitResult(
       dto.duelId,
       user.id,
