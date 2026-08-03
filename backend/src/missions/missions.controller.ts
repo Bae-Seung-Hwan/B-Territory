@@ -80,7 +80,14 @@ export class MissionsController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: MAX_PHOTO_BYTES }),
-          new FileTypeValidator({ fileType: /^image\/(jpe?g|png|webp)$/ }),
+          // mimetype 문자열만 1차 확인한다. NestJS 11의 FileTypeValidator는
+          // 기본적으로 file-type(ESM) 매직넘버 검사를 하는데, 이는 Jest(CJS VM)에서
+          // 로드에 실패해 항상 400을 내고 실제 위조 방어도 아래 assertSupportedImage가
+          // 담당하므로 매직넘버 검사는 끈다.
+          new FileTypeValidator({
+            fileType: /^image\/(jpe?g|png|webp)$/,
+            skipMagicNumbersValidation: true,
+          }),
         ],
       }),
     )
