@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, QueryFailedError } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
@@ -8,6 +8,10 @@ import { District } from './entities/district.entity';
 import { CapitalDesignation } from './entities/capital-designation.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { startOfKstWeek } from '../common/utils/kst.util';
+import {
+  PG_UNIQUE_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 
 // 수도로 지정된 구에서 점령하는 모든 팀의 점수(개인·팀)에 곱해지는 배수.
 export const CAPITAL_MULTIPLIER = 1.2;
@@ -17,8 +21,6 @@ export const CAPITAL_MULTIPLIER = 1.2;
 const CAPITAL_CURRENT_KEY = 'capital:current';
 // 주 1회 갱신되므로 2주 TTL이면 정상 운영 중엔 만료되지 않고, 지정이 멈추면 자동 정리된다.
 const CAPITAL_TTL_SEC = 14 * 24 * 60 * 60;
-// Postgres unique_violation — weekStart UNIQUE 충돌(동시 지정 경합 패자) 판정에 사용.
-const PG_UNIQUE_VIOLATION = '23505';
 
 interface DistrictCsvRow {
   sigunguCode: string;
@@ -309,10 +311,7 @@ export class DistrictsService implements OnModuleInit {
     try {
       await this.capitalRepo.insert({ sigunguCode, weekStart });
     } catch (err) {
-      if (
-        err instanceof QueryFailedError &&
-        (err.driverError as { code?: string })?.code === PG_UNIQUE_VIOLATION
-      ) {
+      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         const winner = await this.capitalRepo.findOne({ where: { weekStart } });
         const winnerCode = winner?.sigunguCode ?? sigunguCode;
         await this.redis.set(CAPITAL_CURRENT_KEY, winnerCode, CAPITAL_TTL_SEC);

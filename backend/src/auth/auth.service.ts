@@ -5,12 +5,13 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { QueryFailedError } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import { User } from '../users/entities/user.entity';
-
-const PG_UNIQUE_VIOLATION = '23505';
+import {
+  PG_UNIQUE_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 
 @Injectable()
 export class AuthService {
@@ -55,10 +56,7 @@ export class AuthService {
     } catch (err) {
       // 위 존재 검사~INSERT 사이에 동시 요청이 먼저 커밋한 경우(더블탭/재시도),
       // unique(firebaseUid|email) 위반을 500 대신 기존 재가입과 같은 409로 매핑한다.
-      if (
-        err instanceof QueryFailedError &&
-        (err.driverError as { code?: string }).code === PG_UNIQUE_VIOLATION
-      ) {
+      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         throw new ConflictException('이미 가입된 사용자입니다.');
       }
       throw err;

@@ -7,7 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, QueryFailedError } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { SpotClaim } from './entities/spot-claim.entity';
 import { DistrictClaim } from './entities/district-claim.entity';
 import { DistrictClaimHistory } from './entities/district-claim-history.entity';
@@ -17,6 +17,10 @@ import { ScoresService } from '../scores/scores.service';
 import { DistrictsService } from '../districts/districts.service';
 import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { secondsUntilKstMidnight } from '../common/utils/kst.util';
+import {
+  PG_FOREIGN_KEY_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 import { VisitDto } from './dto/visit.dto';
 
 const DEFENSE_TTL = 300; // 5분
@@ -219,9 +223,7 @@ export class ClaimsService {
         }
         // FK 위반(23503): 존재 확인 이후 이 시점 사이에 seed:spots가 레거시 잔여
         // spot을 삭제한 경합(race) 상황 — spot이 사라진 것과 동일하게 404로 처리한다
-        const pgCode = (err instanceof QueryFailedError &&
-          (err.driverError as { code?: string })?.code) as string | undefined;
-        if (pgCode === '23503') {
+        if (pgErrorCode(err) === PG_FOREIGN_KEY_VIOLATION) {
           throw new NotFoundException('관광지를 찾을 수 없습니다.');
         }
         throw err;
