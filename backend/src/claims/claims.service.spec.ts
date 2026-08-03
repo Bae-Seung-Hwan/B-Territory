@@ -7,13 +7,29 @@ describe('ClaimsService', () => {
   describe('visit', () => {
     const visitDto: VisitDto = { spotId: 1, lat: 35.1796, lng: 129.0756 };
 
+    // upsert는 점수 트랜잭션 내부의 manager.getRepository(SpotClaim).upsert 이므로,
+    // 트랜잭션 매니저 목의 repo.upsert에 연결한다.
     function makeService(upsert: jest.Mock) {
+      const managerRepo = {
+        findOne: jest.fn().mockResolvedValue(null),
+        upsert,
+      };
+      const manager = {
+        query: jest.fn().mockResolvedValue(undefined),
+        getRepository: jest.fn().mockReturnValue(managerRepo),
+      };
       const dataSource = {
-        query: jest
-          .fn()
-          .mockResolvedValue([
-            { has_coords: true, within_range: true, distance: 10 },
-          ]),
+        query: jest.fn().mockResolvedValue([
+          {
+            has_coords: true,
+            within_range: true,
+            distance: 10,
+            sigungucode: '16',
+          },
+        ]),
+        transaction: jest.fn((cb: (m: typeof manager) => Promise<unknown>) =>
+          cb(manager),
+        ),
       };
       const redis = {
         // 페널티 없음(#13 사전/TOCTOU 체크 통과), 일일 제한 통과(#19) 상태를 기본값으로 둔다.
@@ -27,11 +43,21 @@ describe('ClaimsService', () => {
           .mockResolvedValue({ status: 'ok', remaining: 300, created: true }),
         del: jest.fn().mockResolvedValue(undefined),
       };
+      const usersService = {
+        applyScoreDelta: jest.fn().mockResolvedValue(undefined),
+      };
+      const scoresService = {
+        record: jest.fn().mockResolvedValue(undefined),
+      };
+      const districtsService = { getWeight: jest.fn().mockReturnValue(1) };
       const service = new ClaimsService(
-        { upsert } as never,
+        { upsert: jest.fn() } as never,
         {} as never,
         dataSource as never,
         redis as never,
+        usersService as never,
+        scoresService as never,
+        districtsService as never,
       );
       return { service, redis };
     }
