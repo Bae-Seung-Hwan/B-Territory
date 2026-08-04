@@ -107,18 +107,47 @@ describe('Missions (e2e)', () => {
     await app.close();
   });
 
+  const checkin = (token: string, lat = SPOT_LAT, lng = SPOT_LNG) =>
+    request(app.getHttpServer())
+      .post('/api/missions/checkin')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ spotId, lat, lng });
+
+  describe('방문 체크인', () => {
+    it('현장(50m 이내) 체크인 시 201 + 24시간 창 오픈', async () => {
+      const res = await checkin('uid-A');
+      expect(res.status).toBe(201);
+      const body = res.body as { success: boolean; expiresInSeconds: number };
+      expect(body.success).toBe(true);
+      expect(body.expiresInSeconds).toBeGreaterThan(0);
+    });
+
+    it('50m 밖 체크인은 400 (방문 전제 실패)', async () => {
+      const res = await checkin('uid-B', FAR_LAT, FAR_LNG);
+      expect(res.status).toBe(400);
+    });
+  });
+
   describe('리뷰 미션', () => {
-    it('현장(50m 이내)에서 리뷰 작성 시 201 + 개인 보너스 지급', async () => {
+    // 이 describe가 다른 describe의 체크인에 의존하지 않도록 방문 창을 자체 확보한다.
+    // (재체크인은 창을 새 TTL로 덮어쓰는 멱등 동작)
+    beforeAll(async () => {
+      await checkin('uid-A');
+    });
+
+    it('체크인 없이 리뷰 작성은 400 (방문 창 없음)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/missions/review')
+        .set('Authorization', 'Bearer uid-B')
+        .send({ spotId, rating: 3 });
+      expect(res.status).toBe(400);
+    });
+
+    it('체크인 후 리뷰 작성 시 201 + 개인 보너스 지급', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/missions/review')
         .set('Authorization', 'Bearer uid-A')
-        .send({
-          spotId,
-          lat: SPOT_LAT,
-          lng: SPOT_LNG,
-          rating: 5,
-          content: '좋아요',
-        });
+        .send({ spotId, rating: 5, content: '좋아요' });
       expect(res.status).toBe(201);
       const body = res.body as MissionBody;
       expect(body.type).toBe('MISSION_REVIEW');
@@ -129,20 +158,12 @@ describe('Missions (e2e)', () => {
       expect(user.score).toBe(body.pointsAwarded);
     });
 
-    it('같은 날 같은 관광지 리뷰 재작성은 409', async () => {
+    it('같은 날 같은 관광지 리뷰 재작성은 409 (체크인 창은 유효)', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/missions/review')
         .set('Authorization', 'Bearer uid-A')
-        .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG, rating: 4 });
+        .send({ spotId, rating: 4 });
       expect(res.status).toBe(409);
-    });
-
-    it('50m 밖에서는 400 (방문 전제 실패)', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/missions/review')
-        .set('Authorization', 'Bearer uid-B')
-        .send({ spotId, lat: FAR_LAT, lng: FAR_LNG, rating: 3 });
-      expect(res.status).toBe(400);
     });
 
     it('리뷰 목록은 최신순 + 평균 별점·닉네임을 반환', async () => {
@@ -159,13 +180,28 @@ describe('Missions (e2e)', () => {
   });
 
   describe('사진 미션', () => {
-    it('현장에서 사진 업로드 시 201 + imageUrl + 보너스', async () => {
+    // 이 describe가 다른 describe의 체크인에 의존하지 않도록 방문 창을 자체 확보한다.
+    beforeAll(async () => {
+      await checkin('uid-A');
+    });
+
+    it('체크인 없이 사진 업로드는 400 (방문 창 없음)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/missions/photo')
+        .set('Authorization', 'Bearer uid-B')
+        .field('spotId', String(spotId))
+        .attach('image', JPEG_BYTES, {
+          filename: 'photo.jpg',
+          contentType: 'image/jpeg',
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('체크인 후 사진 업로드 시 201 + imageUrl + 보너스', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/missions/photo')
         .set('Authorization', 'Bearer uid-A')
         .field('spotId', String(spotId))
-        .field('lat', String(SPOT_LAT))
-        .field('lng', String(SPOT_LNG))
         .attach('image', JPEG_BYTES, {
           filename: 'photo.jpg',
           contentType: 'image/jpeg',
@@ -177,13 +213,11 @@ describe('Missions (e2e)', () => {
       expect(body.pointsAwarded).toBeGreaterThan(0);
     });
 
-    it('같은 날 사진 재인증은 409', async () => {
+    it('같은 날 사진 재인증은 409 (체크인 창은 유효)', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/missions/photo')
         .set('Authorization', 'Bearer uid-A')
         .field('spotId', String(spotId))
-        .field('lat', String(SPOT_LAT))
-        .field('lng', String(SPOT_LNG))
         .attach('image', JPEG_BYTES, {
           filename: 'photo.jpg',
           contentType: 'image/jpeg',

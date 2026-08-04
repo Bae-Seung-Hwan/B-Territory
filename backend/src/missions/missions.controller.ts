@@ -25,6 +25,7 @@ import {
 } from '@nestjs/swagger';
 import { extname } from 'path';
 import { MissionsService } from './missions.service';
+import { CheckinDto } from './dto/checkin.dto';
 import { PhotoMissionDto } from './dto/photo-mission.dto';
 import { ReviewMissionDto } from './dto/review-mission.dto';
 import { ReviewQueryDto } from './dto/review-query.dto';
@@ -49,28 +50,47 @@ export class MissionsController {
     private readonly usersService: UsersService,
   ) {}
 
+  @Post('checkin')
+  @UseGuards(FirebaseAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '현장 방문 체크인 (GPS 50m 검증, 이후 24h 사진·리뷰 허용)',
+  })
+  @ApiResponse({ status: 201, description: '방문 인증 성공 (24시간 창 오픈)' })
+  @ApiResponse({ status: 400, description: '50m 초과 또는 좌표 없음' })
+  @ApiResponse({ status: 404, description: '관광지를 찾을 수 없음' })
+  async checkin(
+    @Body() dto: CheckinDto,
+    @Request() req: { user: { uid: string } },
+  ) {
+    const { id } = await this.resolveUser(req.user.uid);
+    return this.missionsService.checkin(dto.spotId, dto.lat, dto.lng, id);
+  }
+
   @Post('photo')
   @UseGuards(FirebaseAuthGuard)
   @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('image'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({
-    summary: '현장 사진 인증 미션 (GPS 방문 전제, 개인 보너스)',
+    summary: '현장 사진 인증 미션 (사전 체크인 전제, 개인 보너스)',
   })
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['image', 'spotId', 'lat', 'lng'],
+      required: ['image', 'spotId'],
       properties: {
         image: { type: 'string', format: 'binary' },
         spotId: { type: 'number' },
-        lat: { type: 'number' },
-        lng: { type: 'number' },
       },
     },
   })
   @ApiResponse({ status: 201, description: '사진 인증 성공 + 보너스 지급' })
-  @ApiResponse({ status: 400, description: '50m 초과 또는 잘못된 이미지' })
+  @ApiResponse({
+    status: 400,
+    description: '방문 체크인 없음(만료 포함) 또는 잘못된 이미지',
+  })
+  @ApiResponse({ status: 404, description: '관광지를 찾을 수 없음' })
   @ApiResponse({
     status: 409,
     description: '오늘 이미 사진 인증함 (KST 자정 초기화)',
@@ -103,8 +123,6 @@ export class MissionsController {
         ext: extname(file.originalname) || '.jpg',
       },
       dto.spotId,
-      dto.lat,
-      dto.lng,
       id,
       team,
     );
@@ -113,9 +131,13 @@ export class MissionsController {
   @Post('review')
   @UseGuards(FirebaseAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: '관광지 리뷰 미션 (GPS 방문 전제, 개인 보너스)' })
+  @ApiOperation({ summary: '관광지 리뷰 미션 (사전 체크인 전제, 개인 보너스)' })
   @ApiResponse({ status: 201, description: '리뷰 작성 성공 + 보너스 지급' })
-  @ApiResponse({ status: 400, description: '50m 초과 또는 잘못된 입력' })
+  @ApiResponse({
+    status: 400,
+    description: '방문 체크인 없음(만료 포함) 또는 잘못된 입력',
+  })
+  @ApiResponse({ status: 404, description: '관광지를 찾을 수 없음' })
   @ApiResponse({
     status: 409,
     description: '오늘 이미 리뷰함 (KST 자정 초기화)',

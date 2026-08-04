@@ -1,6 +1,5 @@
 import {
   IsInt,
-  IsNumber,
   IsOptional,
   IsPositive,
   IsString,
@@ -10,23 +9,15 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+/**
+ * 리뷰 미션 요청. 방문 근접 검증은 사전 체크인(POST /missions/checkin)에서 끝나므로
+ * 좌표는 받지 않는다.
+ */
 export class ReviewMissionDto {
   @ApiProperty({ description: '관광지 ID' })
   @IsInt()
   @IsPositive()
   spotId: number;
-
-  @ApiProperty({ description: '현재 위도', example: 35.1796 })
-  @IsNumber()
-  @Min(-90)
-  @Max(90)
-  lat: number;
-
-  @ApiProperty({ description: '현재 경도', example: 129.0756 })
-  @IsNumber()
-  @Min(-180)
-  @Max(180)
-  lng: number;
 
   @ApiProperty({ description: '별점 1~5', minimum: 1, maximum: 5 })
   @IsInt()

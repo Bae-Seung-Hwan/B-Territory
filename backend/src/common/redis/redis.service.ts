@@ -129,6 +129,37 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private missionVisitKey(userId: string, spotId: number): string {
+    return `mission:visit:${userId}:${spotId}`;
+  }
+
+  /**
+   * 방문 체크인 기록 — 현장 GPS(50m) 검증 통과 시 방문 창을 연다. 값에는 점수 가중치용
+   * sigungucode(없으면 빈 문자열)를 담아, 창 유효기간 안의 사진·리뷰 제출이 재검증 없이
+   * 재사용한다. 재체크인은 창을 새 TTL로 덮어써 갱신한다(단순 SET).
+   */
+  async markVisit(
+    userId: string,
+    spotId: number,
+    sigungucode: string | null,
+    ttlSeconds: number,
+  ): Promise<void> {
+    await this.set(
+      this.missionVisitKey(userId, spotId),
+      sigungucode ?? '',
+      ttlSeconds,
+    );
+  }
+
+  /**
+   * 방문 창 조회 — null이면 미방문(체크인 필요)이고, 문자열이면 창이 유효하다(값은
+   * 저장된 sigungucode, 빈 문자열은 좌표는 있으나 시군구코드 없음을 뜻함). 빈 문자열이
+   * falsy이므로 존재 여부는 반드시 `=== null` 비교로 판정해야 한다.
+   */
+  async getVisit(userId: string, spotId: number): Promise<string | null> {
+    return this.get(this.missionVisitKey(userId, spotId));
+  }
+
   /**
    * 패턴에 맞는 키 일괄 삭제 (KEYS와 달리 SCAN 기반이라 서버를 블로킹하지 않음).
    * 더 이상 소유 코드가 없는 leftover 키 정리용. 삭제한 키 수를 반환한다.
