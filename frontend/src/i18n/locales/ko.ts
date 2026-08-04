@@ -119,6 +119,67 @@ export const ko = {
       topTeam: '1위 팀',
       capitalDistrict: '이번 주 수도',
     },
+    outOfBounds: '현재 위치가 부산이 아닙니다',
+    spotsLoadError: '관광지 정보를 불러오지 못했습니다 · 탭하여 재시도',
+    // TourAPI contenttypeid → 카테고리 이름. 필터 패널과 마커 말풍선이 함께 쓰므로
+    // 어느 한쪽에 종속되지 않도록 map 바로 아래에 둔다. default는 미분류 유형용.
+    categories: {
+      '12': '관광지',
+      '14': '문화시설',
+      '15': '축제공연행사',
+      '25': '여행코스',
+      '28': '레포츠',
+      '32': '숙박',
+      '38': '쇼핑',
+      '39': '음식점',
+      default: '기타',
+    },
+    callout: {
+      address: '주소',
+      claimStatus: '점령 현황',
+    },
+    claim: {
+      claimedBy: '{{team}} 점령 중',
+      unclaimed: '미점령',
+      loadFailed: '점령 현황을 불러오지 못했습니다',
+    },
+    districtDetail: {
+      claimTeam: '점령 팀',
+      claimedAt: '점령 확정 시각',
+      notAggregated: '아직 점령 이력이 없습니다',
+      scoreWeight: '점수 가중치',
+      loadFailed: '구 정보를 불러오지 못했습니다',
+      retry: '다시 시도',
+    },
+    spotDetail: {
+      loadFailed: '상세 정보를 불러오지 못했습니다',
+      retry: '다시 시도',
+      usetime: '이용 시간',
+      homepage: '홈페이지',
+      noOverview: '등록된 상세 설명이 없습니다',
+    },
+    // 미션별 문구 — 새 점령 미션이 생기면 여기에 button/rejected/blocked를 추가한다.
+    // 키 이름은 api/claims.ts의 MissionType 값과 일치해야 한다(constants/claimMissions.ts가 조립).
+    missions: {
+      GPS_VISIT: {
+        button: '점령 시도',
+        rejected: '관광지 50m 이내에서만 점령할 수 있습니다',
+        blocked: '위치를 확인하는 중입니다',
+      },
+    },
+    // 미션 종류와 무관한 점령 시도 결과 문구
+    claimAttempt: {
+      success: '점령 성공! +{{points}}점',
+      loginRequired: '로그인이 필요합니다',
+      penalty: '결투 패배 페널티 중에는 점령할 수 없습니다',
+      spotNotFound: '관광지를 찾을 수 없습니다',
+      dailyLimit: '이 관광지는 오늘 이미 점령했습니다 (KST 자정에 초기화)',
+      failed: '점령에 실패했습니다',
+    },
+    categoryFilter: {
+      title: '카테고리',
+      all: '전체',
+    },
   },
   overlay: {
     enemyAlert: {

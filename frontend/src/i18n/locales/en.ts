@@ -123,6 +123,62 @@ export const en: Translations = {
       topTeam: 'Top Team',
       capitalDistrict: "This Week's Capital",
     },
+    outOfBounds: 'Current location is not in Busan',
+    spotsLoadError: 'Failed to load tourist spots · Tap to retry',
+    categories: {
+      '12': 'Attractions',
+      '14': 'Culture',
+      '15': 'Festivals & Events',
+      '25': 'Travel Courses',
+      '28': 'Leisure Sports',
+      '32': 'Lodging',
+      '38': 'Shopping',
+      '39': 'Restaurants',
+      default: 'Other',
+    },
+    callout: {
+      address: 'Address',
+      claimStatus: 'Claim status',
+    },
+    claim: {
+      claimedBy: 'Claimed by {{team}}',
+      unclaimed: 'Unclaimed',
+      loadFailed: 'Failed to load claim status',
+    },
+    districtDetail: {
+      claimTeam: 'Holding team',
+      claimedAt: 'Claimed at',
+      notAggregated: 'Never claimed',
+      scoreWeight: 'Score weight',
+      loadFailed: 'Failed to load district info',
+      retry: 'Retry',
+    },
+    spotDetail: {
+      loadFailed: 'Failed to load details',
+      retry: 'Retry',
+      usetime: 'Hours',
+      homepage: 'Website',
+      noOverview: 'No description available',
+    },
+    missions: {
+      GPS_VISIT: {
+        button: 'Claim this spot',
+        rejected: 'You must be within 50m of the spot to claim it',
+        blocked: 'Getting your location…',
+      },
+    },
+    claimAttempt: {
+      success: 'Claimed! +{{points}} pts',
+      loginRequired: 'Sign in required',
+      penalty: 'You cannot claim while under a duel-loss penalty',
+      spotNotFound: 'Spot not found',
+      dailyLimit: 'You already claimed this spot today (resets at midnight KST)',
+      failed: 'Claim failed',
+    },
+    categoryFilter: {
+      title: 'Categories',
+      all: 'All',
+    },
   },
   overlay: {
     enemyAlert: {

@@ -20,3 +20,10 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# GeoJSON 중간 산출물 (busan_sig.json으로 재생성 가능한 백업본)
+frontend/assets/geo/busan_sig.epsg5179.json
+frontend/assets/geo/busan_sig_simplified.json
+
+# API 응답 덤프 (확인용 임시 파일)
+frontend/docs/busan_spots.json

@@ -1,30 +1,25 @@
 # 외부 연동
 
-## 카카오맵
+## Google Maps
 
-- 구현 위치: `src/components/map/KakaoMapView.tsx` (WebView + 카카오 JS SDK)
+- 구현 위치: `src/components/map/BusanMapView.tsx` (react-native-maps 네이티브)
+  - `DistrictPolygons.tsx` — 구 경계 폴리곤(그래프 컬러링 폴백 팔레트, 향후 점령 상태 연동 지점)
+  - `SpotMarkers.tsx` — 관광지 마커(react-native-svg 커스텀 핀, 카테고리 필터/줌 자동 숨김, 뷰포트 필터링)
+  - `CategoryFilterPanel.tsx` — 카테고리 on/off 오버레이
+  - `CurrentLocationMarker.tsx` — 현재 위치 pulse 마커(react-native-reanimated)
 - HUD: `src/components/map/MapHUD.tsx` (1위팀 · 이번주 수도 표시)
-- 필요 환경변수: `EXPO_PUBLIC_KAKAO_MAP_KEY` ([setup.md](./setup.md) 참고)
-- 카카오 개발자 콘솔 → 플랫폼 → Web → 사이트 도메인에 사용 도메인 등록 필요
+- 필요 환경변수: `GOOGLE_MAPS_ANDROID_API_KEY` / `GOOGLE_MAPS_IOS_API_KEY` ([setup.md](./setup.md) 참고). `EXPO_PUBLIC_` 접두사가 없어 클라이언트 JS 번들에 노출되지 않고, `app.config.js`의 `react-native-maps` config plugin이 prebuild 시점에 네이티브 매니페스트/Info.plist에만 주입한다.
+- Google Cloud Console에서 "Maps SDK for Android"/"Maps SDK for iOS" 활성화, API 키를 패키지명(`com.bterritory.app`) + SHA-1(Android) / Bundle ID(iOS)로 제한해서 발급받는다.
+- Dev Build 필요(WebView JS SDK와 달리 네이티브 모듈) — 전환 배경은 [decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md) 참고.
 
-### API 키 노출 대응
+### 이전 방식(카카오맵 WebView)에서 전환한 이유
 
-> ⚠️ `EXPO_PUBLIC_` 접두사 환경변수는 클라이언트 번들에 그대로 포함되어 누구나 추출 가능. 이 키는 **JavaScript 키**(WebView JS SDK용)로, 카카오 콘솔에서 지원하는 제한 방식 중:
-> - **네이티브 앱 키 제한(Android 패키지명/iOS Bundle ID)** → JS 키에는 적용 불가
-> - **사이트 도메인 제한** → 이론상 적용되지만, `baseUrl`이 `KakaoMapView.tsx`에 하드코딩된 `'http://localhost'`(실제 서버 주소가 아니라 WebView가 자체 선언하는 가상 origin)라서, 키를 탈취한 누구든 동일하게 `baseUrl: 'http://localhost'`인 WebView를 만들면 도메인 검사를 그대로 통과함 → **사실상 무력화**
->
-> 즉 이 구조(JS 키 + WebView + 고정 `localhost` origin)에서 네이티브 제한도 도메인 제한도 실효성이 없어, 아래 사용량 기반 대응이 실질적인 방어선.
+기존엔 `KakaoMapView.tsx`가 WebView에 카카오맵 JS SDK를 주입하는 방식이었는데, `EXPO_PUBLIC_KAKAO_MAP_KEY`가 클라이언트 번들에 그대로 노출되고 WebView `baseUrl`이 고정된 `'http://localhost'`라 사이트 도메인 제한도 사실상 무력화되는 문제가 있었다. 네이티브 지도 SDK(Dev Build)로 전환하면서 앱 서명(패키지명/SHA-1, Bundle ID) 기반의 실효성 있는 키 제한이 가능해졌다.
 
-**대응 방법**
-1. 카카오 콘솔 사용량 모니터링 설정 — 비정상 트래픽 감지
-2. 쿼터 제한 설정 — 일정량 초과 시 자동 차단
-3. 앱 배포 시 번들 ID 등록 — Android 패키지명, iOS Bundle ID를 카카오 콘솔에 등록 (단, 위 이유로 WebView JS SDK에는 이 제한이 적용되지 않아 심리적 안전판 이상의 효과는 없음)
+### 확장 포인트 (점령 시각화 / 실시간 소켓)
 
-### 필요 작업 (TODO)
-
-- [ ] 카카오 콘솔에 일일/월간 쿼터 제한값 설정 및 초과 시 알림 채널 연결
-- [ ] 사용량 모니터링 대시보드/알림 주기 확인 방법 정리
-- [ ] (선택) 근본적 해결이 필요해지면 ① 지도 타일/API 요청을 백엔드 프록시로 우회해 키를 클라이언트에 노출하지 않는 방식, ② WebView JS SDK 대신 네이티브 지도 SDK(Dev Build 필요, `docs/decisions/0001-expo-go-vs-dev-build.md` 참고)로 전환해 실제 앱 서명 기반 제한을 받는 방식 중 검토
+- `BusanMapView`는 `occupiedDistricts?: Record<string, string>` / `onDistrictPress?: (sigCd: string) => void` prop을 옵셔널로 받는다. 지금은 아무도 값을 넘기지 않아 `src/utils/districtColors.ts#getDistrictFillColor`가 그래프 컬러링 폴백 팔레트만 반환하지만, `useGameStore`의 `occupiedDistricts`가 실제로 채워지면 이 prop에 연결해 국적/팀별 색상으로 교체하면 된다.
+- `BusanMapView`는 `useSocket()`이나 어떤 스토어도 직접 구독하지 않는 controlled 컴포넌트로 유지했다. 실시간 플레이어 위치 같은 데이터가 필요해지면 `spots`/`coords`와 동일한 패턴으로 신규 prop을 추가하면 되고, 소켓 배선 자체는 `map/index.tsx`(또는 상위)에서 처리한다.
 
 ## 실시간 통신 (Socket.io)
 
@@ -94,6 +89,7 @@
 
 - `(auth)`는 일부러 가드하지 않는다. 로그인된 사용자가 로그인 화면을 여는 걸 막을 실익이 없고, 가드하면 로그아웃 시 `(auth)`가 열리기 전에 `router.replace`가 나가 이동이 무시된다.
 - 반대 방향도 같은 이유로, 로그인·회원가입 성공 후 `(main)`으로 직접 가지 않고 항상 열려있는 `"/"`로 `replace`한다. 인증 상태가 리렌더에 반영되기 전에 가드된 라우트로 이동하면 무시될 수 있어서, 분기 판단을 `index.tsx` 한 곳에 맡긴다.
+- ⚠️ **(수정됨) 로그아웃 후 재로그인 시 `(main)` 이동이 조용히 무시되던 버그.** `index.tsx`와 `RootNavigator`가 각각 독립적으로 `useAuth()`를 구독하는데, 두 구독자의 리렌더 커밋 순서가 보장되지 않는다. 앱을 새로 켤 때는 `AuthProvider`가 첫 렌더를 통째로 막고 있다가 한 번에 열어줘서 드러나지 않지만, 로그아웃 후 재로그인처럼 이미 떠 있는 화면들이 각자 리렌더될 때는 `index.tsx`가 `isAuthenticated:true`를 먼저 반영해 `<Redirect>`가 실행되는 순간 `RootNavigator`의 `Stack.Protected` 가드가 아직 `(main)`을 라우터에 등록하기 전일 수 있었다. 이 경우 `router.replace('/(main)/map')`이 존재하지 않는 라우트를 향해 **에러 없이 조용히 무시**되어 `MapScreen`이 아예 마운트되지 않고(콘솔 로그도 전혀 없음) 흰 화면만 남았다. 실기기 로그로 원인을 확정한 뒤, `isAuthenticated=true` 분기를 선언적 `<Redirect>` 대신 `setTimeout(0)`으로 한 틱 미룬 `router.replace`로 바꿔 `RootNavigator`의 가드 갱신이 먼저 커밋되도록 수정했다(`index.tsx`).
 - ⚠️ 웹 정적 렌더링(`expo export --platform web`)은 파일시스템 라우트 전부에 대해 HTML 셸을 생성한다. 가드는 클라이언트 런타임에서 동작하므로 `/map` 같은 URL의 빈 셸 자체는 존재하며, 실제 데이터는 백엔드 `FirebaseAuthGuard`가 막는다.
 - ⚠️ **미해결 설계 질문 — 콜드부트 중 `(main)` 딥링크 진입.** 앱을 완전히 새로 켰을 때(백그라운드 복귀가 아닌 콜드부트) 푸시 알림 등으로 `(main)` 안의 특정 화면에 직접 딥링크하면, Firebase 세션 복원 → `auth.me` 조회가 끝나기 전까지는 `isAuthenticated`가 `false`라 `Stack.Protected guard={isAuthenticated}`가 그 순간 `(main)`을 네비게이터에서 제외한다. 이 타이밍에 expo-router가 정확히 어떻게 반응하는지(다른 라우트로 리다이렉트되는지, 빈 화면이 잠깐 뜨는지, `auth.me` 완료 후 원래 딥링크 목적지로 결국 도달하는지)는 실기기 딥링크 테스트로 확인되지 않았다. 설령 동작을 확인해도 "이 좁은 엣지케이스(콜드부트 + 딥링크 동시 발생, 보통 1초 미만)에 별도 처리(콜드부트 전용 로딩 게이트로 딥링크 목적지를 붙잡아뒀다가 인증 완료 후 이어서 이동)를 할 가치가 있는지"는 버그가 아니라 제품 판단이 필요한 부분 — PR #23 3차 리뷰 지적사항 #1(`_layout.tsx`의 `RootNavigator`가 `(auth)` 화면을 통째로 언마운트시키던 버그) 수정 과정에서 발견했고, 그 버그 자체는 고쳤지만 이 질문은 그대로 남겨뒀다.
 
