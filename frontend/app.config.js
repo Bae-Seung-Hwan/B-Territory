@@ -11,16 +11,6 @@ function requireEnv(name) {
   return value;
 }
 
-// `expo export --platform web`(CI의 타입체크·번들 오류 조기 발견용 빌드 체크)은 네이티브
-// 매니페스트를 만들지 않아 Google Maps 키가 필요 없다 — 이 경우에만 가드를 건너뛴다.
-// expo CLI는 `--platform`/`-p` 두 형태를 모두 받으므로 둘 다 확인한다.
-function isWebOnlyExport() {
-  const flagIdx = process.argv.findIndex(
-    (arg) => arg === '--platform' || arg === '-p',
-  );
-  return flagIdx !== -1 && process.argv[flagIdx + 1] === 'web';
-}
-
 module.exports = {
   expo: {
     name: 'B-territory',
@@ -69,9 +59,7 @@ module.exports = {
       [
         'react-native-maps',
         {
-          androidGoogleMapsApiKey: isWebOnlyExport()
-            ? process.env.GOOGLE_MAPS_ANDROID_API_KEY
-            : requireEnv('GOOGLE_MAPS_ANDROID_API_KEY'),
+          androidGoogleMapsApiKey: requireEnv('GOOGLE_MAPS_ANDROID_API_KEY'),
           iosGoogleMapsApiKey: process.env.GOOGLE_MAPS_IOS_API_KEY,
         },
       ],
