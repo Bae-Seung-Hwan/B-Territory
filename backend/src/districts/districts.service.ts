@@ -21,6 +21,8 @@ export const CAPITAL_MULTIPLIER = 1.2;
 const CAPITAL_CURRENT_KEY = 'capital:current';
 // 주 1회 갱신되므로 2주 TTL이면 정상 운영 중엔 만료되지 않고, 지정이 멈추면 자동 정리된다.
 const CAPITAL_TTL_SEC = 14 * 24 * 60 * 60;
+// 부팅 시 수도 캐시 워밍(Redis)을 기다리는 상한(ms). 초과하면 워밍을 포기하고 부팅을 계속한다.
+const CAPITAL_WARM_TIMEOUT_MS = 3000;
 
 interface DistrictCsvRow {
   sigunguCode: string;
@@ -77,7 +79,18 @@ export class DistrictsService implements OnModuleInit {
     // 수도 공유 캐시(Redis)를 DB 원장에서 워밍한다. 아직 지정 전이면 비어 있는 게 정상
     // (pre-season·최초 부팅)이므로 fail-fast하지 않는다. Redis에 이미 값이 있으면(다른
     // 인스턴스가 먼저 세팅) 덮어쓰지 않는다.
-    await this.warmCapitalCache();
+    //
+    // 워밍은 best-effort다(런타임 getCurrentCapital이 Redis 미스 시 DB에서 self-heal).
+    // Redis에 도달하지 못하면 ioredis 명령이 예외로 전환되기까지 수 초 걸릴 수 있어,
+    // 부팅이 app.listen()에 도달하지 못하는 것을 막도록 타임아웃 + fail-open으로 감싼다.
+    try {
+      await this.withTimeout(this.warmCapitalCache(), CAPITAL_WARM_TIMEOUT_MS);
+    } catch (err) {
+      this.logger.warn(
+        '수도 캐시 워밍 실패/지연 (부팅은 계속) — 런타임에 DB에서 self-heal됨',
+        err as Error,
+      );
+    }
 
     // 정합성 검증은 경고성이므로 실패해도 부팅은 계속한다 (가중치 동작과 무관).
     try {
@@ -88,6 +101,19 @@ export class DistrictsService implements OnModuleInit {
         err as Error,
       );
     }
+  }
+
+  /**
+   * 프로미스가 ms 안에 끝나지 않으면 거부한다(부팅 논블로킹용). 타임아웃이 이겨도 원본
+   * 프로미스의 지연 실패는 Promise.race 내부 핸들러가 처리하므로 unhandledRejection이 없다.
+   */
+  private withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<T>((_, reject) => {
+        setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms).unref();
+      }),
+    ]);
   }
 
   private csvPath(): string {
