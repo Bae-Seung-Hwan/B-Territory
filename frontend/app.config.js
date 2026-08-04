@@ -1,3 +1,16 @@
+// 값이 없으면 prebuild(EAS build 포함)는 에러 없이 성공하고, 지도 타일만 안 뜨는 상태로
+// 조용히 실패한다(react-native-maps가 빈 키를 그대로 네이티브 매니페스트에 박아 넣기 때문).
+// Android만 guard하는 이유: eas.json에 android 프로필만 있고 ios 빌드는 아직 안 한다.
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `${name}가 설정되지 않았습니다. .env를 확인하세요 (.env.example 참고)`,
+    );
+  }
+  return value;
+}
+
 module.exports = {
   expo: {
     name: 'B-territory',
@@ -46,7 +59,7 @@ module.exports = {
       [
         'react-native-maps',
         {
-          androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_ANDROID_API_KEY,
+          androidGoogleMapsApiKey: requireEnv('GOOGLE_MAPS_ANDROID_API_KEY'),
           iosGoogleMapsApiKey: process.env.GOOGLE_MAPS_IOS_API_KEY,
         },
       ],
