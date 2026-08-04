@@ -62,9 +62,21 @@ jobs:
           $COMPOSE run --rm backend npm run migration:run
 
       - name: Up (backend + caddy)
+        # --wait: healthcheck가 있는 서비스(backend/postgres/redis)가 healthy해질 때까지 기다리고,
+        # 제한시간 내 healthy가 못 되면 0이 아닌 코드로 종료해 이 job(=배포)을 실패 처리한다.
+        # 이로써 "컨테이너는 떴지만 앱이 응답 못 하는" 상태가 초록불로 넘어가지 않고,
+        # git reset은 이미 끝났어도 배포 실패 알림이 뜬다. 정상 배포는 수십 초라 120s면 충분.
         run: |
           cd "$DEPLOY_DIR"
-          $COMPOSE up -d --remove-orphans
+          $COMPOSE up -d --remove-orphans --wait --wait-timeout 120
+
+      - name: Dump service status on failure
+        # 배포 실패(주로 --wait 헬스 미충족) 시 원인 파악용 — 서비스 상태와 백엔드 최근 로그를 남긴다.
+        if: failure()
+        run: |
+          cd "$DEPLOY_DIR"
+          $COMPOSE ps
+          $COMPOSE logs --tail=200 backend
 
       - name: Prune dangling images
         # 매 배포의 이전 빌드 레이어가 쌓여 EBS를 채우는 것을 막는다(t3.micro).
