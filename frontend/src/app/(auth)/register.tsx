@@ -233,7 +233,7 @@ export default function RegisterScreen() {
       t('auth.emailVerification.changeEmailConfirmTitle'),
       t('auth.emailVerification.changeEmailConfirmMessage'),
       [
-        { text: t('auth.emailVerification.cancel'), style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
           text: t('auth.emailVerification.changeEmail'),
           style: 'destructive',
