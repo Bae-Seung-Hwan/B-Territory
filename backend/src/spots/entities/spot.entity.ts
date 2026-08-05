@@ -1,4 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { numericTransformer } from '../../common/transformers/numeric.transformer';
 
 @Entity('spots')
 export class Spot {
@@ -14,10 +15,20 @@ export class Spot {
   @Column({ nullable: true })
   addr1: string;
 
-  @Column('decimal', { precision: 13, scale: 10, nullable: true })
+  @Column('decimal', {
+    precision: 13,
+    scale: 10,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   mapX: number;
 
-  @Column('decimal', { precision: 13, scale: 10, nullable: true })
+  @Column('decimal', {
+    precision: 13,
+    scale: 10,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   mapY: number;
 
   @Column({ nullable: true })

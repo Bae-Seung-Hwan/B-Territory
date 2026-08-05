@@ -1,4 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, Index } from 'typeorm';
+import { numericTransformer } from '../../common/transformers/numeric.transformer';
 
 /**
  * 부산 16개 구·군 마스터 (data/busan_districts.csv 시딩).
@@ -21,13 +22,28 @@ export class District {
   @Column()
   nameEn: string;
 
-  @Column('decimal', { precision: 9, scale: 6, nullable: true })
+  @Column('decimal', {
+    precision: 9,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   centerLat: number | null;
 
-  @Column('decimal', { precision: 9, scale: 6, nullable: true })
+  @Column('decimal', {
+    precision: 9,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   centerLng: number | null;
 
-  @Column('decimal', { precision: 9, scale: 6, nullable: true })
+  @Column('decimal', {
+    precision: 9,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   foreignVisitorShare: number | null;
 
   @Column({ type: 'varchar', nullable: true })
@@ -43,6 +59,11 @@ export class District {
   kmaNy: number | null;
 
   // 점령 점수 가중치 (share / 평균share). share 없으면 1.0.
-  @Column('decimal', { precision: 6, scale: 4, default: 1 })
+  @Column('decimal', {
+    precision: 6,
+    scale: 4,
+    default: 1,
+    transformer: numericTransformer,
+  })
   scoreWeight: number;
 }
