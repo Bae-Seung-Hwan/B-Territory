@@ -1,4 +1,9 @@
 export const ko = {
+  common: {
+    cancel: '취소',
+    close: '닫기',
+    comingSoon: '준비 중',
+  },
   onboarding: {
     subtitle: '부산 점령 관광 게임',
     start: '시작하기',
@@ -12,10 +17,8 @@ export const ko = {
       submit: '로그인',
       or: '또는',
       google: 'Google로 계속하기',
-      googleComingSoonTitle: '준비 중',
       googleComingSoonMessage: 'Google 로그인은 Firebase 연동 후 지원됩니다.',
       apple: 'Apple로 계속하기',
-      appleComingSoonTitle: '준비 중',
       appleComingSoonMessage: 'Apple 로그인은 곧 지원될 예정입니다.',
       noAccount: '아직 계정이 없으신가요?',
       registerLink: '회원가입 하기',
@@ -28,7 +31,6 @@ export const ko = {
       privacyPolicy: '(필수) 개인정보처리방침 동의',
       continue: '동의하고 계속하기',
       viewLabel: '보기',
-      closeLabel: '닫기',
       serviceTermsTitle: '이용약관',
       serviceTermsBody:
         '제1조 (목적) 이 약관은 구름을 세는 행위와 관련하여 하늘과 사용자 사이에 필요한 사항을 정합니다.\n\n' +
@@ -67,6 +69,9 @@ export const ko = {
       confirmButton: '인증 완료했어요',
       notYetTitle: '아직 인증되지 않았어요',
       notYetMessage: '메일함에서 인증 링크를 먼저 눌러주세요.\n인증 후 다시 시도해주세요.',
+      changeEmail: '다른 이메일로 가입',
+      changeEmailConfirmTitle: '다른 이메일로 다시 가입하시겠어요?',
+      changeEmailConfirmMessage: '지금 이메일로 만든 계정은 삭제되고, 처음부터 다시 입력하게 됩니다.',
     },
     errors: {
       title: '오류',
@@ -112,7 +117,6 @@ export const ko = {
     logout: '로그아웃',
     logoutConfirmTitle: '로그아웃',
     logoutConfirmMessage: '정말 로그아웃하시겠어요?',
-    cancel: '취소',
   },
   map: {
     hud: {
@@ -192,13 +196,11 @@ export const ko = {
       title: '결투 신청',
       body: '{{team}} 팀에게 결투를 신청합니다',
       hint: '미니게임에서 승리하면 해당 구역을 점령합니다',
-      cancel: '취소',
       start: '결투 시작',
     },
     miniGame: {
       title: '미니게임',
       placeholder: '미니게임 UI가 여기에 구현됩니다',
-      close: '닫기',
     },
   },
 };

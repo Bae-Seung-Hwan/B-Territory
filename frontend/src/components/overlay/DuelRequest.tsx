@@ -28,7 +28,7 @@ export function DuelRequest() {
           <Text style={styles.hint}>{t('overlay.duelRequest.hint')}</Text>
           <View style={styles.actions}>
             <TouchableOpacity style={styles.btnCancel} onPress={() => setShowDuelRequest(false)}>
-              <Text style={styles.btnCancelText}>{t('overlay.duelRequest.cancel')}</Text>
+              <Text style={styles.btnCancelText}>{t('common.cancel')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.btnAccept} onPress={handleAccept}>
               <Text style={styles.btnAcceptText}>{t('overlay.duelRequest.start')}</Text>

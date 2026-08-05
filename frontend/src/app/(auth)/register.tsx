@@ -111,8 +111,10 @@ export default function RegisterScreen() {
     submit,
     confirmVerification,
     resendVerificationEmail,
+    changeEmail,
     isSubmitting,
     isCheckingVerification,
+    isChangingEmail,
     isRegistering,
     isSendingVerification,
     hasSentVerification,
@@ -169,7 +171,7 @@ export default function RegisterScreen() {
   };
 
   const passwordMismatch = confirmPassword.length > 0 && password !== confirmPassword;
-  const isBusy = isSubmitting || isCheckingVerification || isRegistering;
+  const isBusy = isSubmitting || isCheckingVerification || isRegistering || isChangingEmail;
 
   const canSubmit =
     email.trim().length > 0 &&
@@ -224,6 +226,30 @@ export default function RegisterScreen() {
     } catch (err) {
       handleAuthError(err, 'auth.emailVerification.sendFailed');
     }
+  };
+
+  const handleChangeEmail = () => {
+    Alert.alert(
+      t('auth.emailVerification.changeEmailConfirmTitle'),
+      t('auth.emailVerification.changeEmailConfirmMessage'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('auth.emailVerification.changeEmail'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await changeEmail();
+              setEmail('');
+              setPassword('');
+              setConfirmPassword('');
+            } catch (err) {
+              handleAuthError(err, 'auth.errors.registerFailed');
+            }
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -287,6 +313,14 @@ export default function RegisterScreen() {
             {hasSentVerification && (
               <Text style={styles.verifySent}>{t('auth.emailVerification.sentMessage')}</Text>
             )}
+            <Button
+              title={t('auth.emailVerification.changeEmail')}
+              onPress={handleChangeEmail}
+              variant="danger"
+              disabled={isBusy}
+              loading={isChangingEmail}
+              style={styles.changeEmailButton}
+            />
           </View>
         )}
 
@@ -384,6 +418,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   verifyButton: { marginBottom: 12 },
+  changeEmailButton: { marginTop: 4 },
   verifySent: {
     alignSelf: 'flex-start',
     fontSize: 12,

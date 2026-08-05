@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, renderHook } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { useRegistrationFlow } from '@/hooks/use-registration-flow';
 import { useSendFirebaseVerificationEmail } from '@/hooks/use-firebase-email-verification';
 import { auth } from '@/lib/firebase';
@@ -11,6 +11,7 @@ import * as authApi from '@/api/auth';
 jest.mock('firebase/auth', () => ({
   createUserWithEmailAndPassword: jest.fn(),
   signInWithEmailAndPassword: jest.fn(),
+  signOut: jest.fn(),
 }));
 
 jest.mock('@/lib/firebase', () => ({ auth: { currentUser: null } }));
@@ -26,6 +27,7 @@ jest.mock('@/api/auth', () => ({ registerUser: jest.fn(), getMe: jest.fn() }));
 const mockedAuth = auth as unknown as { currentUser: unknown };
 const mockedCreateUser = createUserWithEmailAndPassword as jest.Mock;
 const mockedSignIn = signInWithEmailAndPassword as jest.Mock;
+const mockedSignOut = signOut as jest.Mock;
 const mockedUseSendVerification = useSendFirebaseVerificationEmail as jest.Mock;
 
 const profile = { id: '1', email: 'a@b.com', nickname: 'n', nationality: 'KR', team: 'KR' };
@@ -57,6 +59,7 @@ async function renderFlow(onRegistered = jest.fn()) {
 
 beforeEach(() => {
   mockedAuth.currentUser = null;
+  mockedSignOut.mockResolvedValue(undefined);
   mockedUseSendVerification.mockReturnValue({
     sendVerificationEmail: jest.fn().mockResolvedValue(true),
     isSending: false,
@@ -324,5 +327,41 @@ describe('롤백 불변식', () => {
     });
 
     expect(user.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('다른 이메일로 가입', () => {
+  it('대기 중인 미인증 계정을 지우고 초안을 비운 뒤 폼 단계로 되돌린다', async () => {
+    const user = createUser({ emailVerified: false });
+    mockedAuth.currentUser = user;
+
+    const { result } = await renderFlow();
+    expect(result.current.step).toBe('awaitingVerification');
+
+    await act(async () => {
+      await result.current.changeEmail();
+    });
+
+    expect(user.delete).toHaveBeenCalled();
+    expect(clearRegisterDraft).toHaveBeenCalled();
+    expect(result.current.step).toBe('form');
+  });
+
+  it('delete가 막히면(requires-recent-login 등) signOut으로 대신 세션을 정리한다', async () => {
+    const user = createUser({
+      emailVerified: false,
+      delete: jest.fn().mockRejectedValue({ code: 'auth/requires-recent-login' }),
+    });
+    mockedAuth.currentUser = user;
+
+    const { result } = await renderFlow();
+
+    await act(async () => {
+      await result.current.changeEmail();
+    });
+
+    expect(user.delete).toHaveBeenCalled();
+    expect(mockedSignOut).toHaveBeenCalledWith(mockedAuth);
+    expect(result.current.step).toBe('form');
   });
 });

@@ -1,6 +1,11 @@
 import type { Translations } from '../types';
 
 export const en: Translations = {
+  common: {
+    cancel: 'Cancel',
+    close: 'Close',
+    comingSoon: 'Coming soon',
+  },
   onboarding: {
     subtitle: 'Busan Territory Tour Game',
     start: 'Get Started',
@@ -14,10 +19,8 @@ export const en: Translations = {
       submit: 'Log In',
       or: 'or',
       google: 'Continue with Google',
-      googleComingSoonTitle: 'Coming soon',
       googleComingSoonMessage: 'Google login will be supported after Firebase integration.',
       apple: 'Continue with Apple',
-      appleComingSoonTitle: 'Coming soon',
       appleComingSoonMessage: 'Apple login will be supported soon.',
       noAccount: "Don't have an account?",
       registerLink: 'Sign up',
@@ -30,7 +33,6 @@ export const en: Translations = {
       privacyPolicy: '(Required) Privacy Policy',
       continue: 'Agree and Continue',
       viewLabel: 'View',
-      closeLabel: 'Close',
       serviceTermsTitle: 'Terms of Service',
       serviceTermsBody:
         'Section 1 (Purpose) These terms govern the relationship between the sky and the user regarding the act of counting clouds.\n\n' +
@@ -71,6 +73,10 @@ export const en: Translations = {
       confirmButton: "I've verified my email",
       notYetTitle: 'Not verified yet',
       notYetMessage: 'Please tap the verification link in your email first, then try again.',
+      changeEmail: 'Use a different email',
+      changeEmailConfirmTitle: 'Sign up with a different email?',
+      changeEmailConfirmMessage:
+        "The account created with this email will be deleted, and you'll need to start over.",
     },
     errors: {
       title: 'Error',
@@ -116,7 +122,6 @@ export const en: Translations = {
     logout: 'Log Out',
     logoutConfirmTitle: 'Log Out',
     logoutConfirmMessage: 'Are you sure you want to log out?',
-    cancel: 'Cancel',
   },
   map: {
     hud: {
@@ -191,13 +196,11 @@ export const en: Translations = {
       title: 'Duel Request',
       body: 'Challenging Team {{team}} to a duel',
       hint: 'Winning the mini-game will capture this territory',
-      cancel: 'Cancel',
       start: 'Start Duel',
     },
     miniGame: {
       title: 'Mini Game',
       placeholder: 'The mini-game UI will be implemented here',
-      close: 'Close',
     },
   },
 };

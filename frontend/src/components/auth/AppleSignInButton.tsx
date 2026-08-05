@@ -14,7 +14,7 @@ export function AppleSignInButton() {
   const { t } = useTranslation();
 
   const handlePress = () => {
-    Alert.alert(t('auth.login.appleComingSoonTitle'), t('auth.login.appleComingSoonMessage'));
+    Alert.alert(t('common.comingSoon'), t('auth.login.appleComingSoonMessage'));
   };
 
   return (
