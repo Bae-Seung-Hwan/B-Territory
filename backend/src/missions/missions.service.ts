@@ -100,7 +100,10 @@ export class MissionsService {
     );
     if (!daily.created) {
       throw new ConflictException(
-        '이 관광지 사진 인증은 오늘 이미 완료했습니다. (KST 자정에 초기화)',
+        errBody(
+          ErrorCode.MISSION_DAILY_LIMIT,
+          '이 관광지 사진 인증은 오늘 이미 완료했습니다. (KST 자정에 초기화)',
+        ),
       );
     }
 
@@ -157,7 +160,10 @@ export class MissionsService {
     );
     if (!daily.created) {
       throw new ConflictException(
-        '이 관광지 리뷰는 오늘 이미 작성했습니다. (KST 자정에 초기화)',
+        errBody(
+          ErrorCode.MISSION_DAILY_LIMIT,
+          '이 관광지 리뷰는 오늘 이미 작성했습니다. (KST 자정에 초기화)',
+        ),
       );
     }
 
@@ -287,7 +293,10 @@ export class MissionsService {
     const visit = await this.redis.getVisit(userId, spotId);
     if (visit === null) {
       throw new BadRequestException(
-        '먼저 현장에서 방문 인증(체크인)을 해주세요. (체크인 후 24시간 이내 제출 가능)',
+        errBody(
+          ErrorCode.MISSION_VISIT_REQUIRED,
+          '먼저 현장에서 방문 인증(체크인)을 해주세요. (체크인 후 24시간 이내 제출 가능)',
+        ),
       );
     }
     // 빈 문자열은 "방문했으나 시군구코드 없음" — null(미방문)과 구분해 그대로 반환한다.

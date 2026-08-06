@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { ErrorCode, errBody } from '../errors/error-code';
 
 /** 매직 바이트로 판별한 실제 이미지 포맷. 저장 시 확장자·Content-Type의 근거가 된다. */
 export interface DetectedImage {
@@ -16,7 +17,10 @@ export function assertSupportedImage(buffer: Buffer): DetectedImage {
   const detected = detectImage(buffer);
   if (!detected) {
     throw new BadRequestException(
-      '지원하지 않는 이미지입니다. (JPEG/PNG/WebP만 허용)',
+      errBody(
+        ErrorCode.MISSION_UNSUPPORTED_IMAGE,
+        '지원하지 않는 이미지입니다. (JPEG/PNG/WebP만 허용)',
+      ),
     );
   }
   return detected;

@@ -67,6 +67,13 @@ interface MissionBody {
   teamPointsAwarded: number;
   imageUrl?: string;
 }
+/**
+ * 에러 응답의 machine-readable code까지 확인한다 — 프론트가 문구를 code로 매핑하므로,
+ * 상태코드만 맞고 code가 빠지거나 바뀌면 그대로 계약 회귀다.
+ */
+const expectErrorCode = (res: request.Response, code: string) =>
+  expect((res.body as { code?: string }).code).toBe(code);
+
 interface ReviewListBody {
   spotId: number;
   count: number;
@@ -160,6 +167,7 @@ describe('Missions (e2e)', () => {
     it('50m 밖 체크인은 400 (방문 전제 실패)', async () => {
       const res = await checkin('uid-B', FAR_LAT, FAR_LNG);
       expect(res.status).toBe(400);
+      expectErrorCode(res, 'VISIT_OUT_OF_RANGE');
     });
   });
 
@@ -176,6 +184,7 @@ describe('Missions (e2e)', () => {
         .set('Authorization', 'Bearer uid-B')
         .send({ spotId, rating: 3 });
       expect(res.status).toBe(400);
+      expectErrorCode(res, 'MISSION_VISIT_REQUIRED');
     });
 
     it('체크인 후 리뷰 작성 시 201 + 개인 보너스 지급', async () => {
@@ -199,6 +208,7 @@ describe('Missions (e2e)', () => {
         .set('Authorization', 'Bearer uid-A')
         .send({ spotId, rating: 4 });
       expect(res.status).toBe(409);
+      expectErrorCode(res, 'MISSION_DAILY_LIMIT');
     });
 
     it('리뷰 목록은 최신순 + 평균 별점·닉네임을 반환', async () => {
@@ -230,6 +240,7 @@ describe('Missions (e2e)', () => {
           contentType: 'image/jpeg',
         });
       expect(res.status).toBe(400);
+      expectErrorCode(res, 'MISSION_VISIT_REQUIRED');
     });
 
     it('체크인 후 사진 업로드 시 201 + imageUrl + 보너스', async () => {
@@ -258,6 +269,7 @@ describe('Missions (e2e)', () => {
           contentType: 'image/jpeg',
         });
       expect(res.status).toBe(409);
+      expectErrorCode(res, 'MISSION_DAILY_LIMIT');
     });
   });
 
@@ -312,6 +324,48 @@ describe('Missions (e2e)', () => {
       expect(res.status).toBe(201);
       expect(lastUpload).toEqual({ contentType: 'image/png', ext: '.png' });
     });
+
+    it('이미지가 아닌 바이트는 mimetype을 속여도 400', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/missions/photo')
+        .set('Authorization', 'Bearer uid-C')
+        .field('spotId', String(spotId))
+        .attach('image', Buffer.from('this is not an image at all'), {
+          filename: 'photo.jpg',
+          contentType: 'image/jpeg',
+        });
+      // 매직바이트 검증은 일일 게이트보다 먼저라, 이미 사진을 올린 유저여도 409가 아니다.
+      expect(res.status).toBe(400);
+      expectErrorCode(res, 'MISSION_UNSUPPORTED_IMAGE');
+    });
+
+    it('mimetype을 선언하지 않은 정상 이미지는 거부하지 않는다', async () => {
+      // 포맷 판정 근거는 실제 바이트뿐이다. 클라이언트가 image/*를 못 붙였다고
+      // 정상 이미지를 막으면 오탐이므로, octet-stream이어도 통과해야 한다.
+      const spot = await spotRepo.save({
+        contentId: 'mission-spot-octet',
+        title: 'octet-stream 테스트 관광지',
+        mapX: SPOT_LNG,
+        mapY: SPOT_LAT,
+        sigungucode: '99TEST',
+      });
+      await request(app.getHttpServer())
+        .post('/api/missions/checkin')
+        .set('Authorization', 'Bearer uid-C')
+        .send({ spotId: spot.id, lat: SPOT_LAT, lng: SPOT_LNG })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/missions/photo')
+        .set('Authorization', 'Bearer uid-C')
+        .field('spotId', String(spot.id))
+        .attach('image', JPEG_BYTES, {
+          filename: 'photo.bin',
+          contentType: 'application/octet-stream',
+        });
+      expect(res.status).toBe(201);
+      expect(lastUpload).toEqual({ contentType: 'image/jpeg', ext: '.jpg' });
+    });
   });
 
   describe('업로드 이후 실패 시 고아 객체 정리', () => {
@@ -347,6 +401,7 @@ describe('Missions (e2e)', () => {
           contentType: 'image/jpeg',
         });
       expect(res.status).toBe(404);
+      expectErrorCode(res, 'SPOT_NOT_FOUND');
       expect(deletedKeys).toEqual([MOCK_IMAGE_KEY]);
     });
   });

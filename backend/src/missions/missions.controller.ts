@@ -12,7 +12,6 @@ import {
   NotFoundException,
   ParseFilePipe,
   MaxFileSizeValidator,
-  FileTypeValidator,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -30,6 +29,7 @@ import { ReviewMissionDto } from './dto/review-mission.dto';
 import { ReviewQueryDto } from './dto/review-query.dto';
 import { FirebaseAuthGuard } from '../common/guards/firebase-auth.guard';
 import { UsersService } from '../users/users.service';
+import { ErrorCode, errBody } from '../common/errors/error-code';
 
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024; // 5MB
 
@@ -112,18 +112,16 @@ export class MissionsController {
   @ApiResponse({ status: 413, description: '이미지가 5MB를 초과함' })
   async submitPhoto(
     @UploadedFile(
+      // 파일 존재 확인용. 크기는 위 인터셉터가 이미 강제하지만(초과 시 413),
+      // 상한이 한쪽에만 남지 않도록 같은 상수로 이중 방어를 둔다.
+      //
+      // 포맷 검증은 여기서 하지 않는다. 클라이언트가 선언한 mimetype을 보는
+      // FileTypeValidator는 위조 방어가 안 되면서(실제 방어는 서비스의
+      // assertSupportedImage가 매직 바이트로 한다) 두 가지 문제만 만든다:
+      // 정상 이미지를 application/octet-stream으로 보내면 거부하고, 같은
+      // "형식 오류"인데도 코드 없는 400을 내 MISSION_UNSUPPORTED_IMAGE와 갈린다.
       new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: MAX_PHOTO_BYTES }),
-          // mimetype 문자열만 1차 확인한다. NestJS 11의 FileTypeValidator는
-          // 기본적으로 file-type(ESM) 매직넘버 검사를 하는데, 이는 Jest(CJS VM)에서
-          // 로드에 실패해 항상 400을 내고 실제 위조 방어도 아래 assertSupportedImage가
-          // 담당하므로 매직넘버 검사는 끈다.
-          new FileTypeValidator({
-            fileType: /^image\/(jpe?g|png|webp)$/,
-            skipMagicNumbersValidation: true,
-          }),
-        ],
+        validators: [new MaxFileSizeValidator({ maxSize: MAX_PHOTO_BYTES })],
       }),
     )
     file: UploadedImage,
@@ -176,9 +174,17 @@ export class MissionsController {
     firebaseUid: string,
   ): Promise<{ id: string; team: string }> {
     const user = await this.usersService.findByFirebaseUid(firebaseUid);
-    if (!user) throw new NotFoundException('등록되지 않은 사용자입니다.');
+    if (!user)
+      throw new NotFoundException(
+        errBody(ErrorCode.USER_NOT_REGISTERED, '등록되지 않은 사용자입니다.'),
+      );
     if (!user.team)
-      throw new BadRequestException('팀이 배정되지 않은 사용자입니다.');
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.TEAM_NOT_ASSIGNED,
+          '팀이 배정되지 않은 사용자입니다.',
+        ),
+      );
     return { id: user.id, team: user.team };
   }
 }
