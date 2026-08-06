@@ -5,6 +5,7 @@ import { Queue } from 'bull';
 import { SpotClaim } from './entities/spot-claim.entity';
 import { DistrictClaim } from './entities/district-claim.entity';
 import { DistrictClaimHistory } from './entities/district-claim-history.entity';
+import { Spot } from '../spots/entities/spot.entity';
 import { ClaimsService } from './claims.service';
 import { ClaimsController } from './claims.controller';
 import { ClaimsProcessor } from './claims.processor';
@@ -14,7 +15,12 @@ import { DistrictsModule } from '../districts/districts.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([SpotClaim, DistrictClaim, DistrictClaimHistory]),
+    TypeOrmModule.forFeature([
+      SpotClaim,
+      DistrictClaim,
+      DistrictClaimHistory,
+      Spot,
+    ]),
     BullModule.registerQueue({ name: 'district-aggregation' }),
     UsersModule,
     ScoresModule,

@@ -3,6 +3,7 @@ import { isAxiosError } from 'axios';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signOut,
   type User,
 } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
@@ -38,6 +39,7 @@ export function useRegistrationFlow({ onRegistered }: UseRegistrationFlowOptions
   const [createdAccount, setCreatedAccount] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCheckingVerification, setIsCheckingVerification] = useState(false);
+  const [isChangingEmail, setIsChangingEmail] = useState(false);
 
   const registerMutation = useRegisterMutation();
   const {
@@ -164,13 +166,39 @@ export function useRegistrationFlow({ onRegistered }: UseRegistrationFlowOptions
     return sendVerificationEmail(user);
   }, [sendVerificationEmail]);
 
+  // 대기 단계에서 벗어나 다른 이메일로 처음부터 다시 가입할 수 있게 한다. 이 계정은
+  // 아직 미인증이라 백엔드에 프로필이 없으므로, 지우고 폼으로 돌아가도 안전하다.
+  const changeEmail = useCallback(async () => {
+    const user = auth.currentUser;
+    setIsChangingEmail(true);
+    try {
+      if (user) {
+        try {
+          await user.delete();
+        } catch (err) {
+          // delete가 auth/requires-recent-login 등으로 막혀도, 로그아웃은 시켜야
+          // 같은 이메일이 auth.currentUser에 계속 남아 폼으로 못 돌아가는 일이 없다.
+          console.warn('Failed to delete pending unverified account, signing out instead', err);
+          await signOut(auth);
+        }
+      }
+      await clearRegisterDraft();
+      setCreatedAccount(false);
+      setStep('form');
+    } finally {
+      setIsChangingEmail(false);
+    }
+  }, []);
+
   return {
     step,
     submit,
     confirmVerification,
     resendVerificationEmail,
+    changeEmail,
     isSubmitting,
     isCheckingVerification,
+    isChangingEmail,
     isRegistering: registerMutation.isPending,
     isSendingVerification,
     hasSentVerification,

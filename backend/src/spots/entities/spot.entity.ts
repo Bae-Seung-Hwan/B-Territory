@@ -35,6 +35,10 @@ export class Spot {
   @Column({ type: 'text', nullable: true })
   overview: string;
 
+  // 영문 설명. 영문 원본 데이터가 확보되면 채운다. 없으면 조회 시 한국어(overview)로 폴백한다.
+  @Column({ type: 'text', nullable: true })
+  overviewEn: string | null;
+
   @Column({ nullable: true })
   usetime: string;
 
