@@ -208,6 +208,30 @@ describe('Capital (e2e)', () => {
     expect(body.teamPointsAwarded).toBe(100);
   });
 
+  it('Redis 도달 불가여도 DB 원장으로 폴백해 조회가 성공한다', async () => {
+    // 리뷰 지적 재현: "Redis 미스"(연결됨·키 없음 → null)와 "Redis 도달 불가"(예외)는 다르다.
+    // 후자를 감싸지 않으면 MaxRetriesPerRequestError가 그대로 올라가 DB 폴백에 도달조차
+    // 못 하고 500이 된다. get/set 둘 다 실패시켜 폴백 경로 전체를 확인한다.
+    const err = new Error(
+      'Reached the max retries per request limit (which is 3).',
+    );
+    const getSpy = jest.spyOn(redisService, 'get').mockRejectedValue(err);
+    const setSpy = jest.spyOn(redisService, 'set').mockRejectedValue(err);
+    try {
+      const res = await request(app.getHttpServer())
+        .get('/api/districts/capital/current')
+        .expect(200);
+
+      const body = res.body as CapitalBody;
+      expect(body.sigunguCode).toBe(capitalCode);
+      expect(body.multiplier).toBe(CAPITAL_MULTIPLIER);
+      expect(getSpy).toHaveBeenCalled();
+    } finally {
+      getSpy.mockRestore();
+      setSpy.mockRestore();
+    }
+  });
+
   it('동시 지정 경합 → weekStart UNIQUE로 정확히 1행만 확정, Redis도 DB와 일치 (유령 수도 방지)', async () => {
     // 이번 주 이력·Redis 캐시를 비우고 여러 지정을 동시에 실행한다. 예전 구현(Redis 주 락으로
     // 승자 결정)에선 락만 잡히고 DB insert가 없는 "유령 수도"가 생길 수 있었다. 이제 승자는

@@ -23,6 +23,9 @@ const CAPITAL_CURRENT_KEY = 'capital:current';
 const CAPITAL_TTL_SEC = 14 * 24 * 60 * 60;
 // 부팅 시 수도 캐시 워밍(Redis)을 기다리는 상한(ms). 초과하면 워밍을 포기하고 부팅을 계속한다.
 const CAPITAL_WARM_TIMEOUT_MS = 3000;
+// 런타임 수도 캐시 접근 상한(ms). Redis 정상 응답은 1ms 미만이라 여유가 크고, 도달 불가일 때
+// 요청이 maxRetriesPerRequest 소진까지(실측 12~24초) 매달리지 않도록 짧게 끊는다.
+const CAPITAL_CACHE_TIMEOUT_MS = 500;
 
 interface DistrictCsvRow {
   sigunguCode: string;
@@ -228,7 +231,7 @@ export class DistrictsService implements OnModuleInit {
    * 이미 값이 있으면(다른 인스턴스가 세팅) 덮어쓰지 않는다.
    */
   private async warmCapitalCache(): Promise<void> {
-    const cached = await this.redis.get(CAPITAL_CURRENT_KEY);
+    const cached = await this.readCapitalCache();
     if (cached !== null) {
       this.logger.log(`현재 수도(Redis): ${cached}`);
       return;
@@ -238,11 +241,7 @@ export class DistrictsService implements OnModuleInit {
       order: { designatedAt: 'DESC' },
     });
     if (latest) {
-      await this.redis.set(
-        CAPITAL_CURRENT_KEY,
-        latest.sigunguCode,
-        CAPITAL_TTL_SEC,
-      );
+      await this.writeCapitalCache(latest.sigunguCode);
       this.logger.log(`현재 수도(DB→Redis 워밍): ${latest.sigunguCode}`);
     } else {
       this.logger.log('현재 수도: (미지정)');
@@ -250,22 +249,50 @@ export class DistrictsService implements OnModuleInit {
   }
 
   /**
+   * 수도 캐시 읽기 — 실패를 "미스"로 흡수한다.
+   *
+   * Redis 미스(연결됨·키 없음)와 Redis 도달 불가는 호출부가 구분할 필요가 없다. 둘 다
+   * DB 원장으로 폴백해야 하고, 원장이 진실의 원천이므로 결과도 같다. 감싸지 않으면
+   * 도달 불가일 때 redis.get()이 null이 아니라 MaxRetriesPerRequestError를 던져
+   * DB 폴백 라인에 도달조차 못 하고 조회가 500이 된다.
+   */
+  private async readCapitalCache(): Promise<string | null> {
+    try {
+      return await this.withTimeout(
+        this.redis.get(CAPITAL_CURRENT_KEY),
+        CAPITAL_CACHE_TIMEOUT_MS,
+      );
+    } catch (err) {
+      this.logger.warn('수도 캐시 조회 실패 — DB 원장으로 폴백', err as Error);
+      return null;
+    }
+  }
+
+  /** 수도 캐시 재적재 — best-effort. 실패해도 DB 원장이 진실이라 조회는 계속된다. */
+  private async writeCapitalCache(sigunguCode: string): Promise<void> {
+    try {
+      await this.withTimeout(
+        this.redis.set(CAPITAL_CURRENT_KEY, sigunguCode, CAPITAL_TTL_SEC),
+        CAPITAL_CACHE_TIMEOUT_MS,
+      );
+    } catch (err) {
+      this.logger.warn('수도 캐시 재적재 실패 (조회는 계속)', err as Error);
+    }
+  }
+
+  /**
    * 이번 주 수도 sigunguCode. 모든 인스턴스가 공유하는 Redis 값을 단일 소스로 읽는다.
-   * Redis 미스(재시작/최초) 시 DB 원장에서 복구하고 재적재한다. 지정 전이면 null.
+   * 캐시 미스든 Redis 도달 불가든 DB 원장에서 복구하고 재적재한다. 지정 전이면 null.
    */
   async getCurrentCapital(): Promise<string | null> {
-    const cached = await this.redis.get(CAPITAL_CURRENT_KEY);
+    const cached = await this.readCapitalCache();
     if (cached !== null) return cached;
     const latest = await this.capitalRepo.findOne({
       where: {},
       order: { designatedAt: 'DESC' },
     });
     if (!latest) return null;
-    await this.redis.set(
-      CAPITAL_CURRENT_KEY,
-      latest.sigunguCode,
-      CAPITAL_TTL_SEC,
-    );
+    await this.writeCapitalCache(latest.sigunguCode);
     return latest.sigunguCode;
   }
 
