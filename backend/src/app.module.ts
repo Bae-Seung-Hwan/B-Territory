@@ -15,6 +15,7 @@ import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
+import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { DistrictsModule } from './districts/districts.module';
     RealtimeModule,
     ScoresModule,
     DistrictsModule,
+    HallOfFameModule,
   ],
   controllers: [AppController],
   providers: [AppService],

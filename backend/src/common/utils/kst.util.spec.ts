@@ -1,4 +1,9 @@
-import { secondsUntilKstMidnight, startOfKstWeek } from './kst.util';
+import {
+  secondsUntilKstMidnight,
+  startOfKstWeek,
+  seasonIndexOf,
+  seasonRange,
+} from './kst.util';
 
 describe('secondsUntilKstMidnight', () => {
   it('KST 23:59:30에는 30초를 반환한다', () => {
@@ -56,5 +61,54 @@ describe('startOfKstWeek', () => {
     expect(startOfKstWeek(new Date('2026-07-19T15:00:00Z')).toISOString()).toBe(
       '2026-07-19T15:00:00.000Z',
     );
+  });
+});
+
+describe('seasonIndexOf', () => {
+  it('시즌 시작(2026-09-01 KST) 직전은 pre-season(0)', () => {
+    // 2026-08-31 23:59 KST = 2026-08-31T14:59:00Z
+    expect(seasonIndexOf(new Date('2026-08-31T14:59:00Z'))).toBe(0);
+  });
+
+  it('오늘(2026-08-01)은 pre-season(0)', () => {
+    expect(seasonIndexOf(new Date('2026-08-01T00:00:00Z'))).toBe(0);
+  });
+
+  it('2026-09-01 00:00 KST는 시즌 1', () => {
+    // = 2026-08-31T15:00:00Z
+    expect(seasonIndexOf(new Date('2026-08-31T15:00:00Z'))).toBe(1);
+  });
+
+  it('시즌 1 마지막 달(2026-11) 은 시즌 1', () => {
+    expect(seasonIndexOf(new Date('2026-11-15T00:00:00Z'))).toBe(1);
+  });
+
+  it('2026-12-01 KST부터 시즌 2 (연말 넘김)', () => {
+    // 2026-12-01 00:00 KST = 2026-11-30T15:00:00Z
+    expect(seasonIndexOf(new Date('2026-11-30T15:00:00Z'))).toBe(2);
+    expect(seasonIndexOf(new Date('2027-01-15T00:00:00Z'))).toBe(2);
+  });
+
+  it('2027-03-01 KST부터 시즌 3', () => {
+    expect(seasonIndexOf(new Date('2027-02-28T15:00:00Z'))).toBe(3);
+  });
+});
+
+describe('seasonRange', () => {
+  it('시즌 1 = [2026-09-01, 2026-12-01) KST', () => {
+    const { start, end } = seasonRange(1);
+    expect(start.toISOString()).toBe('2026-08-31T15:00:00.000Z'); // 2026-09-01 00:00 KST
+    expect(end.toISOString()).toBe('2026-11-30T15:00:00.000Z'); // 2026-12-01 00:00 KST
+  });
+
+  it('시즌 2 = [2026-12-01, 2027-03-01) KST', () => {
+    const { start, end } = seasonRange(2);
+    expect(start.toISOString()).toBe('2026-11-30T15:00:00.000Z');
+    expect(end.toISOString()).toBe('2027-02-28T15:00:00.000Z'); // 2027-03-01 00:00 KST
+  });
+
+  it('연속 시즌의 end와 다음 start가 맞물린다', () => {
+    expect(seasonRange(1).end.getTime()).toBe(seasonRange(2).start.getTime());
+    expect(seasonRange(2).end.getTime()).toBe(seasonRange(3).start.getTime());
   });
 });

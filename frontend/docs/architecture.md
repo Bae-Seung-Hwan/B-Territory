@@ -13,7 +13,8 @@
 | `@react-native-async-storage/async-storage` | Firebase Auth 세션 영속화 |
 | `socket.io-client` | 실시간 WebSocket |
 | `expo-location` | GPS 위치 추적 |
-| `react-native-webview` | 카카오맵 렌더링 |
+| `react-native-maps` | Google Maps 렌더링(네이티브, Dev Build 필요) |
+| `react-native-svg` | 커스텀 마커 아이콘 |
 | `@gorhom/bottom-sheet` | 바텀시트 UI (국가 선택 등) |
 | `i18n-iso-countries` | 국가 목록 · 코드 변환 (국적 선택) |
 | `@expo/vector-icons` | 탭 아이콘 |
@@ -55,7 +56,11 @@ src/
 │   │   └── AppleSignInButton.tsx # iOS 전용, 아직 "준비 중" alert만 뜨는 비활성 버튼 (골격만)
 │   ├── ui/                       # Badge · BottomSheet · Button · Card · collapsible (공용 UI)
 │   ├── map/
-│   │   ├── KakaoMapView.tsx     # WebView + 카카오 JS SDK
+│   │   ├── BusanMapView.tsx     # react-native-maps(Google Maps) 조립 + region clamp
+│   │   ├── DistrictPolygons.tsx # 구 경계 폴리곤 (점령 시각화 확장 포인트)
+│   │   ├── SpotMarkers.tsx      # 관광지 마커 (카테고리·줌·뷰포트 필터링)
+│   │   ├── CategoryFilterPanel.tsx # 카테고리 on/off 오버레이
+│   │   ├── CurrentLocationMarker.tsx # 현재 위치 pulse 마커
 │   │   └── MapHUD.tsx           # 상단 HUD (1위팀 · 이번주 수도)
 │   └── overlay/
 │       ├── EnemyDetectionAlert  # 적 탐지 알림
@@ -93,4 +98,5 @@ src/
 ## 관련 문서
 
 - 실행 환경 전환 계획: [decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md)
-- 외부 연동(카카오맵, 소켓, API 키 노출 대응): [integrations.md](./integrations.md)
+- 점령 미션 확장성(프론트엔드만): [decisions/0002-claim-mission-extensibility.md](./decisions/0002-claim-mission-extensibility.md)
+- 외부 연동(Google Maps, 소켓, Firebase): [integrations.md](./integrations.md)

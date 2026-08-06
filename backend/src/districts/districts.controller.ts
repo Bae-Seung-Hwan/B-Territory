@@ -1,6 +1,7 @@
 import { Controller, Get, Param, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { DistrictsService, CAPITAL_MULTIPLIER } from './districts.service';
+import { ErrorCode, errBody } from '../common/errors/error-code';
 
 @ApiTags('Districts')
 @Controller('districts')
@@ -43,7 +44,10 @@ export class DistrictsController {
     const district = await this.districtsService.findOne(code);
     if (!district)
       throw new NotFoundException(
-        `구·군(sigunguCode=${code})을 찾을 수 없습니다.`,
+        errBody(
+          ErrorCode.DISTRICT_NOT_FOUND,
+          `구·군(sigunguCode=${code})을 찾을 수 없습니다.`,
+        ),
       );
     return district;
   }
