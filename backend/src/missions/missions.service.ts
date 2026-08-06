@@ -36,8 +36,6 @@ const VISIT_WINDOW_SECONDS = 24 * 60 * 60;
 
 interface UploadedPhoto {
   buffer: Buffer;
-  mimetype: string;
-  ext: string;
 }
 
 @Injectable()
@@ -89,8 +87,9 @@ export class MissionsService {
     // 일일 게이트도 소진하지 않는다.
     const sigungucode = await this.requireVisit(userId, spotId);
 
-    // 선언된 mimetype만 믿지 않고 실제 바이트 시그니처로 이미지 여부를 확인한다.
-    assertSupportedImage(photo.buffer);
+    // 선언된 mimetype·파일명은 믿지 않는다. 실제 바이트 시그니처로 포맷을 판별해
+    // S3의 확장자·Content-Type까지 그 결과에서만 파생시킨다.
+    const image = assertSupportedImage(photo.buffer);
 
     const daily = await this.redis.markMissionDaily(
       'photo',
@@ -107,9 +106,9 @@ export class MissionsService {
     try {
       const imageUrl = await this.s3.upload(
         photo.buffer,
-        photo.mimetype,
+        image.mimetype,
         `missions/photos/${spotId}`,
-        photo.ext,
+        image.ext,
       );
       const personal = await this.awardBonus({
         userId,

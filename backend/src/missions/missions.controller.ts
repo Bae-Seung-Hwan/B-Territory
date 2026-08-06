@@ -23,7 +23,6 @@ import {
   ApiConsumes,
   ApiBody,
 } from '@nestjs/swagger';
-import { extname } from 'path';
 import { MissionsService } from './missions.service';
 import { CheckinDto } from './dto/checkin.dto';
 import { PhotoMissionDto } from './dto/photo-mission.dto';
@@ -36,10 +35,10 @@ const MAX_PHOTO_BYTES = 5 * 1024 * 1024; // 5MB
 
 // tsconfig의 types가 ["jest","node"]로 제한돼 multer의 전역 Express.Multer 확장이 로드되지
 // 않으므로, 실제로 쓰는 필드만 담은 최소 타입으로 업로드 파일을 받는다.
+// 파일명·mimetype은 클라이언트가 위조할 수 있어 서비스로 넘기지 않는다 — 확장자와
+// Content-Type은 서비스가 매직 바이트로 판별한 실제 포맷에서 파생시킨다.
 interface UploadedImage {
   buffer: Buffer;
-  mimetype: string;
-  originalname: string;
 }
 
 @ApiTags('Missions')
@@ -70,7 +69,12 @@ export class MissionsController {
   @Post('photo')
   @UseGuards(FirebaseAuthGuard)
   @ApiBearerAuth()
-  @UseInterceptors(FileInterceptor('image'))
+  // FileInterceptor는 메모리 스토리지라, limits 없이는 파일 전체를 버퍼링한 뒤에야
+  // 아래 MaxFileSizeValidator가 거부한다(사후 검증 → 메모리 소진 위험). multer 레벨에서
+  // 스트림 단계부터 끊어 실제 상한을 강제한다. 초과 시 413(PayloadTooLarge).
+  @UseInterceptors(
+    FileInterceptor('image', { limits: { fileSize: MAX_PHOTO_BYTES } }),
+  )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({
     summary: '현장 사진 인증 미션 (사전 체크인 전제, 개인 보너스)',
@@ -95,6 +99,7 @@ export class MissionsController {
     status: 409,
     description: '오늘 이미 사진 인증함 (KST 자정 초기화)',
   })
+  @ApiResponse({ status: 413, description: '이미지가 5MB를 초과함' })
   async submitPhoto(
     @UploadedFile(
       new ParseFilePipe({
@@ -117,11 +122,7 @@ export class MissionsController {
   ) {
     const { id, team } = await this.resolveUser(req.user.uid);
     return this.missionsService.submitPhoto(
-      {
-        buffer: file.buffer,
-        mimetype: file.mimetype,
-        ext: extname(file.originalname) || '.jpg',
-      },
+      { buffer: file.buffer },
       dto.spotId,
       id,
       team,

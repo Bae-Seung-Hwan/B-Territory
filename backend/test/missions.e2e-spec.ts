@@ -15,13 +15,34 @@ const mockFirebaseService = {
   verifyIdToken: (token: string) => Promise.resolve({ uid: token }),
 };
 const MOCK_IMAGE_URL = 'https://s3.test/missions/photos/mock.jpg';
+// 업로드 인자를 기록해, 확장자·Content-Type이 클라이언트 선언값이 아니라
+// 매직 바이트로 판별한 실제 포맷에서 파생되는지 검증한다.
+let lastUpload: { contentType: string; ext: string } | null = null;
 const mockS3Service = {
-  upload: () => Promise.resolve(MOCK_IMAGE_URL),
+  upload: (
+    _buffer: Buffer,
+    contentType: string,
+    _prefix: string,
+    ext: string,
+  ) => {
+    lastUpload = { contentType, ext };
+    return Promise.resolve(MOCK_IMAGE_URL);
+  },
 };
 // 매직 바이트 검증(JPEG: FF D8 FF)을 통과하는 최소 버퍼
 const JPEG_BYTES = Buffer.concat([
   Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
   Buffer.alloc(20),
+]);
+// 매직 바이트 검증(PNG: 89 50 4E 47 0D 0A 1A 0A)을 통과하는 최소 버퍼
+const PNG_BYTES = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(20),
+]);
+// 인터셉터의 5MB 상한을 넘기는 버퍼 (앞부분은 유효한 JPEG 시그니처)
+const OVERSIZED_BYTES = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+  Buffer.alloc(6 * 1024 * 1024),
 ]);
 
 // Busan City Hall 근방 (스팟 좌표와 동일 → 50m 이내)
@@ -90,6 +111,13 @@ describe('Missions (e2e)', () => {
         nickname: '유저B',
         nationality: 'KR',
         team: 'B',
+      },
+      {
+        firebaseUid: 'uid-C',
+        email: 'c@test.com',
+        nickname: '유저C',
+        nationality: 'KR',
+        team: 'A',
       },
     ]);
     const spot = await spotRepo.save({
@@ -223,6 +251,42 @@ describe('Missions (e2e)', () => {
           contentType: 'image/jpeg',
         });
       expect(res.status).toBe(409);
+    });
+  });
+
+  describe('사진 업로드 방어', () => {
+    // 다른 describe에 의존하지 않도록 이 describe 전용 유저(uid-C)로 방문 창을 연다.
+    beforeAll(async () => {
+      await checkin('uid-C');
+      lastUpload = null;
+    });
+
+    it('5MB 초과 업로드는 413 — 인터셉터가 스트림 단계에서 끊는다', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/missions/photo')
+        .set('Authorization', 'Bearer uid-C')
+        .field('spotId', String(spotId))
+        .attach('image', OVERSIZED_BYTES, {
+          filename: 'huge.jpg',
+          contentType: 'image/jpeg',
+        });
+      expect(res.status).toBe(413);
+      // 거부된 업로드는 S3까지 가지 않는다 (일일 게이트도 소진되지 않음).
+      expect(lastUpload).toBeNull();
+    });
+
+    it('파일명·mimetype을 위조해도 저장 확장자·Content-Type은 실제 바이트를 따른다', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/missions/photo')
+        .set('Authorization', 'Bearer uid-C')
+        .field('spotId', String(spotId))
+        // 실제 바이트는 PNG인데 클라이언트는 .html + image/jpeg로 선언
+        .attach('image', PNG_BYTES, {
+          filename: 'evil.html',
+          contentType: 'image/jpeg',
+        });
+      expect(res.status).toBe(201);
+      expect(lastUpload).toEqual({ contentType: 'image/png', ext: '.png' });
     });
   });
 });
