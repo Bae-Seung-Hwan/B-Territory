@@ -10,6 +10,7 @@ import { Repository, DataSource, QueryFailedError } from 'typeorm';
 import { SpotClaim } from './entities/spot-claim.entity';
 import { DistrictClaim } from './entities/district-claim.entity';
 import { DistrictClaimHistory } from './entities/district-claim-history.entity';
+import { Spot } from '../spots/entities/spot.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
 import { ScoresService } from '../scores/scores.service';
@@ -17,6 +18,8 @@ import { DistrictsService } from '../districts/districts.service';
 import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { secondsUntilKstMidnight } from '../common/utils/kst.util';
 import { verifySpotProximity } from '../common/geo/spot-proximity.util';
+import { ErrorCode, errBody } from '../common/errors/error-code';
+import { resolveLang, pickText } from '../common/utils/lang.util';
 import { VisitDto } from './dto/visit.dto';
 
 const DEFENSE_TTL = 300; // 5분
@@ -39,6 +42,8 @@ export class ClaimsService {
     private readonly spotClaimRepo: Repository<SpotClaim>,
     @InjectRepository(DistrictClaim)
     private readonly districtClaimRepo: Repository<DistrictClaim>,
+    @InjectRepository(Spot)
+    private readonly spotRepo: Repository<Spot>,
     private readonly dataSource: DataSource,
     private readonly redis: RedisService,
     private readonly usersService: UsersService,
@@ -53,7 +58,10 @@ export class ClaimsService {
     // 사전 체크: 페널티 중인 유저의 요청을 빠르게 실패시켜 불필요한 방어 타이머 점유를 피한다.
     if (await this.redis.hasPenalty(userId)) {
       throw new ForbiddenException(
-        '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
+        errBody(
+          ErrorCode.DUEL_PENALTY_ACTIVE,
+          '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
+        ),
       );
     }
 
@@ -75,7 +83,10 @@ export class ClaimsService {
     );
     if (!daily.created) {
       throw new ConflictException(
-        '이 관광지는 오늘 이미 점령했습니다. (KST 자정에 초기화)',
+        errBody(
+          ErrorCode.DAILY_CLAIM_LIMIT,
+          '이 관광지는 오늘 이미 점령했습니다. (KST 자정에 초기화)',
+        ),
       );
     }
 
@@ -95,7 +106,10 @@ export class ClaimsService {
       );
       if (defense.status === 'blocked') {
         throw new ConflictException(
-          `방어 시간 중: ${defense.defenseTeam} 팀이 ${Math.max(0, defense.remaining)}초 동안 방어 중입니다.`,
+          errBody(
+            ErrorCode.DEFENSE_ACTIVE,
+            `방어 시간 중: ${defense.defenseTeam} 팀이 ${Math.max(0, defense.remaining)}초 동안 방어 중입니다.`,
+          ),
         );
       }
       defenseSeconds = defense.remaining;
@@ -112,7 +126,10 @@ export class ClaimsService {
           });
         }
         throw new ForbiddenException(
-          '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
+          errBody(
+            ErrorCode.DUEL_PENALTY_ACTIVE,
+            '결투 패배 페널티 중에는 관광지를 점령할 수 없습니다.',
+          ),
         );
       }
 
@@ -179,7 +196,9 @@ export class ClaimsService {
         const pgCode = (err instanceof QueryFailedError &&
           (err.driverError as { code?: string })?.code) as string | undefined;
         if (pgCode === '23503') {
-          throw new NotFoundException('관광지를 찾을 수 없습니다.');
+          throw new NotFoundException(
+            errBody(ErrorCode.SPOT_NOT_FOUND, '관광지를 찾을 수 없습니다.'),
+          );
         }
         throw err;
       }
@@ -209,24 +228,54 @@ export class ClaimsService {
     };
   }
 
-  async getSpotClaim(spotId: number) {
-    const claim = await this.spotClaimRepo.findOne({ where: { spotId } });
+  /**
+   * 관광지 현재 점령 현황 + 관광지 기본 정보(제목·언어별 설명).
+   * lang(언어코드 ko/en 또는 국가코드)으로 description을 골라준다. 미점령 관광지도
+   * spot 자체는 조회되므로 정보를 함께 내려준다(spot이 없으면 spot=null).
+   */
+  async getSpotClaim(spotId: number, lang?: string) {
+    const resolved = resolveLang(lang);
+    const [claim, spot] = await Promise.all([
+      this.spotClaimRepo.findOne({ where: { spotId } }),
+      this.spotRepo.findOne({ where: { id: spotId } }),
+    ]);
     return {
       spotId,
       team: claim?.team ?? null,
       claimedAt: claim?.claimedAt ?? null,
+      lang: resolved,
+      spot: spot
+        ? {
+            id: spot.id,
+            title: spot.title,
+            overview: spot.overview,
+            overviewEn: spot.overviewEn,
+            description: pickText(spot.overview, spot.overviewEn, resolved),
+          }
+        : null,
     };
   }
 
-  async getDistrictClaim(sigungucode: string) {
-    const claim = await this.districtClaimRepo.findOne({
-      where: { sigungucode },
-    });
+  /**
+   * 구 단위 점령 현황 + 구 이름(한/영). lang으로 name을 골라준다.
+   */
+  async getDistrictClaim(sigungucode: string, lang?: string) {
+    const resolved = resolveLang(lang);
+    const [claim, district] = await Promise.all([
+      this.districtClaimRepo.findOne({ where: { sigungucode } }),
+      this.districtsService.findOne(sigungucode),
+    ]);
     return {
       sigungucode,
       team: claim?.team ?? null,
       teamScore: claim?.teamScore ?? 0,
       calculatedAt: claim?.calculatedAt ?? null,
+      lang: resolved,
+      nameKo: district?.nameKo ?? null,
+      nameEn: district?.nameEn ?? null,
+      name: district
+        ? pickText(district.nameKo, district.nameEn, resolved)
+        : null,
     };
   }
 

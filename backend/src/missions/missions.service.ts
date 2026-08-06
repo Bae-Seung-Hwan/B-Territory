@@ -23,6 +23,7 @@ import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { secondsUntilKstMidnight } from '../common/utils/kst.util';
 import { verifySpotProximity } from '../common/geo/spot-proximity.util';
 import { assertSupportedImage } from '../common/s3/image-signature.util';
+import { ErrorCode, errBody } from '../common/errors/error-code';
 import { ReviewMissionDto } from './dto/review-mission.dto';
 
 // 미션 보너스 기본값(가중치 곱하기 전). 개인 점수에만 기여하고 팀 점수는 0.
@@ -265,7 +266,9 @@ export class MissionsService {
       const pgCode = (err instanceof QueryFailedError &&
         (err.driverError as { code?: string })?.code) as string | undefined;
       if (pgCode === '23503') {
-        throw new NotFoundException('관광지를 찾을 수 없습니다.');
+        throw new NotFoundException(
+          errBody(ErrorCode.SPOT_NOT_FOUND, '관광지를 찾을 수 없습니다.'),
+        );
       }
       throw err;
     }

@@ -7,8 +7,12 @@ declare module 'axios' {
   }
 }
 
+// API 주소의 단일 소스. 예전엔 이 식이 api/spots.ts·api/claims.ts에도 복사돼 있었고,
+// 그쪽에만 로컬 폴백이 있어 env를 빠뜨렸을 때 인증 요청만 조용히 실패하는 상태였다.
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+
 export const apiClient = create({
-  baseURL: process.env.EXPO_PUBLIC_API_URL,
+  baseURL: API_BASE_URL,
   timeout: 10000,
 });
 

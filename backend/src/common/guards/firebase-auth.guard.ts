@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { FirebaseService } from '../firebase/firebase.service';
+import { ErrorCode, errBody } from '../errors/error-code';
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
@@ -18,7 +19,9 @@ export class FirebaseAuthGuard implements CanActivate {
     const authHeader = request.headers.authorization ?? '';
 
     if (!authHeader.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Firebase ID Token이 필요합니다.');
+      throw new UnauthorizedException(
+        errBody(ErrorCode.TOKEN_REQUIRED, 'Firebase ID Token이 필요합니다.'),
+      );
     }
 
     const token = authHeader.slice(7);
@@ -27,7 +30,9 @@ export class FirebaseAuthGuard implements CanActivate {
       request.user = decoded;
       return true;
     } catch {
-      throw new UnauthorizedException('유효하지 않은 토큰입니다.');
+      throw new UnauthorizedException(
+        errBody(ErrorCode.INVALID_TOKEN, '유효하지 않은 토큰입니다.'),
+      );
     }
   }
 }

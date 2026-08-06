@@ -8,8 +8,9 @@ import {
   WebSocketServer,
   WsException,
 } from '@nestjs/websockets';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger, UseFilters, ValidationPipe } from '@nestjs/common';
 import { Namespace, Socket } from 'socket.io';
+import { WsExceptionsFilter } from '../common/filters/ws-exception.filter';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -24,6 +25,7 @@ import {
   ENCOUNTER_COOLDOWN_TTL,
   NOTIFICATION_QUEUE_TTL,
 } from '../duels/constants';
+import { ErrorCode, errBody } from '../common/errors/error-code';
 
 interface AuthenticatedUser {
   id: string;
@@ -43,6 +45,7 @@ const wsValidationPipe = new ValidationPipe({
   forbidNonWhitelisted: true,
 });
 
+@UseFilters(WsExceptionsFilter)
 @WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
 export class RealtimeGateway
   implements OnGatewayConnection, OnGatewayDisconnect
@@ -68,7 +71,13 @@ export class RealtimeGateway
 
   private getUser(client: Socket): AuthenticatedUser {
     const user = (client.data as SocketData).user;
-    if (!user) throw new WsException('인증되지 않은 연결입니다.');
+    if (!user)
+      throw new WsException(
+        errBody(
+          ErrorCode.UNAUTHENTICATED_CONNECTION,
+          '인증되지 않은 연결입니다.',
+        ),
+      );
     return user;
   }
 

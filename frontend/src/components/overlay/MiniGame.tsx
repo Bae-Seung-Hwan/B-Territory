@@ -21,7 +21,7 @@ export function MiniGame() {
         <Text style={styles.placeholder}>{t('overlay.miniGame.placeholder')}</Text>
         {/* TODO: 실제 미니게임 컴포넌트로 교체 */}
         <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
-          <Text style={styles.closeBtnText}>{t('overlay.miniGame.close')}</Text>
+          <Text style={styles.closeBtnText}>{t('common.close')}</Text>
         </TouchableOpacity>
       </View>
     </Modal>
