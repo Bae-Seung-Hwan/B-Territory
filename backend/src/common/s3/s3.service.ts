@@ -4,8 +4,18 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
+
+/** 업로드 결과. key는 실패 시 되돌리기(삭제)에 필요해 URL과 함께 돌려준다. */
+export interface UploadResult {
+  url: string;
+  key: string;
+}
 
 /**
  * S3 업로드 래퍼. 자격증명은 env(AWS_ACCESS_KEY_ID/SECRET)나 EC2 인스턴스 IAM 역할
@@ -30,7 +40,7 @@ export class S3Service {
   }
 
   /**
-   * 버퍼를 S3에 업로드하고 공개 URL을 반환한다.
+   * 버퍼를 S3에 업로드하고 공개 URL과 키를 반환한다.
    * keyPrefix 아래에 UUID 파일명으로 저장한다(원본 파일명 노출·충돌 방지).
    */
   async upload(
@@ -38,7 +48,7 @@ export class S3Service {
     contentType: string,
     keyPrefix: string,
     ext: string,
-  ): Promise<string> {
+  ): Promise<UploadResult> {
     if (!this.bucket) {
       throw new InternalServerErrorException(
         'S3_BUCKET 미설정 — 이미지 업로드를 처리할 수 없습니다.',
@@ -58,6 +68,22 @@ export class S3Service {
       this.logger.error(`S3 업로드 실패 key=${key}`, err as Error);
       throw new InternalServerErrorException('이미지 업로드에 실패했습니다.');
     }
-    return `${this.publicBase}/${key}`;
+    return { url: `${this.publicBase}/${key}`, key };
+  }
+
+  /**
+   * 업로드 이후 단계가 실패했을 때 객체를 지운다(고아 객체 방지).
+   * 되돌리기용이므로 실패해도 원래 에러를 가리지 않도록 던지지 않고 로그만 남긴다 —
+   * 남은 객체는 버킷 lifecycle 정리에 맡긴다.
+   */
+  async deleteQuietly(key: string): Promise<void> {
+    if (!this.bucket) return;
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+    } catch (err) {
+      this.logger.error(`S3 고아 객체 삭제 실패 key=${key}`, err as Error);
+    }
   }
 }

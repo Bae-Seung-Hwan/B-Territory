@@ -14,10 +14,13 @@ import { Spot } from '../src/spots/entities/spot.entity';
 const mockFirebaseService = {
   verifyIdToken: (token: string) => Promise.resolve({ uid: token }),
 };
-const MOCK_IMAGE_URL = 'https://s3.test/missions/photos/mock.jpg';
+const MOCK_IMAGE_KEY = 'missions/photos/mock.jpg';
+const MOCK_IMAGE_URL = `https://s3.test/${MOCK_IMAGE_KEY}`;
 // 업로드 인자를 기록해, 확장자·Content-Type이 클라이언트 선언값이 아니라
 // 매직 바이트로 판별한 실제 포맷에서 파생되는지 검증한다.
 let lastUpload: { contentType: string; ext: string } | null = null;
+// 업로드 이후 단계가 실패했을 때 고아 객체가 지워지는지 검증한다.
+let deletedKeys: string[] = [];
 const mockS3Service = {
   upload: (
     _buffer: Buffer,
@@ -26,7 +29,11 @@ const mockS3Service = {
     ext: string,
   ) => {
     lastUpload = { contentType, ext };
-    return Promise.resolve(MOCK_IMAGE_URL);
+    return Promise.resolve({ url: MOCK_IMAGE_URL, key: MOCK_IMAGE_KEY });
+  },
+  deleteQuietly: (key: string) => {
+    deletedKeys.push(key);
+    return Promise.resolve();
   },
 };
 // 매직 바이트 검증(JPEG: FF D8 FF)을 통과하는 최소 버퍼
@@ -304,6 +311,43 @@ describe('Missions (e2e)', () => {
         });
       expect(res.status).toBe(201);
       expect(lastUpload).toEqual({ contentType: 'image/png', ext: '.png' });
+    });
+  });
+
+  describe('업로드 이후 실패 시 고아 객체 정리', () => {
+    // 체크인은 Redis만 보므로, 체크인 뒤 스팟을 지우면 업로드까지 성공한 뒤
+    // mission_photos INSERT가 FK(23503)로 깨지는 상황을 결정적으로 만들 수 있다.
+    let doomedSpotId: number;
+
+    beforeAll(async () => {
+      const spot = await spotRepo.save({
+        contentId: 'mission-spot-doomed',
+        title: '삭제될 관광지',
+        mapX: SPOT_LNG,
+        mapY: SPOT_LAT,
+        sigungucode: '99TEST',
+      });
+      doomedSpotId = spot.id;
+      await request(app.getHttpServer())
+        .post('/api/missions/checkin')
+        .set('Authorization', 'Bearer uid-C')
+        .send({ spotId: doomedSpotId, lat: SPOT_LAT, lng: SPOT_LNG })
+        .expect(201);
+      await spotRepo.delete(doomedSpotId);
+      deletedKeys = [];
+    });
+
+    it('원장 기록이 FK로 실패하면 404 + 업로드된 S3 객체를 삭제한다', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/missions/photo')
+        .set('Authorization', 'Bearer uid-C')
+        .field('spotId', String(doomedSpotId))
+        .attach('image', JPEG_BYTES, {
+          filename: 'photo.jpg',
+          contentType: 'image/jpeg',
+        });
+      expect(res.status).toBe(404);
+      expect(deletedKeys).toEqual([MOCK_IMAGE_KEY]);
     });
   });
 });

@@ -103,13 +103,16 @@ export class MissionsService {
       );
     }
 
+    // 업로드 이후 단계가 실패하면 이 키의 객체를 지워 고아 객체를 남기지 않는다.
+    let uploadedKey: string | null = null;
     try {
-      const imageUrl = await this.s3.upload(
+      const { url: imageUrl, key } = await this.s3.upload(
         photo.buffer,
         image.mimetype,
         `missions/photos/${spotId}`,
         image.ext,
       );
+      uploadedKey = key;
       const personal = await this.awardBonus({
         userId,
         team,
@@ -131,6 +134,8 @@ export class MissionsService {
       };
     } catch (err) {
       await this.rollbackDaily('photo', userId, spotId, daily.token);
+      // 원장 기록이 실패했으므로 이미 올라간 이미지는 참조하는 행이 없다 — 지운다.
+      if (uploadedKey) await this.s3.deleteQuietly(uploadedKey);
       throw err;
     }
   }
