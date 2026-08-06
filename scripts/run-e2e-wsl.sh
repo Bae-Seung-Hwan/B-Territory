@@ -43,6 +43,11 @@ fi
 # backend와 data를 리포지토리와 같은 형제 구조로 둔다.
 mkdir -p "$DST" "$WORK/data"
 echo "== 소스 동기화 =="
+# tar는 덮어쓰기만 하고 삭제하지 않는다. 브랜치를 바꾸면 이전 브랜치에만 있던 파일이
+# 사본에 남아, 지금 브랜치에 존재하지도 않는 스펙이 실패한다(의존성이 없거나 라우트가
+# 없어서). 실제 코드 문제로 착각하기 쉬우므로 node_modules만 남기고 비운 뒤 푼다.
+find "$DST" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+find "$WORK/data" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 tar -C "$REPO/backend" \
   --exclude=node_modules --exclude=dist --exclude=.git \
   --exclude='*.tsbuildinfo' \
