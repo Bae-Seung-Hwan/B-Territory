@@ -71,9 +71,19 @@ export class MissionsController {
   @ApiBearerAuth()
   // FileInterceptor는 메모리 스토리지라, limits 없이는 파일 전체를 버퍼링한 뒤에야
   // 아래 MaxFileSizeValidator가 거부한다(사후 검증 → 메모리 소진 위험). multer 레벨에서
-  // 스트림 단계부터 끊어 실제 상한을 강제한다. 초과 시 413(PayloadTooLarge).
+  // 스트림 단계부터 끊어 실제 상한을 강제한다. 파일 초과는 413, 나머지 초과는 400.
+  // fileSize만 걸면 busboy 기본값상 fields/parts가 여전히 Infinity라 "파일이 아닌 파트"로
+  // 같은 메모리 소진이 가능하다 — 요청 전체를 유한하게 묶으려면 아래가 모두 필요하다.
   @UseInterceptors(
-    FileInterceptor('image', { limits: { fileSize: MAX_PHOTO_BYTES } }),
+    FileInterceptor('image', {
+      limits: {
+        fileSize: MAX_PHOTO_BYTES,
+        files: 1,
+        fields: 4, // 실제로는 spotId 하나 (여유분 포함)
+        parts: 6, // 파일 + 필드 총 파트 수
+        fieldSize: 16 * 1024, // 파일 아닌 필드 값의 상한
+      },
+    }),
   )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({

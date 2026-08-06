@@ -275,6 +275,23 @@ describe('Missions (e2e)', () => {
       expect(lastUpload).toBeNull();
     });
 
+    it('파일이 아닌 대량 필드도 거부된다 — fileSize만으로는 안 막히는 경로', async () => {
+      const req = request(app.getHttpServer())
+        .post('/api/missions/photo')
+        .set('Authorization', 'Bearer uid-C');
+      // 512KB × 40개 = 20MB. fields/parts 상한이 없으면 전부 메모리에 버퍼링된다.
+      const chunk = 'a'.repeat(512 * 1024);
+      for (let i = 0; i < 40; i++) req.field(`junk${i}`, chunk);
+      const res = await req;
+      expect(res.status).toBe(400);
+      // 상한이 없으면 20MB를 다 버퍼링한 뒤 ValidationPipe가 400을 내므로,
+      // 상한이 실제로 동작했는지는 "multer 한도" 메시지로만 구분된다.
+      expect(String((res.body as { message?: string }).message)).toMatch(
+        /too long|too many/i,
+      );
+      expect(lastUpload).toBeNull();
+    });
+
     it('파일명·mimetype을 위조해도 저장 확장자·Content-Type은 실제 바이트를 따른다', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/missions/photo')
