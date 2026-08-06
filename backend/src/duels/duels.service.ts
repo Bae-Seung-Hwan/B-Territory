@@ -23,6 +23,7 @@ import {
   ENCOUNTER_RADIUS_M,
   PENALTY_TTL,
 } from './constants';
+import { ErrorCode, errBody } from '../common/errors/error-code';
 
 export type DuelResultOutcome =
   | { status: 'waiting' }
@@ -157,22 +158,43 @@ export class DuelsService {
     targetUserId: string,
   ): Promise<Duel> {
     if (challenger.id === targetUserId) {
-      throw new BadRequestException('자기 자신에게 결투를 신청할 수 없습니다.');
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.DUEL_SELF_CHALLENGE,
+          '자기 자신에게 결투를 신청할 수 없습니다.',
+        ),
+      );
     }
 
     const target = await this.usersService.findById(targetUserId);
-    if (!target) throw new NotFoundException('상대 유저를 찾을 수 없습니다.');
+    if (!target)
+      throw new NotFoundException(
+        errBody(
+          ErrorCode.DUEL_TARGET_NOT_FOUND,
+          '상대 유저를 찾을 수 없습니다.',
+        ),
+      );
     if (target.team === challenger.team) {
-      throw new BadRequestException('같은 팀에게는 결투를 신청할 수 없습니다.');
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.DUEL_SAME_TEAM,
+          '같은 팀에게는 결투를 신청할 수 없습니다.',
+        ),
+      );
     }
 
     if (await this.redis.hasPenalty(challenger.id)) {
       throw new ForbiddenException(
-        '결투 페널티 중에는 결투를 신청할 수 없습니다.',
+        errBody(
+          ErrorCode.DUEL_CHALLENGER_PENALTY,
+          '결투 페널티 중에는 결투를 신청할 수 없습니다.',
+        ),
       );
     }
     if (await this.redis.hasPenalty(targetUserId)) {
-      throw new ForbiddenException('상대가 결투 페널티 중입니다.');
+      throw new ForbiddenException(
+        errBody(ErrorCode.DUEL_TARGET_PENALTY, '상대가 결투 페널티 중입니다.'),
+      );
     }
 
     // geo:users의 좌표는 유저가 끊긴 뒤에도 스윕 전까지 남아있을 수 있으므로,
@@ -180,14 +202,20 @@ export class DuelsService {
     const targetMeta = await this.redis.getUserMeta(targetUserId);
     if (!targetMeta) {
       throw new BadRequestException(
-        '상대의 위치 정보를 확인할 수 없습니다. 상대가 접속 중인지 확인해주세요.',
+        errBody(
+          ErrorCode.DUEL_TARGET_LOCATION_UNKNOWN,
+          '상대의 위치 정보를 확인할 수 없습니다. 상대가 접속 중인지 확인해주세요.',
+        ),
       );
     }
 
     const inRange = await this.verifyProximity(challenger.id, targetUserId);
     if (!inRange) {
       throw new BadRequestException(
-        `반경 ${ENCOUNTER_RADIUS_M}m 이내에 있어야 결투를 신청할 수 있습니다.`,
+        errBody(
+          ErrorCode.DUEL_OUT_OF_RANGE,
+          `반경 ${ENCOUNTER_RADIUS_M}m 이내에 있어야 결투를 신청할 수 있습니다.`,
+        ),
       );
     }
 
@@ -213,7 +241,10 @@ export class DuelsService {
       });
       if (hasActiveDuel) {
         throw new ConflictException(
-          '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+          errBody(
+            ErrorCode.DUEL_ALREADY_ACTIVE,
+            '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+          ),
         );
       }
 
@@ -235,7 +266,12 @@ export class DuelsService {
     );
     if (!acquired) {
       await this.duelRepo.delete(duel.id);
-      throw new ConflictException('이미 진행 중인 결투 요청이 있습니다.');
+      throw new ConflictException(
+        errBody(
+          ErrorCode.DUEL_ALREADY_PENDING,
+          '이미 진행 중인 결투 요청이 있습니다.',
+        ),
+      );
     }
 
     return duel;
@@ -247,10 +283,16 @@ export class DuelsService {
     accept: boolean,
   ): Promise<Duel> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
-    if (!duel) throw new NotFoundException('결투를 찾을 수 없습니다.');
+    if (!duel)
+      throw new NotFoundException(
+        errBody(ErrorCode.DUEL_NOT_FOUND, '결투를 찾을 수 없습니다.'),
+      );
     if (duel.opponentId !== responderId) {
       throw new ForbiddenException(
-        '본인에게 온 결투 요청만 응답할 수 있습니다.',
+        errBody(
+          ErrorCode.DUEL_NOT_RECIPIENT,
+          '본인에게 온 결투 요청만 응답할 수 있습니다.',
+        ),
       );
     }
 
@@ -268,7 +310,9 @@ export class DuelsService {
       })
       .execute();
     if (updateResult.affected === 0) {
-      throw new ConflictException('이미 처리된 결투입니다.');
+      throw new ConflictException(
+        errBody(ErrorCode.DUEL_ALREADY_HANDLED, '이미 처리된 결투입니다.'),
+      );
     }
 
     const lockKey = this.lockKey(duel.challengerId, duel.opponentId);
@@ -322,16 +366,34 @@ export class DuelsService {
     winnerId: string,
   ): Promise<DuelResultOutcome> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
-    if (!duel) throw new NotFoundException('결투를 찾을 수 없습니다.');
+    if (!duel)
+      throw new NotFoundException(
+        errBody(ErrorCode.DUEL_NOT_FOUND, '결투를 찾을 수 없습니다.'),
+      );
     if (duel.status !== DuelStatus.ACCEPTED) {
-      throw new ConflictException('수락된 결투만 결과를 제출할 수 있습니다.');
+      throw new ConflictException(
+        errBody(
+          ErrorCode.DUEL_NOT_ACCEPTED,
+          '수락된 결투만 결과를 제출할 수 있습니다.',
+        ),
+      );
     }
     const participants = [duel.challengerId, duel.opponentId];
     if (!participants.includes(reporterId)) {
-      throw new ForbiddenException('결투 참가자만 결과를 제출할 수 있습니다.');
+      throw new ForbiddenException(
+        errBody(
+          ErrorCode.DUEL_NOT_PARTICIPANT,
+          '결투 참가자만 결과를 제출할 수 있습니다.',
+        ),
+      );
     }
     if (!participants.includes(winnerId)) {
-      throw new BadRequestException('승자는 결투 참가자여야 합니다.');
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.DUEL_WINNER_NOT_PARTICIPANT,
+          '승자는 결투 참가자여야 합니다.',
+        ),
+      );
     }
 
     // 신고 접수 시각을 DB 시계로 스탬프하는 조건부 UPDATE — 두 역할을 겸한다:
@@ -349,7 +411,12 @@ export class DuelsService {
       })
       .execute();
     if (stamped.affected === 0) {
-      throw new ConflictException('수락된 결투만 결과를 제출할 수 있습니다.');
+      throw new ConflictException(
+        errBody(
+          ErrorCode.DUEL_NOT_ACCEPTED,
+          '수락된 결투만 결과를 제출할 수 있습니다.',
+        ),
+      );
     }
 
     const result = await this.redis.submitDuelResult(

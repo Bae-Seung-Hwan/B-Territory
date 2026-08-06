@@ -23,6 +23,33 @@ export class UsersService {
     return this.userRepository.find({ where: { id: In(ids) } });
   }
 
+  /**
+   * 본인 프로필 매퍼 — 이메일 포함 + 현재 점수. auth(/auth/me·register)와 users(/users/me)가
+   * 같은 형태를 반환하도록 한 곳에서 만든다. score는 저장 직후 엔티티에 DB 기본값이 아직
+   * 채워지지 않은 경우(가입 응답)를 대비해 0으로 폴백한다.
+   */
+  toProfile(user: User) {
+    return {
+      id: user.id,
+      email: user.email,
+      nickname: user.nickname,
+      nationality: user.nationality,
+      team: user.team,
+      score: user.score ?? 0,
+    };
+  }
+
+  /** 타 유저 공개 프로필 — 이메일 등 민감 정보 제외, 점수는 공개. */
+  toPublicProfile(user: User) {
+    return {
+      id: user.id,
+      nickname: user.nickname,
+      nationality: user.nationality,
+      team: user.team,
+      score: user.score ?? 0,
+    };
+  }
+
   async create(data: Partial<User>): Promise<User> {
     const user = this.userRepository.create(data);
     return this.userRepository.save(user);
