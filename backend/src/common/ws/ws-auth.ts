@@ -1,6 +1,6 @@
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { WsException } from '@nestjs/websockets';
-import { Socket } from 'socket.io';
+import { Namespace, Socket } from 'socket.io';
 import { FirebaseService } from '../firebase/firebase.service';
 import { UsersService } from '../../users/users.service';
 import { ErrorCode, errBody } from '../errors/error-code';
@@ -53,6 +53,50 @@ export function getSocketUser(client: Socket): AuthenticatedUser {
 
 export function setSocketUser(client: Socket, user: AuthenticatedUser): void {
   (client.data as SocketData).user = user;
+}
+
+/**
+ * 네임스페이스 미들웨어로 핸드셰이크 인증을 건다 — 게이트웨이는 afterInit에서 호출한다.
+ *
+ * 라이프사이클 훅(handleConnection)에서 인증하면 안 된다. 그 훅은 전송 계층 연결이
+ * 열린 뒤에 도는데, 클라이언트의 'connect'는 서버가 훅을 끝내길 기다리지 않고 즉시
+ * 발생한다. 그 틈에 클라이언트가 메시지를 보내면 client.data.user가 아직 비어 있어
+ * 정상 인증된 유저인데도 "인증되지 않은 연결"로 거부된다(접속 직후 전송 시 실측 ~60%).
+ * 미들웨어는 핸드셰이크 자체의 일부라 완료 전에는 'connect'가 발생하지 않으므로,
+ * 클라이언트 입장에서 "연결됨"이 곧 "인증됨"이 된다.
+ *
+ * onAuthenticated는 인증 직후 아직 핸드셰이크 안에서 처리할 일(예: 룸 join)을 받는다.
+ * 여기서 클라이언트로 emit하면 안 된다 — 아직 연결 전이라 유실된다. 그런 작업은
+ * handleConnection에 남긴다.
+ */
+export function useSocketAuth(
+  namespace: Namespace,
+  firebaseService: FirebaseService,
+  usersService: UsersService,
+  logger: Logger,
+  onAuthenticated?: (
+    socket: Socket,
+    user: AuthenticatedUser,
+  ) => void | Promise<void>,
+): void {
+  namespace.use((socket, next) => {
+    void (async () => {
+      try {
+        const user = await authenticateSocket(
+          firebaseService,
+          usersService,
+          socket,
+        );
+        setSocketUser(socket, user);
+        await onAuthenticated?.(socket, user);
+        next();
+      } catch (err) {
+        // next(err)로 넘기면 클라이언트는 connect가 아니라 connect_error를 받는다.
+        logger.warn(`연결 거부: ${(err as Error).message}`);
+        next(err as Error);
+      }
+    })();
+  });
 }
 
 // 클래스 레벨 @UsePipes로 적용하면 @ConnectedSocket()의 Socket 파라미터까지 검증 대상이 되어

@@ -3,6 +3,7 @@ import {
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -16,9 +17,8 @@ import { RedisService } from '../common/redis/redis.service';
 import { sortedPairKey } from '../common/utils/pair-key.util';
 import {
   SocketData,
-  authenticateSocket,
   getSocketUser,
-  setSocketUser,
+  useSocketAuth,
   wsValidationPipe,
 } from '../common/ws/ws-auth';
 import { DuelsService } from '../duels/duels.service';
@@ -35,7 +35,7 @@ import {
 @UseFilters(WsExceptionsFilter)
 @WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
 export class RealtimeGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   private readonly logger = new Logger(RealtimeGateway.name);
 
@@ -83,22 +83,26 @@ export class RealtimeGateway
     );
   }
 
-  async handleConnection(client: Socket): Promise<void> {
-    try {
-      const user = await authenticateSocket(
-        this.firebaseService,
-        this.usersService,
-        client,
-      );
-      setSocketUser(client, user);
+  /**
+   * 인증은 핸드셰이크 미들웨어에서 끝낸다 — 라이프사이클 훅에서 하면 클라이언트가
+   * 인증 완료 전에 connect를 받아, 곧바로 보낸 이벤트가 미인증으로 거부된다.
+   */
+  afterInit(namespace: Namespace): void {
+    useSocketAuth(
+      namespace,
+      this.firebaseService,
+      this.usersService,
+      this.logger,
+    );
+  }
 
-      const pending = await this.redis.drainNotifications(user.id);
-      for (const { event, payload } of pending) {
-        client.emit(event, payload);
-      }
-    } catch (err) {
-      this.logger.warn(`연결 거부: ${(err as Error).message}`);
-      client.disconnect(true);
+  async handleConnection(client: Socket): Promise<void> {
+    // 미들웨어를 통과한 소켓만 여기 도달하므로 user는 항상 있다.
+    // 밀린 알림 재생은 emit이라 핸드셰이크가 아닌 연결 확립 후에 해야 유실되지 않는다.
+    const user = getSocketUser(client);
+    const pending = await this.redis.drainNotifications(user.id);
+    for (const { event, payload } of pending) {
+      client.emit(event, payload);
     }
   }
 

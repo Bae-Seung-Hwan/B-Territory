@@ -1,7 +1,7 @@
 import {
   ConnectedSocket,
   MessageBody,
-  OnGatewayConnection,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -13,9 +13,8 @@ import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
 import {
-  authenticateSocket,
   getSocketUser,
-  setSocketUser,
+  useSocketAuth,
   wsValidationPipe,
 } from '../common/ws/ws-auth';
 import { ChatMessageDto } from './dto/chat-message.dto';
@@ -28,8 +27,8 @@ const LOC_LIMIT = 10;
 const LOC_WINDOW_SEC = 10;
 
 /**
- * 팀(국가) 채팅·위치 공유 게이트웨이. 접속 시 팀 룸에 join하고, 메시지/위치를 같은 팀에게
- * 릴레이만 한다(DB 저장 없음). 인증은 realtime과 동일한 핸드셰이크(ws-auth)를 공유한다.
+ * 팀(국가) 채팅·위치 공유 게이트웨이. 핸드셰이크에서 인증하며 팀 룸에 join하고, 메시지/
+ * 위치를 같은 팀에게 릴레이만 한다(DB 저장 없음). 인증은 realtime과 동일한 ws-auth를 공유한다.
  * 소켓은 disconnect 시 socket.io가 룸에서 자동 제거하므로 별도 정리가 필요 없다.
  *
  * NOTE(스케일아웃): 룸 릴레이가 인스턴스 로컬이므로 다중 인스턴스 배포 시에는
@@ -38,7 +37,7 @@ const LOC_WINDOW_SEC = 10;
  * 달라 별도 채널로 둔다. 프론트는 두 채널에 위치를 중복 전송하지 않도록 조율한다.
  */
 @WebSocketGateway({ namespace: '/chat', cors: { origin: '*' } })
-export class ChatGateway implements OnGatewayConnection {
+export class ChatGateway implements OnGatewayInit {
   private readonly logger = new Logger(ChatGateway.name);
 
   @WebSocketServer()
@@ -71,19 +70,19 @@ export class ChatGateway implements OnGatewayConnection {
     }
   }
 
-  async handleConnection(client: Socket): Promise<void> {
-    try {
-      const user = await authenticateSocket(
-        this.firebaseService,
-        this.usersService,
-        client,
-      );
-      setSocketUser(client, user);
-      await client.join(this.roomOf(user.team));
-    } catch (err) {
-      this.logger.warn(`연결 거부: ${(err as Error).message}`);
-      client.disconnect(true);
-    }
+  /**
+   * 인증과 팀 룸 join을 모두 핸드셰이크 안에서 끝낸다 — 클라이언트가 connect를 받은
+   * 시점엔 이미 인증·join이 완료돼 있어, 접속 직후 보낸 메시지가 거부되거나 접속 직후
+   * 팀 메시지를 놓치는 창이 없다.
+   */
+  afterInit(namespace: Namespace): void {
+    useSocketAuth(
+      namespace,
+      this.firebaseService,
+      this.usersService,
+      this.logger,
+      (socket, user) => socket.join(this.roomOf(user.team)),
+    );
   }
 
   @SubscribeMessage('chat:message')

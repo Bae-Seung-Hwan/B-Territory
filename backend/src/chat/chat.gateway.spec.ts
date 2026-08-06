@@ -43,7 +43,31 @@ describe('ChatGateway', () => {
     );
   });
 
-  describe('handleConnection', () => {
+  describe('핸드셰이크 인증 (네임스페이스 미들웨어)', () => {
+    type SocketMiddleware = (
+      socket: unknown,
+      next: (err?: Error) => void,
+    ) => void;
+
+    /** afterInit이 네임스페이스에 등록한 미들웨어를 꺼낸다. */
+    const captureMiddleware = (): SocketMiddleware => {
+      let captured: SocketMiddleware | undefined;
+      const namespace = {
+        use: (fn: SocketMiddleware) => {
+          captured = fn;
+        },
+      };
+      gateway.afterInit(namespace as never);
+      if (!captured) throw new Error('afterInit이 미들웨어를 등록하지 않았다');
+      return captured;
+    };
+
+    /** 미들웨어를 실제 호출 순서대로 돌리고 next에 넘어온 에러를 돌려준다. */
+    const runMiddleware = (client: MockSocket) =>
+      new Promise<Error | undefined>((resolve) => {
+        captureMiddleware()(client, (err) => resolve(err));
+      });
+
     it('인증 성공 시 팀 룸에 join하고 소켓에 유저를 심는다', async () => {
       firebase.verifyIdToken.mockResolvedValue({ uid: 'fuid' });
       users.findByFirebaseUid.mockResolvedValue({
@@ -53,25 +77,52 @@ describe('ChatGateway', () => {
       });
       const client = mockSocket('valid-token');
 
-      await gateway.handleConnection(client as never);
+      const err = await runMiddleware(client);
 
+      expect(err).toBeUndefined();
       expect(client.join).toHaveBeenCalledWith('team:A');
       expect(client.data.user).toEqual({
         id: 'u1',
         team: 'A',
         nickname: '유저A',
       });
-      expect(client.disconnect).not.toHaveBeenCalled();
     });
 
-    it('토큰이 없으면 연결을 끊는다', async () => {
+    it('next() 호출 시점엔 이미 인증·join이 끝나 있다 (접속 직후 전송 경합 방지)', async () => {
+      // 이 순서가 이 수정의 핵심이다. 인증이 라이프사이클 훅에 있으면 클라이언트는
+      // 인증 완료 전에 connect를 받아, 곧바로 보낸 메시지가 미인증으로 거부된다.
+      firebase.verifyIdToken.mockResolvedValue({ uid: 'fuid' });
+      users.findByFirebaseUid.mockResolvedValue({
+        id: 'u1',
+        team: 'A',
+        nickname: '유저A',
+      });
+      const client = mockSocket('valid-token');
+      const middleware = captureMiddleware();
+
+      await new Promise<void>((resolve) => {
+        middleware(client, () => {
+          // next()가 불린 바로 그 순간의 상태를 본다.
+          expect(client.data.user).toBeDefined();
+          expect(client.join).toHaveBeenCalledWith('team:A');
+          resolve();
+        });
+      });
+
+      // 인증이 끝난 소켓이므로 메시지 핸들러가 거부하지 않는다.
+      await expect(
+        gateway.handleChatMessage(client as never, { text: '안녕' }),
+      ).resolves.toEqual({ status: 'ok' });
+    });
+
+    it('토큰이 없으면 next(err)로 연결을 거부한다', async () => {
       const client = mockSocket(undefined);
-      await gateway.handleConnection(client as never);
-      expect(client.disconnect).toHaveBeenCalledWith(true);
+      const err = await runMiddleware(client);
+      expect(err).toBeInstanceOf(Error);
       expect(client.join).not.toHaveBeenCalled();
     });
 
-    it('팀 미배정 유저는 연결을 끊는다', async () => {
+    it('팀 미배정 유저는 next(err)로 연결을 거부한다', async () => {
       firebase.verifyIdToken.mockResolvedValue({ uid: 'fuid' });
       users.findByFirebaseUid.mockResolvedValue({
         id: 'u1',
@@ -79,8 +130,9 @@ describe('ChatGateway', () => {
         nickname: 'x',
       });
       const client = mockSocket('valid-token');
-      await gateway.handleConnection(client as never);
-      expect(client.disconnect).toHaveBeenCalledWith(true);
+      const err = await runMiddleware(client);
+      expect(err).toBeInstanceOf(Error);
+      expect(client.join).not.toHaveBeenCalled();
     });
   });
 
