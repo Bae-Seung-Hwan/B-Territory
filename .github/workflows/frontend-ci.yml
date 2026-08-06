@@ -55,4 +55,7 @@ jobs:
           EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
           EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ vars.EXPO_PUBLIC_FIREBASE_PROJECT_ID }}
           EXPO_PUBLIC_FIREBASE_APP_ID: ${{ vars.EXPO_PUBLIC_FIREBASE_APP_ID }}
+          # 웹 export는 네이티브 매니페스트를 안 만들어 실제로는 필요 없는 값이지만,
+          # app.config.js가 누락 시 fail-fast하도록 가드하고 있어 더미 값을 채워준다.
+          GOOGLE_MAPS_ANDROID_API_KEY: web-build-placeholder
         run: npx expo export --platform web

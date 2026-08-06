@@ -16,6 +16,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { ChatModule } from './chat/chat.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
+import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { DistrictsModule } from './districts/districts.module';
     ChatModule,
     ScoresModule,
     DistrictsModule,
+    HallOfFameModule,
   ],
   controllers: [AppController],
   providers: [AppService],

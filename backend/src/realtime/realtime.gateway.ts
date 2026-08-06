@@ -7,8 +7,9 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, UseFilters } from '@nestjs/common';
 import { Namespace, Socket } from 'socket.io';
+import { WsExceptionsFilter } from '../common/filters/ws-exception.filter';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -31,6 +32,7 @@ import {
   NOTIFICATION_QUEUE_TTL,
 } from '../duels/constants';
 
+@UseFilters(WsExceptionsFilter)
 @WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
 export class RealtimeGateway
   implements OnGatewayConnection, OnGatewayDisconnect

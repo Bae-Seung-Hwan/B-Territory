@@ -36,6 +36,22 @@ export const BrandColors = {
   danger: '#FF4444',
 } as const;
 
+/**
+ * #rrggbb + 0~1 알파 → rgba() 문자열.
+ *
+ * 반투명 표현이 세 갈래로 흩어져 있던 것을 하나로 모은 것이다 — hex 접미사(`${color}D9`),
+ * rgba 리터럴, 그리고 DistrictPolygons 안의 지역 헬퍼. 접미사 방식은 `D9`가 몇 %인지 읽히지
+ * 않아 매번 주석이 따라붙었고 6자리 hex에만 동작했다. react-native-maps의 fillColor/strokeColor는
+ * 8자리 hex 지원이 플랫폼별로 엇갈리는 반면 rgba() 문자열은 어디서나 통해, RN StyleSheet와
+ * 지도 prop 양쪽에 같은 헬퍼를 쓸 수 있다.
+ */
+export function withAlpha(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 export const Fonts = Platform.select({
   ios: {
     /** iOS `UIFontDescriptorSystemDesignDefault` */

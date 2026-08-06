@@ -3,6 +3,7 @@ import { WsException } from '@nestjs/websockets';
 import { Socket } from 'socket.io';
 import { FirebaseService } from '../firebase/firebase.service';
 import { UsersService } from '../../users/users.service';
+import { ErrorCode, errBody } from '../errors/error-code';
 
 /** 소켓 연결에 결합되는 인증 사용자 (핸드셰이크에서 확정). */
 export interface AuthenticatedUser {
@@ -33,10 +34,20 @@ export async function authenticateSocket(
   return { id: user.id, team: user.team, nickname: user.nickname };
 }
 
-/** 인증된 사용자 조회 — 미인증 소켓이면 WsException. */
+/**
+ * 인증된 사용자 조회 — 미인증 소켓이면 WsException.
+ * 에러코드는 realtime 게이트웨이에서 옮겨온 것이다 — 프론트가 code로 문구를 매핑하므로
+ * 이 유틸을 쓰는 모든 게이트웨이(realtime·chat)가 같은 코드를 내야 한다.
+ */
 export function getSocketUser(client: Socket): AuthenticatedUser {
   const user = (client.data as SocketData).user;
-  if (!user) throw new WsException('인증되지 않은 연결입니다.');
+  if (!user)
+    throw new WsException(
+      errBody(
+        ErrorCode.UNAUTHENTICATED_CONNECTION,
+        '인증되지 않은 연결입니다.',
+      ),
+    );
   return user;
 }
 

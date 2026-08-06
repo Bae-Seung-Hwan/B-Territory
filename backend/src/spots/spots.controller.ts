@@ -55,9 +55,16 @@ export class SpotsController {
 
   @Get(':id')
   @ApiOperation({ summary: '관광지 상세 조회' })
+  @ApiQuery({
+    name: 'lang',
+    required: false,
+    type: String,
+    description:
+      '언어(ko/en) 또는 국가코드(KR/US 등). 설명(description) 언어 선택용',
+  })
   @ApiResponse({ status: 200, description: '관광지 상세 정보 반환' })
   @ApiResponse({ status: 404, description: '관광지 없음' })
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.spotsService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @Query('lang') lang?: string) {
+    return this.spotsService.findOne(id, lang);
   }
 }
