@@ -38,12 +38,18 @@ export class DistrictsModule implements OnModuleInit {
       );
 
       // tz 미지정 시 서버 로컬 시간(컨테이너 기본 UTC) 기준으로 실행되므로 KST 고정.
-      // 매주 월요일 00:00 KST에 그 주의 수도를 랜덤 지정한다.
+      // 매주 월요일 그 주의 수도를 랜덤 지정한다.
+      //
+      // 00:00 정각이 아니라 00:05인 이유: 프로세서가 startOfKstWeek(new Date())로 주를 다시
+      // 계산하는데, 발화 시각이 주 경계와 정확히 겹치면 인스턴스 간 시계 편차나 NTP 역방향
+      // 보정으로 new Date()가 일요일 23:59:59.x로 잡힐 수 있다. 그러면 지난주 weekStart가
+      // 계산돼 "이미 지정됨"으로 조용히 건너뛰고, 새 주는 수도 없이 지나간다. 5분 여유를 두면
+      // 어떤 현실적인 편차에도 경계 안쪽에서 실행된다.
       await this.queue.add(
         'designate',
         {},
         {
-          repeat: { cron: '0 0 * * 1', tz: 'Asia/Seoul' },
+          repeat: { cron: '5 0 * * 1', tz: 'Asia/Seoul' },
           attempts: 3,
           backoff: { type: 'exponential', delay: 60000 },
         },

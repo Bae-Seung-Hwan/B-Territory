@@ -16,13 +16,17 @@ import {
 // 수도로 지정된 구에서 점령하는 모든 팀의 점수(개인·팀)에 곱해지는 배수.
 export const CAPITAL_MULTIPLIER = 1.2;
 
-// 현재 수도(sigunguCode)를 담는 Redis 공유 키 — 모든 인스턴스가 이 값을 단일 소스로 읽는다.
+// 해당 주의 수도(sigunguCode)를 담는 Redis 공유 키 — 모든 인스턴스가 이 값을 단일 소스로 읽는다.
 // 인메모리 캐시로 두면 수도를 지정한 인스턴스만 갱신돼 다른 인스턴스가 최대 일주일간 stale해진다.
-const CAPITAL_CURRENT_KEY = 'capital:current';
-// 주 1회 갱신되므로 2주 TTL이면 정상 운영 중엔 만료되지 않고, 지정이 멈추면 자동 정리된다.
-const CAPITAL_TTL_SEC = 14 * 24 * 60 * 60;
-// 부팅 시 수도 캐시 워밍(Redis)을 기다리는 상한(ms). 초과하면 워밍을 포기하고 부팅을 계속한다.
-const CAPITAL_WARM_TIMEOUT_MS = 3000;
+//
+// 키를 주 단위로 스코프하는 것이 중요하다. 단일 키('capital:current')로 두면 주가 바뀐 뒤에도
+// 지난주 값이 그대로 읽혀, "이번 주 수도"를 묻는 조회가 지난주 수도를 반환한다(캐시가 주 경계를
+// 모르기 때문). 주별 키는 주가 넘어가는 순간 자동으로 미스가 되어 DB 원장을 다시 보게 만든다.
+const capitalKey = (weekStart: Date) => `capital:week:${weekStart.getTime()}`;
+// 한 주(7일) + 여유 1일. 자기 주가 지나면 더 읽힐 일이 없으므로 그대로 만료되게 둔다.
+const CAPITAL_TTL_SEC = 8 * 24 * 60 * 60;
+// 부팅 시 이번 주 수도 보장(catch-up)을 기다리는 상한(ms). 초과하면 포기하고 부팅을 계속한다.
+const CAPITAL_BOOT_TIMEOUT_MS = 3000;
 // 런타임 수도 캐시 접근 상한(ms). Redis 정상 응답은 1ms 미만이라 여유가 크고, 도달 불가일 때
 // 요청이 maxRetriesPerRequest 소진까지(실측 12~24초) 매달리지 않도록 짧게 끊는다.
 const CAPITAL_CACHE_TIMEOUT_MS = 500;
@@ -79,18 +83,25 @@ export class DistrictsService implements OnModuleInit {
       );
     }
 
-    // 수도 공유 캐시(Redis)를 DB 원장에서 워밍한다. 아직 지정 전이면 비어 있는 게 정상
-    // (pre-season·최초 부팅)이므로 fail-fast하지 않는다. Redis에 이미 값이 있으면(다른
-    // 인스턴스가 먼저 세팅) 덮어쓰지 않는다.
+    // 이번 주 수도가 없으면 여기서 지정한다(놓친 주 catch-up).
     //
-    // 워밍은 best-effort다(런타임 getCurrentCapital이 Redis 미스 시 DB에서 self-heal).
-    // Redis에 도달하지 못하면 ioredis 명령이 예외로 전환되기까지 수 초 걸릴 수 있어,
-    // 부팅이 app.listen()에 도달하지 못하는 것을 막도록 타임아웃 + fail-open으로 감싼다.
+    // 주간 지정은 Bull repeatable cron이 담당하는데, Bull은 놓친 발화를 소급 실행하지 않는다.
+    // 월요일 00:00 KST에 프로세스가 떠 있지 않았거나(배포·재기동), 부팅 시 Redis 순단으로
+    // 잡 등록 자체가 실패했거나, DB 장애로 attempts를 모두 소진하면 그 주는 수도 없이 지나가고
+    // 다시 시도하는 경로가 없다 — 12시간마다 도는 구 집계와 달리 한 번 놓치면 일주일이 날아간다.
+    // 부팅마다 확인하면 재기동만으로 복구되고, designateWeeklyCapital은 weekStart 기준으로
+    // 멱등이라 이미 지정된 주에는 아무것도 하지 않는다(Redis 캐시만 원장 값으로 맞춘다).
+    //
+    // best-effort다 — 실패해도 런타임 getCurrentCapital이 DB 원장을 직접 읽고, 다음 부팅이나
+    // 다음 크론이 다시 시도한다. 부팅이 app.listen()에 도달하지 못하는 것만 막는다.
     try {
-      await this.withTimeout(this.warmCapitalCache(), CAPITAL_WARM_TIMEOUT_MS);
+      await this.withTimeout(
+        this.ensureCurrentWeekCapital(),
+        CAPITAL_BOOT_TIMEOUT_MS,
+      );
     } catch (err) {
       this.logger.warn(
-        '수도 캐시 워밍 실패/지연 (부팅은 계속) — 런타임에 DB에서 self-heal됨',
+        '부팅 시 이번 주 수도 보장 실패/지연 (부팅은 계속) — 다음 크론/재기동에서 재시도',
         err as Error,
       );
     }
@@ -227,25 +238,16 @@ export class DistrictsService implements OnModuleInit {
   }
 
   /**
-   * Redis 공유 캐시가 비어 있으면 DB 원장의 최신 지정으로 워밍한다(부팅·Redis 재시작 대비).
-   * 이미 값이 있으면(다른 인스턴스가 세팅) 덮어쓰지 않는다.
+   * 이번 주 수도가 원장에 없으면 지정한다(놓친 주 catch-up). 이미 있으면 재지정하지 않고
+   * 캐시만 원장 값으로 맞춘다 — designateWeeklyCapital이 weekStart 기준으로 멱등이기 때문.
    */
-  private async warmCapitalCache(): Promise<void> {
-    const cached = await this.readCapitalCache();
-    if (cached !== null) {
-      this.logger.log(`현재 수도(Redis): ${cached}`);
-      return;
-    }
-    const latest = await this.capitalRepo.findOne({
-      where: {},
-      order: { designatedAt: 'DESC' },
-    });
-    if (latest) {
-      await this.writeCapitalCache(latest.sigunguCode);
-      this.logger.log(`현재 수도(DB→Redis 워밍): ${latest.sigunguCode}`);
-    } else {
-      this.logger.log('현재 수도: (미지정)');
-    }
+  private async ensureCurrentWeekCapital(): Promise<void> {
+    const designated = await this.designateWeeklyCapital();
+    this.logger.log(
+      designated
+        ? `이번 주 수도 확인: ${designated.sigunguCode}`
+        : '이번 주 수도: (지정 대상 없음)',
+    );
   }
 
   /**
@@ -256,10 +258,10 @@ export class DistrictsService implements OnModuleInit {
    * 도달 불가일 때 redis.get()이 null이 아니라 MaxRetriesPerRequestError를 던져
    * DB 폴백 라인에 도달조차 못 하고 조회가 500이 된다.
    */
-  private async readCapitalCache(): Promise<string | null> {
+  private async readCapitalCache(weekStart: Date): Promise<string | null> {
     try {
       return await this.withTimeout(
-        this.redis.get(CAPITAL_CURRENT_KEY),
+        this.redis.get(capitalKey(weekStart)),
         CAPITAL_CACHE_TIMEOUT_MS,
       );
     } catch (err) {
@@ -268,11 +270,18 @@ export class DistrictsService implements OnModuleInit {
     }
   }
 
-  /** 수도 캐시 재적재 — best-effort. 실패해도 DB 원장이 진실이라 조회는 계속된다. */
-  private async writeCapitalCache(sigunguCode: string): Promise<void> {
+  /**
+   * 수도 캐시 재적재 — best-effort. 실패해도 DB 원장이 진실이라 조회는 계속된다.
+   * 지정 경로에서도 반드시 이 래퍼를 쓴다 — 맨 redis.set()은 Redis 미도달 시
+   * maxRetriesPerRequest 소진까지(실측 12~24초) 매달려 주간 지정 잡을 통째로 실패시킨다.
+   */
+  private async writeCapitalCache(
+    weekStart: Date,
+    sigunguCode: string,
+  ): Promise<void> {
     try {
       await this.withTimeout(
-        this.redis.set(CAPITAL_CURRENT_KEY, sigunguCode, CAPITAL_TTL_SEC),
+        this.redis.set(capitalKey(weekStart), sigunguCode, CAPITAL_TTL_SEC),
         CAPITAL_CACHE_TIMEOUT_MS,
       );
     } catch (err) {
@@ -282,27 +291,75 @@ export class DistrictsService implements OnModuleInit {
 
   /**
    * 이번 주 수도 sigunguCode. 모든 인스턴스가 공유하는 Redis 값을 단일 소스로 읽는다.
-   * 캐시 미스든 Redis 도달 불가든 DB 원장에서 복구하고 재적재한다. 지정 전이면 null.
+   * 캐시 미스든 Redis 도달 불가든 DB 원장에서 복구하고 재적재한다.
+   *
+   * 판정 기준은 "이번 주(월요일 00:00 KST) 지정 행"이지 "가장 최근 지정 행"이 아니다.
+   * 최신 행을 쓰면 어떤 이유로든 이번 주 지정이 누락됐을 때 지난주 수도가 무기한 유효한
+   * 것처럼 보인다(캐시 TTL이 만료돼도 DB 폴백이 같은 값을 다시 써넣어 되살아난다).
+   * 이번 주 지정이 없으면 "수도 없음"이 정직한 답이고, 부팅 catch-up이 곧 채운다.
    */
-  async getCurrentCapital(): Promise<string | null> {
-    const cached = await this.readCapitalCache();
+  async getCurrentCapital(now: Date = new Date()): Promise<string | null> {
+    const weekStart = startOfKstWeek(now);
+    const cached = await this.readCapitalCache(weekStart);
     if (cached !== null) return cached;
-    const latest = await this.capitalRepo.findOne({
-      where: {},
-      order: { designatedAt: 'DESC' },
-    });
-    if (!latest) return null;
-    await this.writeCapitalCache(latest.sigunguCode);
-    return latest.sigunguCode;
+    const current = await this.capitalRepo.findOne({ where: { weekStart } });
+    if (!current) return null;
+    await this.writeCapitalCache(weekStart, current.sigunguCode);
+    return current.sigunguCode;
   }
 
-  /** 수도 점수 배수. 현재 수도인 구는 CAPITAL_MULTIPLIER, 그 외 1.0. */
+  /** 수도 점수 배수. 이번 주 수도인 구는 CAPITAL_MULTIPLIER, 그 외 1.0. */
   async getCapitalMultiplier(
     sigunguCode: string | null | undefined,
   ): Promise<number> {
     if (!sigunguCode) return 1;
     const current = await this.getCurrentCapital();
     return current === sigunguCode ? CAPITAL_MULTIPLIER : 1;
+  }
+
+  /** 직전 주 수도 sigunguCode (없으면 null) — 연속 중복 지정을 피하기 위한 제외 대상. */
+  private async previousWeekCapital(weekStart: Date): Promise<string | null> {
+    // weekStart 직전 1ms가 속한 주 = 직전 주.
+    const prevWeekStart = startOfKstWeek(new Date(weekStart.getTime() - 1));
+    const prev = await this.capitalRepo.findOne({
+      where: { weekStart: prevWeekStart },
+    });
+    return prev?.sigunguCode ?? null;
+  }
+
+  /**
+   * 점령 가능한(좌표 있는) spot을 가진 구 하나를 무작위로 뽑는다. EXISTS로 구당 1행이라
+   * spot 수와 무관하게 구 단위 균등 무작위가 된다.
+   *
+   * exclude(직전 주 수도)를 뺀 뒤 후보가 없으면 제외 없이 한 번 더 뽑는다 — 후보가 한 구뿐인
+   * 상황(초기 데이터·테스트)에서 제외 규칙 때문에 수도가 아예 없어지는 것을 막기 위함.
+   */
+  private async pickCandidate(exclude: string | null): Promise<string | null> {
+    const query = (excluded: string | null) =>
+      this.dataSource.query<{ sigunguCode: string }[]>(
+        `SELECT d."sigunguCode" AS "sigunguCode"
+           FROM districts d
+          WHERE EXISTS (
+            SELECT 1 FROM spots s
+             WHERE s.sigungucode = d."sigunguCode"
+               AND s."mapX" IS NOT NULL AND s."mapY" IS NOT NULL
+          )
+            AND ($1::varchar IS NULL OR d."sigunguCode" <> $1)
+          ORDER BY RANDOM()
+          LIMIT 1`,
+        [excluded],
+      );
+
+    const picked = await query(exclude);
+    if (picked.length > 0) return picked[0].sigunguCode;
+    if (exclude === null) return null;
+
+    const fallback = await query(null);
+    if (fallback.length === 0) return null;
+    this.logger.warn(
+      `직전 주 수도(${exclude}) 외 후보가 없어 연속 지정을 허용합니다.`,
+    );
+    return fallback[0].sigunguCode;
   }
 
   /**
@@ -318,7 +375,8 @@ export class DistrictsService implements OnModuleInit {
    *   "확정된 DB 상태"를 반영하는 캐시일 뿐 승자 결정 권한이 없어, 락은 잡혔지만 DB 이력엔
    *   없는 "유령 수도" 상태가 생기지 않는다(일시적 DB 실패는 예외 전파 → Bull 재시도로 흡수).
    * - 후보 제한: 좌표 있는 spot을 최소 1개 가진 구 중에서만 뽑는다. spot이 없는 구가 수도가
-   *   되면 그 주 내내 버프가 아무에게도 적용되지 않기 때문.
+   *   되면 그 주 내내 버프가 아무에게도 적용되지 않기 때문. 직전 주 수도도 후보에서 뺀다
+   *   (부산 구·군은 16개뿐이라 제외하지 않으면 연속 중복이 자주 나온다).
    */
   async designateWeeklyCapital(
     now: Date = new Date(),
@@ -326,37 +384,22 @@ export class DistrictsService implements OnModuleInit {
     const weekStart = startOfKstWeek(now);
     const existing = await this.capitalRepo.findOne({ where: { weekStart } });
     if (existing) {
-      await this.redis.set(
-        CAPITAL_CURRENT_KEY,
-        existing.sigunguCode,
-        CAPITAL_TTL_SEC,
-      );
+      await this.writeCapitalCache(weekStart, existing.sigunguCode);
       this.logger.log(
         `이번 주 수도 이미 지정됨: ${existing.sigunguCode} — 재지정 건너뜀`,
       );
       return { sigunguCode: existing.sigunguCode };
     }
 
-    // 점령 가능한(좌표 있는) spot을 가진 구만 후보. EXISTS로 구당 1행이라 spot 수와
-    // 무관하게 구 단위 균등 무작위가 된다.
-    const picked = await this.dataSource.query<{ sigunguCode: string }[]>(
-      `SELECT d."sigunguCode" AS "sigunguCode"
-         FROM districts d
-        WHERE EXISTS (
-          SELECT 1 FROM spots s
-           WHERE s.sigungucode = d."sigunguCode"
-             AND s."mapX" IS NOT NULL AND s."mapY" IS NOT NULL
-        )
-        ORDER BY RANDOM()
-        LIMIT 1`,
+    const sigunguCode = await this.pickCandidate(
+      await this.previousWeekCapital(weekStart),
     );
-    if (picked.length === 0) {
+    if (sigunguCode === null) {
       this.logger.warn(
         '점령 가능한 spot을 가진 구가 없어 수도 지정을 건너뜁니다.',
       );
       return null;
     }
-    const { sigunguCode } = picked[0];
 
     // weekStart UNIQUE insert가 이번 주 승자를 원자적으로 확정한다. insert가 성공한 뒤에만
     // Redis 현재값을 세팅하므로 Redis는 항상 DB 이력을 뒤따른다. unique 위반이면 다른
@@ -367,7 +410,7 @@ export class DistrictsService implements OnModuleInit {
       if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         const winner = await this.capitalRepo.findOne({ where: { weekStart } });
         const winnerCode = winner?.sigunguCode ?? sigunguCode;
-        await this.redis.set(CAPITAL_CURRENT_KEY, winnerCode, CAPITAL_TTL_SEC);
+        await this.writeCapitalCache(weekStart, winnerCode);
         this.logger.log(
           `이번 주 수도 동시 지정 경합 — 확정된 수도 채택: ${winnerCode}`,
         );
@@ -376,7 +419,7 @@ export class DistrictsService implements OnModuleInit {
       throw err;
     }
 
-    await this.redis.set(CAPITAL_CURRENT_KEY, sigunguCode, CAPITAL_TTL_SEC);
+    await this.writeCapitalCache(weekStart, sigunguCode);
     this.logger.log(
       `이번 주 수도 지정: ${sigunguCode} — 배수 ${CAPITAL_MULTIPLIER}x`,
     );

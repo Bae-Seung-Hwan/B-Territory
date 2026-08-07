@@ -14,6 +14,12 @@ import {
   DistrictsService,
   CAPITAL_MULTIPLIER,
 } from '../src/districts/districts.service';
+import { startOfKstWeek } from '../src/common/utils/kst.util';
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// 수도 공유 캐시는 주 단위로 스코프된다 — 주가 바뀌면 지난주 값이 읽히지 않게 하기 위함.
+const weekKey = (d: Date = new Date()) =>
+  `capital:week:${startOfKstWeek(d).getTime()}`;
 
 const mockFirebaseService = {
   verifyIdToken: (token: string) => Promise.resolve({ uid: token }),
@@ -53,6 +59,8 @@ describe('Capital (e2e)', () => {
   // 시딩된 실제 구(해운대구=16, 가중치 > 1). 좌표 있는 spot을 여기에만 만들어
   // 수도 지정 후보를 이 구 하나로 좁힌다 → 무작위 지정이 결정적으로 이 구를 뽑는다.
   const capitalSigungucode = '16';
+  // 직전 주 제외 검증용 두 번째 후보 구(중구=15) — 필요한 테스트에서만 spot을 만든다.
+  const altSigungucode = '15';
   // districts 미등록 코드 — 지정 후보(등록된 구)가 아니므로 절대 수도가 되지 않는 대조군
   const unregisteredSigungucode = '99CAP';
 
@@ -81,6 +89,9 @@ describe('Capital (e2e)', () => {
     dataSource = moduleFixture.get(DataSource);
 
     await truncateAll();
+    // 부팅 시 catch-up이 이번 주 수도를 지정했을 수 있으므로(다른 스펙이 남긴 spot 기준),
+    // 원장과 함께 공유 캐시도 비워 이 스펙이 깨끗한 상태에서 시작하게 한다.
+    await redisService.del(weekKey());
 
     await userRepo.save([
       {
@@ -143,11 +154,11 @@ describe('Capital (e2e)', () => {
     await truncateAll();
     // 점령이 남긴 방어 키(defense:<spotId>, TTL 5분)를 정리한다. spot ID는 RESTART IDENTITY로
     // 다른 e2e 스펙과 겹치므로, 지우지 않으면 다음 스펙의 같은 ID 점령이 방어에 막힌다.
-    // 수도 공유 키(capital:current)도 지운다 — 남으면 다른 스펙의 같은 구 점령에 배수가 샌다.
+    // 이번 주 수도 공유 키도 지운다 — 남으면 다른 스펙의 같은 구 점령에 배수가 샌다.
     await Promise.all([
       redisService.del(`defense:${capitalSpotId}`),
       redisService.del(`defense:${nonCapitalSpotId}`),
-      redisService.del('capital:current'),
+      redisService.del(weekKey()),
     ]);
     await app.close();
   });
@@ -240,7 +251,7 @@ describe('Capital (e2e)', () => {
     await dataSource.query(
       'TRUNCATE TABLE "capital_designations" RESTART IDENTITY',
     );
-    await redisService.del('capital:current');
+    await redisService.del(weekKey());
 
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
@@ -261,8 +272,69 @@ describe('Capital (e2e)', () => {
     const dbRow = await dataSource.query<{ sigunguCode: string }[]>(
       'SELECT "sigunguCode" FROM capital_designations LIMIT 1',
     );
-    const redisCurrent = await redisService.get('capital:current');
+    const redisCurrent = await redisService.get(weekKey());
     expect(redisCurrent).toBe(dbRow[0].sigunguCode);
     expect(redisCurrent).toBe(capitalSigungucode);
+  });
+
+  describe('주 경계', () => {
+    // 이번 주 원장을 비우고 "지난주 지정만 있는" 상태를 만든다.
+    const seedLastWeekOnly = async (sigunguCode: string) => {
+      await dataSource.query(
+        'TRUNCATE TABLE "capital_designations" RESTART IDENTITY',
+      );
+      await redisService.del(weekKey());
+      await dataSource.query(
+        'INSERT INTO capital_designations ("sigunguCode", "weekStart") VALUES ($1, $2)',
+        [sigunguCode, startOfKstWeek(new Date(Date.now() - WEEK_MS))],
+      );
+    };
+
+    it('이번 주 지정이 없으면 지난주 수도를 끌어쓰지 않는다 (미지정으로 응답)', async () => {
+      // 조회가 "가장 최근 지정"을 쓰면 지난주 수도가 무기한 유효해진다 — 크론이 한 주를
+      // 놓쳤을 때 엉뚱한 구에 1.2배 버프가 계속 붙는 상태. 주 단위로 판정해야 한다.
+      await seedLastWeekOnly(capitalSigungucode);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/districts/capital/current')
+        .expect(200);
+
+      const body = res.body as CapitalBody;
+      expect(body.sigunguCode).toBeNull();
+      expect(body.multiplier).toBe(1);
+      expect(body.district).toBeNull();
+
+      // 점수 배수도 함께 1.0이어야 한다 (지난주 수도에 버프가 남지 않는다).
+      await expect(
+        districtsService.getCapitalMultiplier(capitalSigungucode),
+      ).resolves.toBe(1);
+    });
+
+    it('직전 주 수도는 후보에서 제외된다', async () => {
+      // 후보를 2개(16, 15)로 만들고 직전 주를 16으로 두면, 제외가 동작하는 한 결과는 15뿐이다.
+      const altSpot = await spotRepo.save({
+        contentId: 'alt-cap-spot',
+        title: '대체 후보 관광지',
+        mapX: SPOT_LNG,
+        mapY: SPOT_LAT,
+        sigungucode: altSigungucode,
+      });
+      try {
+        await seedLastWeekOnly(capitalSigungucode);
+
+        const designated = await districtsService.designateWeeklyCapital();
+        expect(designated?.sigunguCode).toBe(altSigungucode);
+      } finally {
+        await spotRepo.delete(altSpot.id);
+      }
+    });
+
+    it('직전 주 수도 외 후보가 없으면 연속 지정을 허용한다', async () => {
+      // 제외 규칙 때문에 수도가 아예 없어지면 안 된다 — 후보가 하나뿐이면 연속을 허용한다.
+      await seedLastWeekOnly(capitalSigungucode);
+
+      const designated = await districtsService.designateWeeklyCapital();
+      expect(designated?.sigunguCode).toBe(capitalSigungucode);
+    });
   });
 });
