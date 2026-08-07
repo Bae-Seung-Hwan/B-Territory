@@ -16,7 +16,13 @@
 
 1. `git fetch` + `git reset --hard ${{ github.sha }}` — **트리거한 커밋**으로 서버 클론을 맞춘다
    (`origin/develop`이 아니라 그 커밋 — 연속 push 시 실제 배포된 코드를 특정할 수 있어야 하므로).
-   `.env`·`data/` 등 gitignore 대상은 보존된다. 되돌아갈 지점(`PREV_SHA`)을 먼저 기록한다.
+   되돌아갈 지점(`PREV_SHA`)을 먼저 기록한다.
+
+   > 무엇이 보존되는가: `reset --hard`는 **추적 파일만** 되돌리고 untracked 파일은 건드리지
+   > 않는다. `backend/.env`가 살아남는 건 루트 `.gitignore`의 `.env` 패턴 덕에 애초에 추적되지
+   > 않기 때문이다. 반면 **`data/`는 git에 추적되므로**(`git ls-files data`) 서버에서 손댄
+   > 내용은 develop 기준으로 되돌아간다 — 위 트리거의 `data/**`가 성립하는 것도 그래서다.
+   > 서버에만 두어야 하는 파일은 반드시 gitignore 대상이어야 한다.
 2. 현재 이미지를 `b-territory-prod-backend:rollback`으로 태깅 — 실패 시 재빌드 없이 되돌리기 위함.
 3. `docker compose ... build` — 백엔드 이미지 빌드.
 4. `docker compose ... run --rm backend npm run migration:run` — **앱 기동 전에** 마이그레이션.
@@ -49,6 +55,11 @@ Redis 불가를 통과시키는 것은 의도된 설계다. 앱은 Redis 장애�
 폴백하도록 만들어져 있어서, 여기서 503을 내면 그 설계와 모순되고 배포 중 일시적인 Redis 순단이
 멀쩡한 배포를 실패시킨다. 상태는 응답 본문에 남아 모니터링에서 확인할 수 있다.
 
+> **이 healthcheck는 배포 게이트이지 상시 감시가 아니다.** 도커는 컨테이너가 unhealthy가 됐다고
+> 재시작하지 않고, `restart: unless-stopped`도 프로세스 종료(exit)에만 반응한다. 배포 이후 앱이
+> 멈추면 `docker ps`에 unhealthy로 표시될 뿐 자동 조치가 없다. 런타임 자동 복구(autoheal
+> 컨테이너)나 외부 모니터링/알림은 **아직 없으며 별도 과제**다.
+
 ## 마이그레이션 작성 원칙 (expand-contract)
 
 4단계(마이그레이션)와 5단계(`up`) 사이에는 **구버전 앱이 새 스키마 위에서 돈다.** 컬럼 삭제나
@@ -66,6 +77,39 @@ Redis 불가를 통과시키는 것은 의도된 설계다. 앱은 Redis 장애�
 전제: `DEPLOY_DIR`에 레포가 clone돼 있고 `backend/.env`가 채워져 있으며, 최소 1회 수동 배포가
 성공한 상태(= docker/compose 동작 확인). `ubuntu` 사용자가 `docker`를 sudo 없이 실행 가능해야
 한다(`sudo usermod -aG docker ubuntu` 후 재로그인).
+
+**Docker Compose v2.17.0 이상**이 필요하다 — `up --wait-timeout`이 그 이후 버전에서 추가됐고,
+배포 게이트가 이 옵션에 의존한다. 워크플로 첫 스텝이 지원 여부를 확인해 미지원이면 서버 상태를
+건드리기 전에 멈추지만, 설치 시점에 미리 맞춰두는 편이 낫다:
+
+```bash
+docker compose version
+docker compose up --help | grep -- --wait-timeout   # 출력이 있어야 한다
+```
+
+### 보안 전제 — PUBLIC 레포 + self-hosted 러너
+
+이 레포는 퍼블릭이고 러너는 프로덕션 서버 안에서 돈다. 러너는 특정 워크플로가 아니라 **레포의
+모든 워크플로에 대해 대기**하므로, 누군가 fork PR로 `runs-on: [self-hosted, b-territory-prod]`
+워크플로를 추가하고 그 실행이 승인되면 EC2에서 임의 코드가 실행된다. 러너 계정(`ubuntu`)은
+docker 그룹 소속이라 사실상 호스트 root이고, `DEPLOY_DIR`의 `backend/.env`에 DB 비밀번호 등이
+있다. 따라서 아래 설정이 전제 조건이다.
+
+조회: `gh api repos/<owner>/<repo>/actions/permissions/{,workflow,fork-pr-contributor-approval}`
+
+| 설정 | 현재 (2026-08-07 확인) | 권장 |
+|---|---|---|
+| 기본 `GITHUB_TOKEN` 권한 | `read` ✅ | read |
+| PR 승인 권한 | `false` ✅ | false |
+| **fork PR 실행 승인 정책** | **`first_time_contributors`** ⚠️ | `all_external_contributors` |
+
+`first_time_contributors`는 GitHub 기본값으로, **한 번이라도 기여한 적 있는 외부 사용자의 fork
+PR은 승인 없이 워크플로가 실행된다.** 퍼블릭 레포 + 프로덕션 러너 조합에서는
+Settings → Actions → General → Fork pull request workflows를
+**"Require approval for all external contributors"**로 올리는 것을 권장한다.
+
+`deploy.yml`의 `deploy` job에는 `permissions: {}`를 명시해 두었다(토큰을 쓰지 않으므로).
+`deploy.yml`에 **`pull_request` 트리거를 추가하면 안 된다** — 위 경로가 승인 없이 열린다.
 
 1. GitHub 레포 → **Settings → Actions → Runners → New self-hosted runner** → Linux/x64 선택.
    화면에 나오는 `download`/`config.sh` 명령을 **그대로 복붙**해 실행한다(토큰 포함).
@@ -151,6 +195,10 @@ develop에 merge한 뒤부터 자동 배포가 동작한다. merge 후 첫 배�
 - **헬스체크가 계속 실패**: `docker compose ... logs backend`로 확인. `/api/health` 응답의
   `db`/`redis` 필드가 어느 의존성이 문제인지 알려준다. `db: "down"`이면 postgres 컨테이너
   상태와 `backend/.env`의 DB 접속 정보를 본다.
+- **배포 후 앱이 멈춘 경우**: 자동 조치가 없다(위 "배포 게이트이지 상시 감시가 아니다" 참조).
+  `docker ps`에 unhealthy로 보이면 `docker compose ... restart backend`로 수동 재기동한다.
+- **`--wait-timeout` 미지원으로 preflight 실패**: 서버의 Compose가 v2.17.0 미만이다.
+  `docker compose version` 확인 후 업그레이드한다. 이 단계에서 멈추면 서버 상태는 그대로다.
 - **러너 오프라인**: `sudo ~/actions-runner/svc.sh status` 확인, 필요 시 `start`.
 - **디스크 부족**: `docker image prune -f`는 배포 성공 시마다 실행되지만, 볼륨/빌드캐시가 쌓이면
   `docker system df`로 확인 후 `docker builder prune` 등을 수동 실행.

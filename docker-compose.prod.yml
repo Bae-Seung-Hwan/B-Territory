@@ -76,8 +76,15 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      # 프로세스 생존(restart 정책)만으로는 "떠 있지만 응답 못 하는" 멈춤형 버그를 못 잡으므로,
-      # 앱이 실제로 요청에 응답하는지 확인한다. alpine 이미지엔 curl이 없어 busybox wget을 쓴다.
+      # **용도는 배포 게이트다.** deploy.yml의 `up --wait`가 이 검사 결과로 배포 성공/실패를
+      # 판정해, "컨테이너는 떴지만 앱이 응답 못 하는" 버전이 배포를 통과하지 못하게 한다.
+      #
+      # 상시 감시가 아님에 주의: 도커는 unhealthy가 됐다고 컨테이너를 재시작하지 않고,
+      # restart: unless-stopped도 프로세스 종료(exit)에만 반응한다. 따라서 배포 이후 앱이
+      # 멈추면 `docker ps`에 unhealthy로 표시될 뿐 자동 조치는 없다 — 런타임 감시(autoheal
+      # 컨테이너나 외부 모니터링)는 이 파일의 범위 밖이고 별도 과제로 남아 있다.
+      #
+      # alpine 이미지엔 curl이 없어 busybox wget을 쓴다.
       #
       # 루트(/api)가 아니라 /api/health를 보는 이유: 루트는 정적 문자열이라 DB가 죽어도 200이
       # 나온다. /api/health는 DB 도달 불가면 503을 반환해(Redis 불가는 degraded 200 — 앱이
