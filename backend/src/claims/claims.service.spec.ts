@@ -53,6 +53,7 @@ describe('ClaimsService', () => {
       const service = new ClaimsService(
         { upsert: jest.fn() } as never,
         {} as never,
+        {} as never,
         dataSource as never,
         redis as never,
         usersService as never,

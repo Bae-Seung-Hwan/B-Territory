@@ -3,6 +3,7 @@ node_modules/
 
 # 빌드 결과물
 dist/
+*.tsbuildinfo
 
 # 환경변수 (절대 커밋 금지!)
 .env
@@ -21,5 +22,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# TypeScript 증분 빌드 캐시 (로컬 산출물)
-*.tsbuildinfo
+# GeoJSON 중간 산출물 (busan_sig.json으로 재생성 가능한 백업본)
+frontend/assets/geo/busan_sig.epsg5179.json
+frontend/assets/geo/busan_sig_simplified.json
+
+# API 응답 덤프 (확인용 임시 파일)
+frontend/docs/busan_spots.json

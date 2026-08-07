@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Spot } from './entities/spot.entity';
+import { ErrorCode, errBody } from '../common/errors/error-code';
+import { resolveLang, pickText } from '../common/utils/lang.util';
 
 export interface SpotListQuery {
   page?: number;
@@ -56,9 +58,22 @@ export class SpotsService {
     return { items, total, page, limit };
   }
 
-  async findOne(id: number) {
+  /**
+   * 관광지 상세. lang(언어코드 ko/en 또는 국가코드 KR/US/…)에 맞춰 `description`을 골라준다.
+   * 한/영 원문은 overview(ko)·overviewEn(en)으로 항상 함께 내려주되, 영문이 없으면
+   * description은 한국어로 폴백한다.
+   */
+  async findOne(id: number, lang?: string) {
     const spot = await this.spotRepository.findOne({ where: { id } });
-    if (!spot) throw new NotFoundException(`Spot #${id}를 찾을 수 없습니다.`);
-    return spot;
+    if (!spot)
+      throw new NotFoundException(
+        errBody(ErrorCode.SPOT_NOT_FOUND, `Spot #${id}를 찾을 수 없습니다.`),
+      );
+    const resolved = resolveLang(lang);
+    return {
+      ...spot,
+      lang: resolved,
+      description: pickText(spot.overview, spot.overviewEn, resolved),
+    };
   }
 }
