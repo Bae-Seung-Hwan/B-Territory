@@ -1,18 +1,46 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
+import { useSocket } from '@/providers/SocketProvider';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
+
+interface DuelRequestAck {
+  status: string;
+  duelId?: number;
+}
 
 export function EnemyDetectionAlert() {
   const showEnemyAlert = useOverlayStore((s) => s.showEnemyAlert);
   const enemyInfo = useOverlayStore((s) => s.enemyInfo);
   const setShowEnemyAlert = useOverlayStore((s) => s.setShowEnemyAlert);
-  const setShowDuelRequest = useOverlayStore((s) => s.setShowDuelRequest);
+  const setShowDuelPending = useOverlayStore((s) => s.setShowDuelPending);
+  const setDuelId = useOverlayStore((s) => s.setDuelId);
+  const setDuelRole = useOverlayStore((s) => s.setDuelRole);
+  const socket = useSocket();
   const { t } = useTranslation();
 
-  const handleDuel = () => {
+  const handleIgnore = () => {
     setShowEnemyAlert(false);
-    setShowDuelRequest(true);
+  };
+
+  const handleDuel = () => {
+    if (!enemyInfo || !socket) return;
+    socket.emit(
+      'duel:request',
+      { targetUserId: enemyInfo.userId },
+      (ack: DuelRequestAck) => {
+        // 서버가 거부(예: 상대가 이미 다른 결투 중)하면 duelId가 안 온다 — 이 경우
+        // 대기 화면으로 넘어가지 않고 그대로 알림을 닫는다.
+        if (ack.status !== 'ok' || ack.duelId == null) {
+          setShowEnemyAlert(false);
+          return;
+        }
+        setDuelId(ack.duelId);
+        setDuelRole('challenger');
+        setShowEnemyAlert(false);
+        setShowDuelPending(true);
+      },
+    );
   };
 
   return (
@@ -30,7 +58,7 @@ export function EnemyDetectionAlert() {
             </Text>
           )}
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.btnSecondary} onPress={() => setShowEnemyAlert(false)}>
+            <TouchableOpacity style={styles.btnSecondary} onPress={handleIgnore}>
               <Text style={styles.btnSecondaryText}>{t('overlay.enemyAlert.ignore')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.btnPrimary} onPress={handleDuel}>

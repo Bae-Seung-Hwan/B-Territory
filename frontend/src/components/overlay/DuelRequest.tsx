@@ -1,18 +1,29 @@
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
+import { useSocket } from '@/providers/SocketProvider';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 
+/** 상대의 결투 신청을 받은 쪽(수신자)에게만 뜨는 수락/거부 시트. */
 export function DuelRequest() {
   const showDuelRequest = useOverlayStore((s) => s.showDuelRequest);
-  const enemyInfo = useOverlayStore((s) => s.enemyInfo);
+  const duelId = useOverlayStore((s) => s.duelId);
+  const challengerNickname = useOverlayStore((s) => s.challengerNickname);
   const setShowDuelRequest = useOverlayStore((s) => s.setShowDuelRequest);
-  const setShowMiniGame = useOverlayStore((s) => s.setShowMiniGame);
+  const resetDuel = useOverlayStore((s) => s.resetDuel);
+  const socket = useSocket();
   const { t } = useTranslation();
 
+  const handleReject = () => {
+    if (duelId != null) socket?.emit('duel:reject', { duelId });
+    resetDuel();
+  };
+
   const handleAccept = () => {
+    if (duelId != null) socket?.emit('duel:accept', { duelId });
+    // MiniGame은 서버의 duel:accepted 확인(SocketProvider) 후에 연다 —
+    // 여기서 미리 열면 서버가 거부한 경우(이미 처리된 결투 등)에도 게임이 시작돼버린다.
     setShowDuelRequest(false);
-    setShowMiniGame(true);
   };
 
   return (
@@ -20,18 +31,16 @@ export function DuelRequest() {
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.title}>⚔️ {t('overlay.duelRequest.title')}</Text>
-          {enemyInfo && (
-            <Text style={styles.body}>
-              {t('overlay.duelRequest.body', { team: enemyInfo.nationality })}
-            </Text>
-          )}
+          <Text style={styles.body}>
+            {t('overlay.duelRequest.body', { nickname: challengerNickname ?? '' })}
+          </Text>
           <Text style={styles.hint}>{t('overlay.duelRequest.hint')}</Text>
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.btnCancel} onPress={() => setShowDuelRequest(false)}>
-              <Text style={styles.btnCancelText}>{t('common.cancel')}</Text>
+            <TouchableOpacity style={styles.btnCancel} onPress={handleReject}>
+              <Text style={styles.btnCancelText}>{t('overlay.duelRequest.reject')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.btnAccept} onPress={handleAccept}>
-              <Text style={styles.btnAcceptText}>{t('overlay.duelRequest.start')}</Text>
+              <Text style={styles.btnAcceptText}>{t('overlay.duelRequest.accept')}</Text>
             </TouchableOpacity>
           </View>
         </View>
