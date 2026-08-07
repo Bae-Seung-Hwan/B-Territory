@@ -3,8 +3,20 @@ name: CI
 on:
   pull_request:
     branches: [develop, main]
+    # deploy.yml의 트리거 경로와 맞춘다 — 배포를 유발하는 변경은 무엇이든 CI를 거쳐야 한다.
+    # (예전엔 backend/** 뿐이라 docker-compose.prod.yml·Caddyfile만 바꾼 PR은 CI가 한 건도
+    #  돌지 않는데 머지되면 배포는 트리거됐다.)
     paths:
       - 'backend/**'
+      - 'docker-compose.prod.yml'
+      - 'Caddyfile'
+      - 'data/**'
+      - '.github/workflows/ci.yml'
+  # deploy.yml이 배포 전 게이트로 호출한다(재사용 워크플로).
+  # develop 룰셋(develop-protection)은 PR + 승인 1건만 요구하고 status check 통과는 요구하지
+  # 않으므로, develop에 도달한 커밋이 이 검사를 통과했다는 보장이 없다. 배포 직전에 실제
+  # 배포 대상 커밋으로 다시 돌린다. 상세: docs/ci-cd.md
+  workflow_call: {}
 
 jobs:
   backend-lint-build:

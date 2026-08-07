@@ -78,8 +78,15 @@ services:
     healthcheck:
       # 프로세스 생존(restart 정책)만으로는 "떠 있지만 응답 못 하는" 멈춤형 버그를 못 잡으므로,
       # 앱이 실제로 요청에 응답하는지 확인한다. alpine 이미지엔 curl이 없어 busybox wget을 쓴다.
-      # GET /api는 전역 프리픽스(api) 루트의 경량 hello 엔드포인트.
-      test: ['CMD-SHELL', 'wget -q -O /dev/null http://localhost:3000/api || exit 1']
+      #
+      # 루트(/api)가 아니라 /api/health를 보는 이유: 루트는 정적 문자열이라 DB가 죽어도 200이
+      # 나온다. /api/health는 DB 도달 불가면 503을 반환해(Redis 불가는 degraded 200 — 앱이
+      # 견디도록 설계됨) "떴지만 아무것도 못 하는" 인스턴스가 배포 게이트를 통과하지 못한다.
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q -O /dev/null http://localhost:3000/api/health || exit 1',
+        ]
       interval: 15s
       timeout: 5s
       retries: 5

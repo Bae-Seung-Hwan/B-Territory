@@ -3,6 +3,10 @@ name: Deploy (develop → EC2)
 # develop에 push되면 EC2에 설치된 self-hosted 러너가 프로덕션 스택을 재빌드·재기동한다.
 # 러너가 서버 안에서 GitHub로 아웃바운드 폴링만 하므로 인바운드 SSH(22) 개방이 필요 없다
 # (보안그룹의 "22=관리자 IP만" 규칙을 그대로 유지). 상세 셋업: docs/ci-cd.md
+#
+# 보안 주의: 이 레포는 퍼블릭이고 배포 job은 self-hosted 러너에서 돈다.
+# **pull_request 트리거를 절대 추가하지 말 것** — 포크에서 온 임의의 코드가 프로덕션 서버의
+# 러너(docker 소켓 접근 = root 상당)에서 실행된다. push(develop)와 수동 실행만 유지한다.
 on:
   push:
     branches: [develop]
@@ -22,7 +26,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 배포 전 게이트 — lint·build·unit·마이그레이션 정합성·e2e를 먼저 통과시킨다.
+  #
+  # develop은 룰셋(develop-protection)으로 보호돼 PR + 승인 1건 없이는 push할 수 없다.
+  # 그래도 이 게이트가 필요한 이유는, 그 룰셋이 **status check 통과를 요구하지 않기** 때문:
+  #   - CI가 실패했거나 아예 돌지 않은 PR도 승인만 받으면 머지된다
+  #   - "머지 전 최신화" 요구가 없어, 머지 결과 조합은 CI를 거친 적이 없을 수 있다
+  #   - dismiss_stale_reviews_on_push=false — 승인 후 밀어넣은 커밋은 재승인 없이 머지된다
+  #   - workflow_dispatch 수동 배포는 PR 경로를 아예 타지 않는다
+  # 즉 develop에 도달했다는 사실만으로는 테스트 통과가 보장되지 않는다. 실제 배포 대상
+  # 커밋으로 여기서 다시 돌리는 것이 유일하게 확실한 게이트다.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: test
     # 이 레포 전용 러너에만 잡히도록 고유 라벨을 요구한다. 조직/다른 레포가 self-hosted 러너를
     # 추가로 등록해도, DEPLOY_DIR·docker가 없는 엉뚱한 러너로 디스패치되지 않는다.
     # (러너 등록 시 config.sh --labels b-territory-prod 로 같은 라벨을 부여해야 한다. docs/ci-cd.md)
@@ -35,16 +53,38 @@ jobs:
       # 서버 전용 파일이 여기 있으므로, 러너 워크스페이스가 아니라 이 경로에서 직접 배포한다.
       DEPLOY_DIR: /home/ubuntu/B-Territory
       COMPOSE: docker compose --env-file backend/.env -f docker-compose.prod.yml
+      # compose의 backend 서비스가 쓰는 고정 태그. 직전 성공본은 :rollback으로 보존한다.
+      IMAGE: b-territory-prod-backend
     steps:
       # actions/checkout을 쓰지 않는다 — 체크아웃하면 러너 워크스페이스에 받아지는데, 배포는
       # backend/.env·data/가 있는 DEPLOY_DIR에서 돌아야 하기 때문. 그 디렉터리에서 직접 pull한다.
-      - name: Sync develop
+      - name: Sync to triggering commit
         run: |
           cd "$DEPLOY_DIR"
+          # 실패 시 되돌아갈 지점 — 현재 서버에 반영된 커밋을 먼저 기록한다.
+          echo "PREV_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           git fetch --prune origin develop
-          # 서버 클론을 develop과 정확히 일치시킨다. 추적 파일의 서버 로컬 수정은 버려지지만,
+          # origin/develop(=움직이는 대상)이 아니라 이 실행을 트리거한 커밋으로 맞춘다.
+          # push가 연달아 들어오면 origin/develop은 이미 앞서 나가 있을 수 있고, 그러면
+          # Actions에 표시된 커밋과 실제 배포된 코드가 달라져 장애 조사·롤백 시 무엇이
+          # 배포됐는지 특정할 수 없게 된다.
+          #
+          # 서버 클론을 그 커밋과 정확히 일치시킨다. 추적 파일의 서버 로컬 수정은 버려지지만,
           # gitignore 대상(backend/.env 등)은 보존된다. 서버는 develop의 순수 반영이어야 하므로 의도된 동작.
-          git reset --hard origin/develop
+          git reset --hard "${{ github.sha }}"
+
+      - name: Preserve current image for rollback
+        # 현재 떠 있는(=마지막으로 성공한) 이미지를 :rollback으로 태깅해 둔다.
+        # 고정 태그라 재빌드하면 직전 이미지는 dangling이 되고 prune 대상이 되는데, 태그를
+        # 붙여두면 살아남아 실패 시 재빌드 없이 즉시 되돌릴 수 있다(t3.micro에서 빌드는 수 분).
+        run: |
+          if docker image inspect "$IMAGE:latest" >/dev/null 2>&1; then
+            docker tag "$IMAGE:latest" "$IMAGE:rollback"
+            echo "HAVE_ROLLBACK=1" >> "$GITHUB_ENV"
+          else
+            echo "직전 이미지 없음(최초 배포) — 롤백 대상 없이 진행"
+            echo "HAVE_ROLLBACK=0" >> "$GITHUB_ENV"
+          fi
 
       - name: Build backend image
         run: |
@@ -57,30 +97,54 @@ jobs:
         # DistrictsService의 부팅 시 시딩(테이블 필요)에 걸리지 않고 테이블을 먼저 만든다.
         # depends_on으로 postgres가 healthy해질 때까지 기다린다. migration:run은 멱등이라
         # 반영할 마이그레이션이 없으면 그대로 통과한다.
+        #
+        # 주의: 이 시점부터 아래 `Up`이 끝날 때까지 **구버전 앱이 새 스키마 위에서 돈다.**
+        # 컬럼 삭제·이름 변경 같은 파괴적 마이그레이션은 그 구간에 구버전을 깨뜨리므로,
+        # 마이그레이션은 expand-contract로 작성한다(추가 → 배포 → 다음 배포에서 제거).
         run: |
           cd "$DEPLOY_DIR"
           $COMPOSE run --rm backend npm run migration:run
 
       - name: Up (backend + caddy)
         # --wait: healthcheck가 있는 서비스(backend/postgres/redis)가 healthy해질 때까지 기다리고,
-        # 제한시간 내 healthy가 못 되면 0이 아닌 코드로 종료해 이 job(=배포)을 실패 처리한다.
-        # 이로써 "컨테이너는 떴지만 앱이 응답 못 하는" 상태가 초록불로 넘어가지 않고,
-        # git reset은 이미 끝났어도 배포 실패 알림이 뜬다. 정상 배포는 수십 초라 120s면 충분.
+        # 제한시간 내 healthy가 못 되면 0이 아닌 코드로 종료해 이 스텝을 실패시킨다.
+        # 이로써 "컨테이너는 떴지만 앱이 응답 못 하는" 상태가 초록불로 넘어가지 않는다.
+        # 정상 배포는 수십 초라 120s면 충분.
         run: |
           cd "$DEPLOY_DIR"
           $COMPOSE up -d --remove-orphans --wait --wait-timeout 120
 
       - name: Dump service status on failure
-        # 배포 실패(주로 --wait 헬스 미충족) 시 원인 파악용 — 서비스 상태와 백엔드 최근 로그를 남긴다.
+        # 롤백으로 상태가 덮이기 전에 원인 파악용 정보를 남긴다(서비스 상태 + 백엔드 최근 로그).
         if: failure()
         run: |
           cd "$DEPLOY_DIR"
-          $COMPOSE ps
-          $COMPOSE logs --tail=200 backend
+          $COMPOSE ps || true
+          $COMPOSE logs --tail=200 backend || true
+
+      - name: Roll back to previous version
+        # 실패한 배포를 그대로 두면 새(고장난) 컨테이너가 restart: unless-stopped로 계속 살아
+        # 있고 Caddy는 502를 뱉는다 — 사람이 손대기 전까지 서비스가 내려간 상태로 남는다.
+        # 직전 코드와 보존해둔 이미지로 즉시 되돌린다.
+        #
+        # 한계: **스키마는 되돌리지 않는다.** down 마이그레이션 자동 실행은 데이터 손실 위험이
+        # 훨씬 크기 때문. 마이그레이션을 expand-contract로 쓰면 구버전이 새 스키마에서 동작하므로
+        # 이 롤백만으로 복구된다. 파괴적 마이그레이션을 배포했다면 수동 대응이 필요하다.
+        if: failure() && env.HAVE_ROLLBACK == '1'
+        run: |
+          cd "$DEPLOY_DIR"
+          echo "::warning::배포 실패 — $PREV_SHA 로 롤백합니다 (스키마는 되돌리지 않음)"
+          git reset --hard "$PREV_SHA"
+          docker tag "$IMAGE:rollback" "$IMAGE:latest"
+          # 롤백은 보존된 이미지를 그대로 쓴다(재빌드 없음 = 복구 시간 최소화).
+          $COMPOSE up -d --remove-orphans --wait --wait-timeout 120
+          echo "::warning::롤백 완료 — 실패 원인을 고쳐 다시 배포하세요"
 
       - name: Prune dangling images
         # 매 배포의 이전 빌드 레이어가 쌓여 EBS를 채우는 것을 막는다(t3.micro).
-        if: always()
+        # 성공했을 때만 돈다 — 실패 시엔 롤백에 쓸 이미지를 지우면 안 된다.
+        # (:rollback 태그가 붙은 직전 성공본은 dangling이 아니라 여기서도 살아남는다.)
+        if: success()
         run: docker image prune -f
 
 # 참고: 관광지 CSV 시딩(--profile seed)은 자동화하지 않는다 — 데이터 변경이 드물고

@@ -30,6 +30,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.quit();
   }
 
+  /** 연결 확인용 PING — 헬스체크가 Redis 도달 가능 여부를 판정하는 데 쓴다. */
+  async ping(): Promise<string> {
+    return this.client.ping();
+  }
+
   async get(key: string): Promise<string | null> {
     return this.client.get(key);
   }
