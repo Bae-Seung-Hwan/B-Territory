@@ -23,21 +23,22 @@
 
 ## 실시간 통신 (Socket.io)
 
-> ⚠️ 2026-07-16 기준 소켓 연결·이벤트 배선이 아직 구현되어 있지 않음 (스켈레톤만 존재)
-
 - 구현 위치: `src/providers/SocketProvider.tsx`
 - 앱 루트(`src/app/_layout.tsx`)에서 QueryClient와 함께 최상단에 마운트
-- `useSocket()`으로 소켓 인스턴스를 꺼내 쓸 수 있는 Context만 제공 — `autoConnect: false`라 실제 연결은 아무도 시작하지 않음
-- 오버레이(`useOverlayStore`)는 `EnemyDetectionAlert` → `DuelRequest` → `MiniGame` 화면 흐름만 갖추고 있고, 이 체인을 트리거하는 `setShowEnemyAlert(true)` / `setEnemyInfo(...)` 호출이 코드 어디에도 없어 실제로 뜰 방법이 없음
-- `useLocation()`(`src/hooks/use-location.ts`) GPS 훅도 어느 화면에서도 호출되지 않아, 위치를 소켓으로 보낼 지점 자체가 없음
-- 백엔드(PR #13, `feature/Bae/realtime-duel`)가 이미 제공하는 이벤트: 송신 `location:update`, 수신 `encounter:detected`/`duel:requested`/`duel:accepted`/`duel:rejected`/`duel:completed`/`duel:voided`/`duel:expired`, 송신 `duel:request`/`duel:accept`/`duel:reject`/`duel:result` — 실제 배선 시 백엔드 코드에서 페이로드 스키마 재확인 필요
+- `useSocket()`으로 소켓 인스턴스를 꺼내 쓸 수 있는 Context를 제공. `/realtime` 네임스페이스로 접속하며(백엔드 `RealtimeGateway`와 일치), 로그인 상태(`useAuth().isAuthenticated`)를 따라 `connect()`/`disconnect()`가 자동으로 트리거된다 — `auth.currentUser.getIdToken()`으로 매 연결 시도마다 토큰을 새로 읽고, `connect_error` 시 강제 갱신(`getIdToken(true)`) 후 재시도한다
+- `encounter:detected`는 Provider 레벨에서 배선돼 있다 — 수신 시 `useOverlayStore.setEnemyInfo(...)` + `setShowEnemyAlert(true)`를 호출해 `EnemyDetectionAlert`를 띄운다(이미 결투 진행 중이면 무시). 페이로드에 정확한 거리값이 없어 `constants/game.ts`의 `ENCOUNTER_RADIUS_M`(100m)을 근사값으로 표시한다
+- `useLocation()`(`src/hooks/use-location.ts`)은 지도 화면(`src/app/(main)/map/index.tsx`)에서 좌표가 바뀔 때마다 `location:update`를 emit한다 — 별도 쓰로틀링 없이 `watchPositionAsync`의 `distanceInterval:10m`/`timeInterval:5000ms`에 의존
+- `MiniGame`의 `duel:result` emit도 배선됐다(`components/overlay/MiniGame.tsx`) — 승자 판정은 `duelId`로 결정적으로 고른 미니게임(`components/overlay/minigames/`)의 로컬 결과를 보내면, 서버가 양쪽 신고 합의로 확정한다
+- 결투 신청/수락/거부/만료/완료/무효 전체 생명주기가 Provider 레벨에 배선돼 있다(`SocketProvider.tsx`):
+  - 신청자(challenger)는 `EnemyDetectionAlert`의 "결투 신청"에서 `duel:request`를 emit하고, ack로 받은 `duelId`로 `DuelPending`(응답 대기 화면, 취소 버튼 없음 — 백엔드에 `duel:cancel`이 없어 30초 자동 만료에 맡김)을 띄운다
+  - 수신자(recipient)는 `duel:requested` 수신 시 `DuelRequest` 시트가 뜨고, 수락/거부가 각각 `duel:accept`/`duel:reject`를 emit한다(서버 확인 전엔 MiniGame을 열지 않는다)
+  - `duel:accepted`는 양쪽 모두에게 와서 `MiniGame`을 연다. `duel:rejected`/`duel:expired`/`duel:completed`/`duel:voided`는 열려있는 오버레이를 `useOverlayStore.resetDuel()`로 정리하고 결과를 `Alert`로 안내한다(`duelId`가 현재 진행 중인 것과 일치할 때만 반응)
+- 백엔드(PR #13, `feature/Bae/realtime-duel`)가 제공하는 이벤트: 송신 `location:update`, 수신 `encounter:detected`/`duel:requested`/`duel:accepted`/`duel:rejected`/`duel:completed`/`duel:voided`/`duel:expired`, 송신 `duel:request`/`duel:accept`/`duel:reject`/`duel:result`
 
 ### 필요 작업 (TODO)
 
-- [ ] 소켓 연결 시작 시점 결정 (로그인 직후 vs 지도 화면 진입 시) 및 `SocketProvider`에 `connect()`/재연결·에러 처리 구현
-- [ ] `useLocation()`을 지도 화면(`src/app/(main)/map/index.tsx`)에 연결하고, 좌표를 `location:update`로 보내는 주기/쓰로틀링 결정
-- [ ] `encounter:detected` 등 수신 이벤트를 `useOverlayStore`/`useGameStore`에 연결하는 지점 설계 (Provider 레벨 일괄 배선 권장 — PR #17 리뷰 코멘트 참고)
-- [ ] `DuelRequest`/`MiniGame`의 버튼 액션(`handleAccept` 등)을 실제 `duel:accept`/`duel:result` 소켓 emit으로 교체
+- [ ] 결투 상대가 이미 다른 결투 중일 때(`showDuelPending`/`showDuelRequest`/`showMiniGame` 중 하나라도 true) 새 `duel:requested`를 그냥 무시하는데, 신청자 쪽엔 "상대가 바쁘다"는 별도 안내 없이 30초 뒤 `duel:expired`로만 알게 됨 — UX 개선 여지 있음
+- [ ] `MiniGame`이 자기 로컬 결과를 먼저 낙관적으로 보여주고 "확인"으로 바로 닫을 수 있어, 상대가 아직 결과를 제출하기 전에 닫으면(`resetDuel()`로 `duelId`가 비워짐) 이후 도착하는 `duel:completed`/`duel:voided`를 못 받는다 — 서버 확정을 기다리는 중간 상태 UI 도입 검토
 
 ## Firebase Authentication
 

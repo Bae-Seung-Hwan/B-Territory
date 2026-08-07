@@ -6,6 +6,7 @@ import { SocketProvider } from '@/providers/SocketProvider';
 import { AuthProvider } from '@/providers/AuthProvider';
 import { EnemyDetectionAlert } from '@/components/overlay/EnemyDetectionAlert';
 import { DuelRequest } from '@/components/overlay/DuelRequest';
+import { DuelPending } from '@/components/overlay/DuelPending';
 import { MiniGame } from '@/components/overlay/MiniGame';
 import { useAuth } from '@/hooks/use-auth';
 import { queryClient } from '@/lib/query-client';
@@ -20,6 +21,7 @@ export default function RootLayout() {
               <RootNavigator />
               <EnemyDetectionAlert />
               <DuelRequest />
+              <DuelPending />
               <MiniGame />
             </SocketProvider>
           </BottomSheetModalProvider>
