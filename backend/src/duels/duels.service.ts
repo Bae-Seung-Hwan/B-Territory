@@ -11,6 +11,8 @@ import { DataSource, In, Repository } from 'typeorm';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
+import { ScoresService } from '../scores/scores.service';
+import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { sortedPairKey } from '../common/utils/pair-key.util';
 import {
   ALLY_BONUS_MIN_COUNT,
@@ -51,6 +53,7 @@ export class DuelsService {
     private readonly dataSource: DataSource,
     private readonly redis: RedisService,
     private readonly usersService: UsersService,
+    private readonly scoresService: ScoresService,
   ) {}
 
   private lockKey(a: string, b: string): string {
@@ -469,6 +472,15 @@ export class DuelsService {
       BASE_DUEL_SCORE * (allyBonus ? ALLY_BONUS_MULTIPLIER : 1),
     );
 
+    // 원장에 남길 이벤트 시점의 팀. CAS와 같은 트랜잭션에서 append해야 하므로 미리 읽어둔다.
+    // 탈퇴 등으로 유저 row가 사라졌으면 applyScoreDelta도 no-op이 되므로 원장 행도 남기지 않는다.
+    const teamByUserId = new Map(
+      (await this.usersService.findByIds([winnerId, loserId])).map((u) => [
+        u.id,
+        u.team,
+      ]),
+    );
+
     const penalty = await this.redis.setPenalty(loserId, PENALTY_TTL);
 
     let claimed: boolean;
@@ -494,6 +506,31 @@ export class DuelsService {
 
         await this.usersService.applyScoreDelta(winnerId, scoreDelta, manager);
         await this.usersService.applyScoreDelta(loserId, -scoreDelta, manager);
+
+        // 점수 원장에도 append한다 — 개인 랭킹(명예의 전당)은 users.score가 아니라
+        // SUM(score_events.personalPoints)로 산출되므로, 여기서 기록하지 않으면 결투 점수가
+        // /users/me의 score에는 반영되는데 개인 랭킹에서는 통째로 빠져 두 값이 어긋난다.
+        // teamPoints는 항상 0 — 결투 점수는 팀 점수·구 집계에 절대 포함되지 않는다(기획 확정).
+        // 원장에는 명목 증감을 그대로 남긴다. users.score는 GREATEST(0, ...)로 하한이 걸리므로
+        // 0에서 더 깎인 유저는 두 값이 갈리는데, 원장은 감사 로그라 실제 판정을 보존한다.
+        for (const [userId, points] of [
+          [winnerId, scoreDelta],
+          [loserId, -scoreDelta],
+        ] as const) {
+          const team = teamByUserId.get(userId);
+          if (team === undefined) continue;
+          await this.scoresService.record(manager, {
+            userId,
+            team,
+            type:
+              userId === winnerId
+                ? ScoreEventType.DUEL_WIN
+                : ScoreEventType.DUEL_LOSS,
+            personalPoints: points,
+            teamPoints: 0,
+            duelId: duel.id,
+          });
+        }
         return true;
       });
     } catch (err) {

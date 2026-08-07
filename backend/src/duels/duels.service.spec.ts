@@ -10,6 +10,8 @@ import { DuelsService } from './duels.service';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
+import { ScoresService } from '../scores/scores.service';
+import { ScoreEventType } from '../scores/entities/score-event.entity';
 import {
   BASE_DUEL_SCORE,
   ALLY_BONUS_MULTIPLIER,
@@ -53,8 +55,9 @@ describe('DuelsService', () => {
     >
   >;
   let usersService: jest.Mocked<
-    Pick<UsersService, 'findById' | 'applyScoreDelta'>
+    Pick<UsersService, 'findById' | 'findByIds' | 'applyScoreDelta'>
   >;
+  let scoresService: jest.Mocked<Pick<ScoresService, 'record'>>;
 
   const challenger = { id: 'user-a', team: 'KR' };
   const opponentId = 'user-b';
@@ -104,8 +107,15 @@ describe('DuelsService', () => {
 
     usersService = {
       findById: jest.fn().mockResolvedValue({ id: opponentId, team: 'JP' }),
+      // 원장에 남길 이벤트 시점 팀 조회 — 승자/패자 두 유저를 한 번에 읽는다.
+      findByIds: jest.fn().mockResolvedValue([
+        { id: challenger.id, team: challenger.team },
+        { id: opponentId, team: 'JP' },
+      ]),
       applyScoreDelta: jest.fn().mockResolvedValue(undefined),
     };
+
+    scoresService = { record: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -114,6 +124,7 @@ describe('DuelsService', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: RedisService, useValue: redis },
         { provide: UsersService, useValue: usersService },
+        { provide: ScoresService, useValue: scoresService },
       ],
     }).compile();
 
@@ -326,6 +337,57 @@ describe('DuelsService', () => {
         expect.any(Number),
       );
       expect(redis.clearPenalty).not.toHaveBeenCalled();
+    });
+
+    it('승패를 점수 원장에 append한다 — 팀 점수는 0, 같은 트랜잭션', async () => {
+      // 개인 랭킹은 users.score가 아니라 SUM(score_events.personalPoints)로 산출되므로,
+      // 원장에 남지 않으면 결투 점수가 /users/me와 명예의 전당에서 서로 다른 값이 된다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+
+      await service.submitResult(1, challenger.id, challenger.id);
+
+      expect(scoresService.record).toHaveBeenCalledWith(txManager, {
+        userId: challenger.id,
+        team: challenger.team,
+        type: ScoreEventType.DUEL_WIN,
+        personalPoints: BASE_DUEL_SCORE,
+        teamPoints: 0,
+        duelId: 1,
+      });
+      expect(scoresService.record).toHaveBeenCalledWith(txManager, {
+        userId: opponentId,
+        team: 'JP',
+        type: ScoreEventType.DUEL_LOSS,
+        personalPoints: -BASE_DUEL_SCORE,
+        teamPoints: 0,
+        duelId: 1,
+      });
+    });
+
+    it('탈퇴로 유저 row가 사라진 참가자는 원장 행을 남기지 않는다', async () => {
+      // applyScoreDelta도 대상 row가 없어 no-op이므로, 원장에만 유령 행이 남는 일이 없어야 한다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+      usersService.findByIds.mockResolvedValue([
+        { id: challenger.id, team: challenger.team },
+      ] as never);
+
+      await service.submitResult(1, challenger.id, challenger.id);
+
+      expect(scoresService.record).toHaveBeenCalledTimes(1);
+      expect(scoresService.record).toHaveBeenCalledWith(
+        txManager,
+        expect.objectContaining({ userId: challenger.id }),
+      );
     });
 
     it('승자 주변에 아군이 2명 이상이면 1.5배 점수를 적용한다', async () => {
