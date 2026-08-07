@@ -17,8 +17,14 @@ export class Festival {
   @Column()
   title: string;
 
-  @Column({ nullable: true })
-  addr1: string;
+  // nullable 컬럼은 타입도 | null로 선언한다 — TourAPI가 주지 않는 필드가 흔해 실제로 null이
+  // 내려가는데, 선언이 non-nullable이면 소비자가 항상 값이 있다고 믿게 된다.
+  //
+  // 유니온 타입으로 선언할 때는 type을 반드시 명시해야 한다. TypeORM은 emitDecoratorMetadata의
+  // design:type으로 컬럼 타입을 추론하는데, `string | null`은 Object로 반영되어
+  // DataTypeNotSupportedError로 DataSource 초기화가 실패한다(부팅 불가).
+  @Column({ type: 'varchar', nullable: true })
+  addr1: string | null;
 
   @Column('decimal', {
     precision: 13,
@@ -26,7 +32,7 @@ export class Festival {
     nullable: true,
     transformer: numericTransformer,
   })
-  mapX: number;
+  mapX: number | null;
 
   @Column('decimal', {
     precision: 13,
@@ -34,13 +40,13 @@ export class Festival {
     nullable: true,
     transformer: numericTransformer,
   })
-  mapY: number;
+  mapY: number | null;
 
-  @Column({ nullable: true })
-  firstimage: string;
+  @Column({ type: 'varchar', nullable: true })
+  firstimage: string | null;
 
-  @Column({ nullable: true })
-  tel: string;
+  @Column({ type: 'varchar', nullable: true })
+  tel: string | null;
 
   // '아직 끝나지 않은 축제' 필터(eventEndDate 기준)와 '예정' 필터(eventStartDate 기준)를
   // 각각 덮도록 단일 컬럼 인덱스를 둔다. 복합 인덱스는 선행 컬럼만 쓰는 쿼리를 못 덮는다.
@@ -54,11 +60,11 @@ export class Festival {
   @Column({ type: 'date' })
   eventEndDate: string;
 
-  @Column({ nullable: true })
-  areacode: string;
+  @Column({ type: 'varchar', nullable: true })
+  areacode: string | null;
 
-  @Column({ nullable: true })
-  sigungucode: string;
+  @Column({ type: 'varchar', nullable: true })
+  sigungucode: string | null;
 
   // @UpdateDateColumn은 upsert의 ON CONFLICT UPDATE에 포함되지 않아 재동기화 시 갱신되지
   // 않는다. 동기화 시각을 정확히 남기려 일반 컬럼으로 두고 서비스에서 명시적으로 채운다.

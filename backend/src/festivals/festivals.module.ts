@@ -35,6 +35,10 @@ export class FestivalsModule implements OnModuleInit {
       const jobOptions = {
         attempts: 3,
         backoff: { type: 'exponential', delay: 60000 },
+        // 잡 자체에도 상한을 둔다. 서비스가 요청별 타임아웃(10초)을 걸지만, 페이지 수가
+        // 예상 밖으로 늘거나 DB 쪽에서 매달리면 잡이 끝나지 않고 프로세서 동시성이 1이라
+        // 다음 날 잡부터 뒤에 쌓인다. 정상 동기화는 수십 초라 10분이면 충분하다.
+        timeout: 600_000,
       };
       // tz 미지정 시 서버 로컬 시간(컨테이너 기본 UTC) 기준으로 실행되므로 KST 고정.
       // 매일 04:00 KST — 트래픽이 적은 새벽에 1회 동기화.

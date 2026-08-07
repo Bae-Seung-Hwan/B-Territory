@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { ConfigService } from '@nestjs/config';
 import { Festival } from './entities/festival.entity';
 import { FestivalStatus } from './dto/festival-query.dto';
@@ -37,11 +36,55 @@ const NUM_OF_ROWS = 100;
 // 이미 시작해 진행 중인 축제까지 놓치지 않도록 과거로 넉넉히 조회한다.
 // (searchFestival2는 eventStartDate 이후 축제를 주므로 시작일이 오래된 장기 축제 대비)
 const LOOKBACK_DAYS = 180;
+// 외부 API 단일 요청 상한(ms). 없으면 TourAPI가 응답을 끊지 않을 때 동기화 잡이 무한정
+// 살아 있고, 프로세서 동시성이 1이라 다음 날 잡부터 뒤에 쌓인다.
+const FETCH_TIMEOUT_MS = 10_000;
+
+/** upsert 대상 컬럼. INSERT 컬럼 목록과 ON CONFLICT SET 절을 같은 순서로 만든다. */
+const UPSERT_COLUMNS = [
+  'contentId',
+  'title',
+  'addr1',
+  'mapX',
+  'mapY',
+  'firstimage',
+  'tel',
+  'eventStartDate',
+  'eventEndDate',
+  'areacode',
+  'sigungucode',
+  'updatedAt',
+] as const;
+
+/** 동기화 한 건. 누락 필드는 undefined가 아니라 명시적 null로 채운다(아래 upsertBatch 주석 참고). */
+type FestivalRow = {
+  contentId: string;
+  title: string;
+  addr1: string | null;
+  mapX: number | null;
+  mapY: number | null;
+  firstimage: string | null;
+  tel: string | null;
+  eventStartDate: string;
+  eventEndDate: string;
+  areacode: string | null;
+  sigungucode: string | null;
+  updatedAt: Date;
+};
 
 function parseCoord(value?: string): number | null {
   if (!value) return null;
   const n = parseFloat(value);
   return isFinite(n) ? n : null;
+}
+
+/**
+ * 빈 문자열을 null로 정규화한다. TourAPI는 값이 없는 필드를 ''로 주는 일이 잦은데,
+ * ''는 null이 아니라서 아래 COALESCE 보존 로직을 통과해 멀쩡한 기존 값을 ''로 덮어쓴다.
+ */
+function nullIfBlank(value?: string): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 /** 'YYYYMMDD' → 'YYYY-MM-DD'. 8자리 숫자가 아니면 null. */
@@ -117,7 +160,7 @@ export class FestivalsService {
           ? page1Items
           : (await this.fetchPage(serviceKey, page, eventStartDate)).items;
 
-      const rows: QueryDeepPartialEntity<Festival>[] = [];
+      const rows: FestivalRow[] = [];
       for (const item of items) {
         if (!item.title?.trim()) continue;
         // 날짜가 없으면 진행 상태 판정이 불가능하므로 제외 (NOT NULL 컬럼)
@@ -127,26 +170,22 @@ export class FestivalsService {
 
         rows.push({
           contentId: item.contentid,
-          title: item.title,
-          addr1: item.addr1 ?? undefined,
-          mapX: parseCoord(item.mapx) ?? undefined,
-          mapY: parseCoord(item.mapy) ?? undefined,
-          firstimage: item.firstimage ?? undefined,
-          tel: item.tel ?? undefined,
+          title: item.title.trim(),
+          addr1: nullIfBlank(item.addr1),
+          mapX: parseCoord(item.mapx),
+          mapY: parseCoord(item.mapy),
+          firstimage: nullIfBlank(item.firstimage),
+          tel: nullIfBlank(item.tel),
           eventStartDate,
           eventEndDate,
-          areacode: item.areacode ?? undefined,
-          sigungucode: item.sigungucode ?? undefined,
+          areacode: nullIfBlank(item.areacode),
+          sigungucode: nullIfBlank(item.sigungucode),
           updatedAt: syncedAt,
         });
         syncedContentIds.push(item.contentid);
       }
 
-      if (rows.length > 0) {
-        await this.festivalRepository.upsert(rows, {
-          conflictPaths: ['contentId'],
-        });
-      }
+      await this.upsertBatch(rows);
 
       this.logger.log(`[${page}/${totalPages}] ${rows.length}건 upsert`);
       if (page < totalPages) await new Promise((r) => setTimeout(r, 300));
@@ -173,6 +212,47 @@ export class FestivalsService {
     return { synced: syncedContentIds.length, deleted };
   }
 
+  /**
+   * contentId 기준 upsert. 이미 있는 축제는 **API가 실제로 값을 준 필드만** 갱신하고,
+   * 주지 않은 필드(null)는 기존 값을 유지한다.
+   *
+   * TypeORM repository.upsert()를 쓰지 않는 이유: undefined 필드를 ON CONFLICT SET 절에서
+   * 빼주긴 하는데, 그 SET 절이 **배치 전체의 합집합**으로 만들어진다. 한 배치에 좌표가 있는
+   * 행과 없는 행이 섞이면(= 실제 동기화의 상시 상황) SET에 mapX가 포함되고, 좌표가 없는 행은
+   * DEFAULT(NULL)로 들어가 **저장돼 있던 좌표를 NULL로 덮어쓴다.** 게다가 그 페이지 전원이
+   * 좌표가 없으면 SET에서 빠져 보존되므로, 동작이 배치 구성에 따라 달라져 재현도 어렵다.
+   *
+   * COALESCE(EXCLUDED.x, festivals.x)로 "API가 준 값이 있으면 그것, 없으면 기존 값"을
+   * 명시한다. 대신 upstream에서 필드가 의도적으로 삭제된 경우는 반영되지 않는다 —
+   * TourAPI의 필드 누락은 대부분 일시적이라 데이터를 잃는 쪽보다 남기는 쪽을 택했다.
+   */
+  private async upsertBatch(rows: FestivalRow[]): Promise<void> {
+    if (rows.length === 0) return;
+
+    const params: unknown[] = [];
+    const tuples = rows.map((row) => {
+      const placeholders = UPSERT_COLUMNS.map((col) => {
+        params.push(row[col]);
+        return `$${params.length}`;
+      });
+      return `(${placeholders.join(', ')})`;
+    });
+
+    const columnList = UPSERT_COLUMNS.map((col) => `"${col}"`).join(', ');
+    const updates = UPSERT_COLUMNS.filter((col) => col !== 'contentId')
+      .map(
+        (col) => `"${col}" = COALESCE(EXCLUDED."${col}", "festivals"."${col}")`,
+      )
+      .join(', ');
+
+    await this.festivalRepository.query(
+      `INSERT INTO "festivals" (${columnList})
+       VALUES ${tuples.join(', ')}
+       ON CONFLICT ("contentId") DO UPDATE SET ${updates}`,
+      params,
+    );
+  }
+
   private async fetchPage(
     serviceKey: string,
     pageNo: number,
@@ -191,7 +271,10 @@ export class FestivalsService {
     });
     const url = `${BASE_URL}/searchFestival2?${params}`;
 
-    const res = await fetch(url);
+    // 타임아웃이 없으면 응답을 끊지 않는 API에 잡이 무한정 매달린다.
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (!res.ok)
       throw new Error(`축제 API HTTP 오류: ${res.status} ${res.statusText}`);
     const data = (await res.json()) as FestivalApiResponse;
