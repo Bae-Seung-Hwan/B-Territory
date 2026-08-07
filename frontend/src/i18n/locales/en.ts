@@ -113,6 +113,7 @@ export const en: Translations = {
     send: 'Send',
     shareLocation: "I'm here",
     locationShared: '{{nickname}} is at {{spot}}',
+    locationSharedUnknown: '{{nickname}} shared their location',
     you: 'Me',
   },
   ranking: {
@@ -226,6 +227,22 @@ export const en: Translations = {
     duelPending: {
       title: 'Waiting for response...',
       body: 'You challenged Team {{team}} to a duel',
+      bodyRecipient: 'Setting up your duel with {{nickname}}',
+    },
+    duelError: {
+      title: 'Duel Failed',
+      DUEL_SAME_TEAM: 'You cannot challenge someone on your own team',
+      DUEL_TARGET_NOT_FOUND: 'Opponent not found',
+      DUEL_CHALLENGER_PENALTY: 'You cannot challenge while under a duel penalty',
+      DUEL_TARGET_PENALTY: 'Your opponent is under a duel penalty',
+      DUEL_TARGET_LOCATION_UNKNOWN: "Your opponent's location is unavailable",
+      DUEL_OUT_OF_RANGE: 'Your opponent is too far away',
+      DUEL_ALREADY_ACTIVE: 'A duel is already in progress',
+      DUEL_ALREADY_PENDING: 'You already have a pending duel request',
+      DUEL_ALREADY_HANDLED: 'This duel was already handled',
+      DUEL_NOT_FOUND: 'Duel not found',
+      DUEL_NOT_ACCEPTED: 'This duel has not been accepted',
+      UNAUTHENTICATED_CONNECTION: 'Your session expired. Please log in again',
     },
     duelOutcome: {
       title: 'Duel Result',
