@@ -8,6 +8,7 @@ import { EnemyDetectionAlert } from '@/components/overlay/EnemyDetectionAlert';
 import { DuelRequest } from '@/components/overlay/DuelRequest';
 import { DuelPending } from '@/components/overlay/DuelPending';
 import { MiniGame } from '@/components/overlay/MiniGame';
+import { LocationBroadcaster } from '@/components/LocationBroadcaster';
 import { useAuth } from '@/hooks/use-auth';
 import { queryClient } from '@/lib/query-client';
 
@@ -19,6 +20,7 @@ export default function RootLayout() {
           <BottomSheetModalProvider>
             <SocketProvider>
               <RootNavigator />
+              <LocationBroadcaster />
               <EnemyDetectionAlert />
               <DuelRequest />
               <DuelPending />

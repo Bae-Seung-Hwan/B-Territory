@@ -11,7 +11,18 @@ import { BrandColors } from '@/constants/theme';
 export function DuelPending() {
   const showDuelPending = useOverlayStore((s) => s.showDuelPending);
   const enemyInfo = useOverlayStore((s) => s.enemyInfo);
+  const duelRole = useOverlayStore((s) => s.duelRole);
+  const challengerNickname = useOverlayStore((s) => s.challengerNickname);
   const { t } = useTranslation();
+
+  // 수락 직후에도 이 화면을 쓰는데, 그때(수신자)는 duel:requested에 team이 없어
+  // enemyInfo.nationality가 비어 있다 — 역할에 따라 다른 문구를 쓴다.
+  const body =
+    duelRole === 'recipient'
+      ? t('overlay.duelPending.bodyRecipient', { nickname: challengerNickname ?? '' })
+      : enemyInfo
+        ? t('overlay.duelPending.body', { team: enemyInfo.nationality })
+        : null;
 
   return (
     <Modal visible={showDuelPending} transparent animationType="fade" statusBarTranslucent>
@@ -19,11 +30,7 @@ export function DuelPending() {
         <View style={styles.card}>
           <ActivityIndicator size="large" color={BrandColors.accent} />
           <Text style={styles.title}>{t('overlay.duelPending.title')}</Text>
-          {enemyInfo && (
-            <Text style={styles.body}>
-              {t('overlay.duelPending.body', { team: enemyInfo.nationality })}
-            </Text>
-          )}
+          {body && <Text style={styles.body}>{body}</Text>}
         </View>
       </View>
     </Modal>

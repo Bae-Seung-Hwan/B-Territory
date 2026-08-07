@@ -52,11 +52,17 @@ export function nearestByCoords<T>(
   point: { lat: number; lng: number },
   items: T[],
   toCoords: (item: T) => { lat: number; lng: number },
+  maxDistanceM = Infinity,
 ): T | null {
   let closest: T | null = null;
-  let closestDistance = Infinity;
+  // 상한을 초기 최단거리로 두면 별도 비교 없이 "이보다 가까운 것만" 채택된다.
+  let closestDistance = maxDistanceM;
   for (const item of items) {
-    const distance = haversineDistanceMeters(point, toCoords(item));
+    const coords = toCoords(item);
+    // 좌표가 없는 항목(백엔드 mapX/mapY가 null)은 Number() 변환에서 NaN이 되는데,
+    // 그대로 두면 (0,0)이나 NaN 비교로 엉뚱한 항목이 뽑힌다.
+    if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) continue;
+    const distance = haversineDistanceMeters(point, coords);
     if (distance < closestDistance) {
       closestDistance = distance;
       closest = item;

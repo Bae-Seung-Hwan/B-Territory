@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -20,6 +20,7 @@ import { fetchBusanSpots, type Spot } from '@/api/spots';
 import { queryKeys } from '@/lib/query-keys';
 import { nearestByCoords } from '@/utils/geo';
 import { CHAT_ENABLED } from '@/config/feature-flags';
+import { SPOT_PROXIMITY_M } from '@/constants/game';
 
 function spotCoords(spot: Spot) {
   return { lat: Number(spot.mapY), lng: Number(spot.mapX) };
@@ -41,8 +42,22 @@ export default function ChatScreen() {
     queryFn: fetchBusanSpots,
   });
 
-  const nearestSpotTitle = (lat: number, lng: number) =>
-    nearestByCoords({ lat, lng }, spots, spotCoords)?.title ?? null;
+  // 위치 항목별 관광지명을 한 번만 계산해 renderItem에서는 조회만 한다 — renderItem에서
+  // 직접 계산하면 메시지가 하나 올 때마다 보이는 항목 × 관광지 500개를 다시 훑는다.
+  const spotTitleByCoords = useMemo(() => {
+    const cache = new Map<string, string | null>();
+    for (const item of messages) {
+      if (item.kind !== 'location') continue;
+      const key = `${item.lat},${item.lng}`;
+      if (cache.has(key)) continue;
+      cache.set(
+        key,
+        nearestByCoords({ lat: item.lat, lng: item.lng }, spots, spotCoords, SPOT_PROXIMITY_M)
+          ?.title ?? null,
+      );
+    }
+    return cache;
+  }, [messages, spots]);
 
   const handleSend = () => {
     if (!text.trim()) return;
@@ -57,14 +72,15 @@ export default function ChatScreen() {
 
   const renderItem = ({ item }: { item: ChatFeedItem }) => {
     if (item.kind === 'location') {
-      const spotTitle = nearestSpotTitle(item.lat, item.lng) ?? '?';
+      const nickname = item.mine ? t('chat.you') : item.nickname;
+      const spotTitle = spotTitleByCoords.get(`${item.lat},${item.lng}`) ?? null;
       return (
         <View style={[styles.bubble, styles.locationBubble, item.mine && styles.mineBubble]}>
           <Text style={styles.locationText}>
-            {t('chat.locationShared', {
-              nickname: item.mine ? t('chat.you') : item.nickname,
-              spot: spotTitle,
-            })}
+            {/* 근처(SPOT_PROXIMITY_M 이내)에 관광지가 없으면 엉뚱한 곳을 붙이지 않는다 */}
+            {spotTitle
+              ? t('chat.locationShared', { nickname, spot: spotTitle })
+              : t('chat.locationSharedUnknown', { nickname })}
           </Text>
         </View>
       );

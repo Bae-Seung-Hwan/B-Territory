@@ -29,15 +29,27 @@ function makeId(): string {
 export function useChatSocket() {
   const socketRef = useRef<Socket | null>(null);
   const addMessage = useChatStore((s) => s.addMessage);
-  const { profile } = useAuth();
+  const { profile, isAuthenticated } = useAuth();
 
+  // isAuthenticated에 의존해야 한다 — 마운트 시점에 Firebase 세션 복원이 아직 끝나지
+  // 않았으면 auth.currentUser가 null이라 토큰을 못 읽는데, 이 값을 안 보면 세션이
+  // 도착해도 effect가 다시 돌지 않아 영영 연결되지 않는다.
   useEffect(() => {
-    if (!CHAT_ENABLED) return;
+    if (!CHAT_ENABLED || !isAuthenticated) return;
 
-    let cancelled = false;
     const socket: Socket = io(`${API_BASE_URL}/chat`, {
       autoConnect: false,
       transports: ['websocket'],
+      // SocketProvider와 같은 이유로 함수형 auth를 쓴다 — 재연결마다 최신 토큰이 실린다.
+      auth: (cb: (data: { token: string | null }) => void) => {
+        void (async () => {
+          try {
+            cb({ token: (await auth.currentUser?.getIdToken()) ?? null });
+          } catch {
+            cb({ token: null });
+          }
+        })();
+      },
     });
     socketRef.current = socket;
 
@@ -48,19 +60,13 @@ export function useChatSocket() {
       addMessage({ kind: 'location', id: makeId(), mine: false, ...payload });
     });
 
-    void (async () => {
-      const token = await auth.currentUser?.getIdToken();
-      if (cancelled || !token) return;
-      socket.auth = { token };
-      socket.connect();
-    })();
+    socket.connect();
 
     return () => {
-      cancelled = true;
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [addMessage]);
+  }, [addMessage, isAuthenticated]);
 
   const sendMessage = useCallback(
     (text: string) => {

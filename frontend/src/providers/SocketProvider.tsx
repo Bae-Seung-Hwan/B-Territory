@@ -4,8 +4,11 @@ import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/lib/api-client';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
-import { useOverlayStore } from '@/store/useOverlayStore';
-import { useTranslation } from '@/i18n';
+import { useOverlayStore, isDuelBusy } from '@/store/useOverlayStore';
+// 훅(useTranslation)이 아니라 i18n 인스턴스를 직접 쓴다 — 훅이 반환하는 t는 매 렌더
+// 새로 bind된 함수라 effect 의존성에 넣으면 소켓 리스너 전체가 렌더마다 재등록된다.
+// 아래 핸들러들은 이벤트 발생 시점에 호출되므로 i18n.t가 그때의 locale을 그대로 읽는다.
+import { i18n } from '@/i18n';
 import { ENCOUNTER_RADIUS_M } from '@/constants/game';
 
 interface EncounterDetected {
@@ -24,6 +27,16 @@ interface DuelIdPayload {
   duelId: number;
 }
 
+/**
+ * 서버 핸들러가 throw하면 ack 콜백 대신 이 이벤트가 온다
+ * (backend/src/common/filters/ws-exception.filter.ts 주석 참고) — 구독하지 않으면
+ * "결투 신청" 후 사거리 이탈·페널티 등으로 거절당해도 화면이 그대로 멈춘다.
+ */
+interface WsExceptionPayload {
+  code: string;
+  message: string | string[];
+}
+
 interface DuelCompleted {
   duelId: number;
   winnerId: string;
@@ -34,15 +47,22 @@ interface DuelCompleted {
 
 const SocketContext = createContext<Socket | null>(null);
 
-// SocketProvider는 앱 루트에 단 한 번만 마운트되는 싱글턴이라(app/_layout.tsx), 이 소켓의
-// 인증 토큰도 모듈 스코프에 둔다. React state/ref로 두면 재연결 시 갱신하는 지점에서
-// "useState/useRef가 반환한 값을 렌더 중 또는 직접 mutate하면 안 된다"는 최신
-// react-hooks lint 규칙(immutability/refs)과 부딪힌다 — socket.io-client 인스턴스 자체가
-// React가 관리하지 않는 명령형 객체라는 점과 같은 이유다.
-let realtimeAuthToken: string | null = null;
-
+/**
+ * socket.io는 매 연결·재연결 시도 직전에 이 함수를 호출하므로, 여기서 토큰을 읽으면
+ * 재연결 때마다 자동으로 최신 토큰이 실린다. `getIdToken()`은 만료된 경우에만 내부적으로
+ * 갱신하고 그 외에는 캐시를 돌려주므로, 별도의 강제 갱신(getIdToken(true)) 재시도 로직이
+ * 필요 없다 — 예전엔 connect_error마다 강제 갱신 후 직접 connect()를 다시 불렀는데,
+ * 그러면 socket.io 자체의 지수 백오프를 건너뛰고 Firebase 토큰 갱신을 무한 반복했다.
+ */
 function realtimeAuth(cb: (data: { token: string | null }) => void) {
-  cb({ token: realtimeAuthToken });
+  void (async () => {
+    try {
+      cb({ token: (await auth.currentUser?.getIdToken()) ?? null });
+    } catch {
+      // 토큰을 못 얻으면 서버가 핸드셰이크에서 거부하고, socket.io가 백오프를 두고 재시도한다.
+      cb({ token: null });
+    }
+  })();
 }
 
 export function SocketProvider({ children }: { children: ReactNode }) {
@@ -56,36 +76,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     }),
   );
   const { isAuthenticated, profile } = useAuth();
-  const { t } = useTranslation();
 
-  // 로그인 상태를 따라 연결을 시작/종료한다. 매 시도마다 토큰을 새로 읽어와야
-  // Firebase ID Token(최대 1시간 유효) 만료 이후의 재연결에서도 유효한 토큰을 쓴다.
+  // 로그인 상태를 따라 연결을 시작/종료한다. 실패 시 재시도는 socket.io의 내장
+  // 재연결(지수 백오프)에 맡기고, 토큰은 realtimeAuth가 시도마다 새로 읽는다.
   useEffect(() => {
     if (!isAuthenticated) {
       socket.disconnect();
       return;
     }
-
-    let cancelled = false;
-
-    const connectWithToken = async (forceRefresh: boolean) => {
-      const token = await auth.currentUser?.getIdToken(forceRefresh);
-      if (cancelled || !token) return;
-      realtimeAuthToken = token;
-      socket.connect();
-    };
-
-    void connectWithToken(false);
-
-    // 인증 거부(만료된 토큰 등)로 연결이 실패하면 강제 갱신 후 한 번 더 시도한다.
-    const handleConnectError = () => {
-      void connectWithToken(true);
-    };
-    socket.on('connect_error', handleConnectError);
-
+    socket.connect();
     return () => {
-      cancelled = true;
-      socket.off('connect_error', handleConnectError);
       socket.disconnect();
     };
   }, [isAuthenticated, socket]);
@@ -94,9 +94,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   // 알림이 떠야 하기 때문(PR #17 리뷰 권고, docs/integrations.md 참고).
   useEffect(() => {
     const handleEncounter = (payload: EncounterDetected) => {
-      const { showDuelRequest, showMiniGame } = useOverlayStore.getState();
-      // 이미 결투 진행 중이면 새 조우 알림으로 흐름을 방해하지 않는다.
-      if (showDuelRequest || showMiniGame) return;
+      // 이미 결투 흐름이 진행 중이면(응답 대기·수락 왕복 포함) 새 조우 알림으로
+      // enemyInfo를 덮어쓰지 않는다 — 덮어쓰면 엉뚱한 제3자를 승자로 신고하게 된다.
+      if (isDuelBusy(useOverlayStore.getState())) return;
 
       useOverlayStore.getState().setEnemyInfo({
         userId: payload.userId,
@@ -122,7 +122,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       const store = useOverlayStore.getState();
       // 이미 다른 결투가 진행 중이면 새 신청을 받지 않는다 — 서버엔 별도 "거절"을
       // 보내지 않으므로, 신청자 쪽에서는 30초 후 duel:expired로 자연스럽게 정리된다.
-      if (store.showDuelPending || store.showDuelRequest || store.showMiniGame) return;
+      if (isDuelBusy(store)) return;
 
       store.setDuelId(payload.duelId);
       store.setDuelRole('recipient');
@@ -147,14 +147,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       const wasChallenger = store.duelRole === 'challenger';
       store.resetDuel();
       // 거부한 당사자에게는 자기 행동을 다시 알려줄 필요가 없다 — 신청자에게만 안내한다.
-      if (wasChallenger) Alert.alert(t('overlay.duelOutcome.title'), t('overlay.duelOutcome.rejected'));
+      if (wasChallenger) Alert.alert(i18n.t('overlay.duelOutcome.title'), i18n.t('overlay.duelOutcome.rejected'));
     };
 
     const handleDuelExpired = (payload: DuelIdPayload) => {
       const store = useOverlayStore.getState();
       if (store.duelId !== payload.duelId) return;
       store.resetDuel();
-      Alert.alert(t('overlay.duelOutcome.title'), t('overlay.duelOutcome.expired'));
+      Alert.alert(i18n.t('overlay.duelOutcome.title'), i18n.t('overlay.duelOutcome.expired'));
     };
 
     const handleDuelCompleted = (payload: DuelCompleted) => {
@@ -163,8 +163,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       store.resetDuel();
       const didWin = profile != null && payload.winnerId === profile.id;
       Alert.alert(
-        t('overlay.duelOutcome.title'),
-        didWin ? t('overlay.duelOutcome.win') : t('overlay.duelOutcome.lose'),
+        i18n.t('overlay.duelOutcome.title'),
+        didWin ? i18n.t('overlay.duelOutcome.win') : i18n.t('overlay.duelOutcome.lose'),
       );
     };
 
@@ -172,7 +172,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       const store = useOverlayStore.getState();
       if (store.duelId !== payload.duelId) return;
       store.resetDuel();
-      Alert.alert(t('overlay.duelOutcome.title'), t('overlay.duelOutcome.voided'));
+      Alert.alert(i18n.t('overlay.duelOutcome.title'), i18n.t('overlay.duelOutcome.voided'));
     };
 
     socket.on('duel:requested', handleDuelRequested);
@@ -189,7 +189,32 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('duel:completed', handleDuelCompleted);
       socket.off('duel:voided', handleDuelVoided);
     };
-  }, [socket, profile, t]);
+  }, [socket, profile]);
+
+  // 서버가 거절한 요청(사거리 이탈, 페널티, 이미 처리된 결투 등)을 사용자에게 알린다.
+  // 이걸 구독하지 않으면 ack가 오지 않는 실패 경로에서 오버레이가 영영 열린 채 멈춘다.
+  useEffect(() => {
+    const handleException = (payload: WsExceptionPayload) => {
+      const known = `overlay.duelError.${payload.code}`;
+      const translated = i18n.t(known);
+      // i18n-js는 없는 키에 대해 "[missing ...]" 문자열을 돌려준다 — 아직 매핑하지 않은
+      // 코드는 서버가 보낸 메시지로 폴백한다(서버 문구는 한국어 고정).
+      const message = translated.startsWith('[missing')
+        ? [payload.message].flat().join('\n')
+        : translated;
+
+      // 결투 관련 실패면 진행 중이던 오버레이를 정리한다 — location:update 검증 오류 같은
+      // 무관한 예외까지 결투를 취소시키지 않도록 코드 접두사로 구분한다.
+      if (payload.code.startsWith('DUEL_')) useOverlayStore.getState().resetDuel();
+
+      Alert.alert(i18n.t('overlay.duelError.title'), message);
+    };
+
+    socket.on('exception', handleException);
+    return () => {
+      socket.off('exception', handleException);
+    };
+  }, [socket]);
 
   useEffect(() => {
     return () => {

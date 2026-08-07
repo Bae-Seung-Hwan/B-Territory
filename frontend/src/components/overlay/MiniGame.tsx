@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
 import { useSocket } from '@/providers/SocketProvider';
@@ -11,15 +10,15 @@ export function MiniGame() {
   const showMiniGame = useOverlayStore((s) => s.showMiniGame);
   const duelId = useOverlayStore((s) => s.duelId);
   const enemyInfo = useOverlayStore((s) => s.enemyInfo);
+  const result = useOverlayStore((s) => s.miniGameResult);
+  const setResult = useOverlayStore((s) => s.setMiniGameResult);
   const resetDuel = useOverlayStore((s) => s.resetDuel);
   const socket = useSocket();
   const { profile } = useAuth();
   const { t } = useTranslation();
-  const [result, setResult] = useState<'win' | 'lose' | null>(null);
 
   const handleClose = () => {
     resetDuel();
-    setResult(null);
   };
 
   const handleFinish = (didWin: boolean) => {
