@@ -10,6 +10,7 @@ export function DuelRequest() {
   const duelId = useOverlayStore((s) => s.duelId);
   const challengerNickname = useOverlayStore((s) => s.challengerNickname);
   const setShowDuelRequest = useOverlayStore((s) => s.setShowDuelRequest);
+  const setShowDuelPending = useOverlayStore((s) => s.setShowDuelPending);
   const resetDuel = useOverlayStore((s) => s.resetDuel);
   const socket = useSocket();
   const { t } = useTranslation();
@@ -21,9 +22,11 @@ export function DuelRequest() {
 
   const handleAccept = () => {
     if (duelId != null) socket?.emit('duel:accept', { duelId });
-    // MiniGame은 서버의 duel:accepted 확인(SocketProvider) 후에 연다 —
-    // 여기서 미리 열면 서버가 거부한 경우(이미 처리된 결투 등)에도 게임이 시작돼버린다.
+    // MiniGame은 서버의 duel:accepted 확인(SocketProvider) 후에 연다 — 여기서 미리 열면
+    // 서버가 거부한 경우(이미 처리된 결투 등)에도 게임이 시작돼버린다. 그 왕복 동안
+    // 화면이 비지 않도록 대기 화면을 띄운다(실패하면 exception 핸들러가 정리한다).
     setShowDuelRequest(false);
+    setShowDuelPending(true);
   };
 
   return (

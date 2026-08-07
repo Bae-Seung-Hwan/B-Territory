@@ -35,10 +35,39 @@
   - `duel:accepted`는 양쪽 모두에게 와서 `MiniGame`을 연다. `duel:rejected`/`duel:expired`/`duel:completed`/`duel:voided`는 열려있는 오버레이를 `useOverlayStore.resetDuel()`로 정리하고 결과를 `Alert`로 안내한다(`duelId`가 현재 진행 중인 것과 일치할 때만 반응)
 - 백엔드(PR #13, `feature/Bae/realtime-duel`)가 제공하는 이벤트: 송신 `location:update`, 수신 `encounter:detected`/`duel:requested`/`duel:accepted`/`duel:rejected`/`duel:completed`/`duel:voided`/`duel:expired`, 송신 `duel:request`/`duel:accept`/`duel:reject`/`duel:result`
 
+### 🔴 알려진 결함 — 미니게임 승패 판정이 거의 항상 무효(VOID) 처리됨
+
+**백엔드 변경 없이는 해결 불가능하며, 결투 기능이 실질적으로 성립하지 않는 상태다.**
+
+세 미니게임(`components/overlay/minigames/`)은 모두 상대 성적과 비교하지 않고 **고정 임계값으로 각자 판정**한다 — `TapBattle` 15탭, `ReactionGame` 350ms, `QuizGame` 정답 여부. 그런데 서버는 두 참가자의 신고가 **정확히 일치할 때만** 결과를 확정하고, 어긋나면 VOID로 처리한다(`redis.service.ts#submitDuelResult`의 Lua: `winners[1] == winners[2]`).
+
+| 상황 | A 신고 | B 신고 | 서버 판정 |
+|---|---|---|---|
+| 둘 다 임계값 통과 | winner=A | winner=B | conflict → **VOID** |
+| 둘 다 임계값 미달 | winner=B | winner=A | conflict → **VOID** |
+
+정확히 한 명만 임계값을 넘는 우연이 아니면 항상 무효가 된다. 특히 `QuizGame`은 정답이 자명해(해운대) 사실상 100% VOID다.
+
+근본 원인은 **두 클라이언트가 서로의 성적을 교환할 채널이 없다**는 것이다. `/realtime`에는 상대에게 임의 데이터를 릴레이하는 이벤트가 없고(`location:update`/`duel:*`뿐), `/chat`(PR #34)은 같은 팀 룸이라 적과는 쓸 수 없다.
+
+해결하려면 백엔드에 점수 릴레이 이벤트(예: `duel:score {duelId, score}` → 상대에게 전달)를 추가하고, 양쪽이 상대 점수를 받아 **비교**한 뒤 같은 `winnerId`를 신고하도록 바꿔야 한다. 백엔드 담당자와 협의 필요.
+
+### 안정성 관련 구현 메모
+
+리뷰에서 드러난 아래 함정들은 수정됐다. 같은 실수를 반복하지 않도록 이유를 남긴다.
+
+- **WS 실패는 ack가 아니라 `exception` 이벤트로 온다.** 서버 핸들러가 throw하면 `emit(..., ack)`의 콜백은 **호출되지 않는다**(`ws-exception.filter.ts` 주석). `SocketProvider`가 `exception`을 구독해 `overlay.duelError.<code>`로 안내하고, `DUEL_*` 코드면 `resetDuel()`로 멈춘 오버레이를 정리한다. 새 emit 지점을 추가할 때 ack만 믿으면 안 된다.
+- **"결투 진행 중" 판정은 `useOverlayStore#isDuelBusy` 하나로 통일한다.** `show*` 플래그만 보면, 수락을 emit하고 `duel:accepted`를 기다리는 왕복 구간(오버레이는 없는데 결투는 살아있음)에 새 `duel:requested`가 `duelId`를 덮어써 원래 결투가 id 불일치로 버려진다. 그래서 `duelId != null`도 판정에 포함한다.
+- **위치 송신은 조우 탐지 겸 접속 확인이다.** 서버는 `location:update`가 올 때만 `user:meta:*`를 갱신하고 TTL이 120초라, 정지해 있으면(`distanceInterval:10m`) 2분 뒤 오프라인으로 간주돼 `duel:accepted`가 큐로 빠진다. 앱 루트의 `LocationBroadcaster`가 좌표 변경 시 + 60초 주기로 보내며, 특정 탭에 묶지 않는 이유도 이것이다.
+- **소켓 토큰은 함수형 `auth`로 넘긴다.** `connect_error`마다 강제 갱신 후 직접 `connect()`를 부르면 socket.io의 지수 백오프를 건너뛰고 Firebase 토큰 갱신을 무한 반복한다. `auth: (cb) => ...`는 매 재연결 시도 직전에 호출되므로 갱신 로직 자체가 필요 없다.
+- **소켓 리스너 effect에 `useTranslation()`의 `t`를 넣지 않는다.** 매 렌더 새로 bind되는 함수라 리스너 전체가 렌더마다 재등록된다. 핸들러 안에서는 `i18n.t`를 직접 호출한다.
+- **GPS 구독은 `useLocation`이 모듈 스코프에 하나만 유지한다.** 호출한 화면 수만큼 `watchPositionAsync`가 생기지 않도록 공유하며, 마지막 구독자가 사라질 때만 해제한다.
+
 ### 필요 작업 (TODO)
 
-- [ ] 결투 상대가 이미 다른 결투 중일 때(`showDuelPending`/`showDuelRequest`/`showMiniGame` 중 하나라도 true) 새 `duel:requested`를 그냥 무시하는데, 신청자 쪽엔 "상대가 바쁘다"는 별도 안내 없이 30초 뒤 `duel:expired`로만 알게 됨 — UX 개선 여지 있음
-- [ ] `MiniGame`이 자기 로컬 결과를 먼저 낙관적으로 보여주고 "확인"으로 바로 닫을 수 있어, 상대가 아직 결과를 제출하기 전에 닫으면(`resetDuel()`로 `duelId`가 비워짐) 이후 도착하는 `duel:completed`/`duel:voided`를 못 받는다 — 서버 확정을 기다리는 중간 상태 UI 도입 검토
+- [ ] 위 "🔴 알려진 결함" — 백엔드 점수 릴레이 이벤트 협의 (프론트만으로는 해결 불가)
+- [ ] `MiniGame`이 로컬 결과를 먼저 보여주고 "확인"으로 바로 닫을 수 있어, 상대가 결과를 제출하기 전에 닫으면 이후 도착하는 `duel:completed`/`duel:voided`를 못 받는다 — 서버 확정 대기 UI 도입 검토
+- [ ] `DuelPending`에 취소 수단이 없다(백엔드에 `duel:cancel`이 없어 30초 만료에 의존) — 백엔드 협의 시 함께 논의
 
 ## Firebase Authentication
 

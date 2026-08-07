@@ -107,6 +107,7 @@ export const ko = {
     send: '전송',
     shareLocation: '여기 공략 중',
     locationShared: '{{nickname}}님이 {{spot}} 공략 중',
+    locationSharedUnknown: '{{nickname}}님이 위치를 공유했습니다',
     you: '나',
   },
   ranking: {
@@ -208,6 +209,24 @@ export const ko = {
     duelPending: {
       title: '응답을 기다리는 중...',
       body: '{{team}} 팀에게 결투를 신청했습니다',
+      bodyRecipient: '{{nickname}}님과의 결투를 준비하는 중입니다',
+    },
+    // 서버 WS 예외(exception 이벤트)의 code를 그대로 키로 쓴다 —
+    // backend/src/common/errors/error-code.ts의 ErrorCode와 이름이 일치해야 한다.
+    duelError: {
+      title: '결투 실패',
+      DUEL_SAME_TEAM: '같은 팀에게는 결투를 신청할 수 없습니다',
+      DUEL_TARGET_NOT_FOUND: '상대를 찾을 수 없습니다',
+      DUEL_CHALLENGER_PENALTY: '결투 페널티 중에는 신청할 수 없습니다',
+      DUEL_TARGET_PENALTY: '상대가 결투 페널티 중입니다',
+      DUEL_TARGET_LOCATION_UNKNOWN: '상대의 위치를 확인할 수 없습니다',
+      DUEL_OUT_OF_RANGE: '상대가 너무 멀리 있습니다',
+      DUEL_ALREADY_ACTIVE: '이미 진행 중인 결투가 있습니다',
+      DUEL_ALREADY_PENDING: '이미 신청한 결투가 있습니다',
+      DUEL_ALREADY_HANDLED: '이미 처리된 결투입니다',
+      DUEL_NOT_FOUND: '결투를 찾을 수 없습니다',
+      DUEL_NOT_ACCEPTED: '수락되지 않은 결투입니다',
+      UNAUTHENTICATED_CONNECTION: '인증이 만료됐습니다. 다시 로그인해주세요',
     },
     duelOutcome: {
       title: '결투 결과',
