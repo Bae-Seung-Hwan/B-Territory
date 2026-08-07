@@ -159,8 +159,8 @@ curl http://localhost:3000/api/auth/me \
 | `items[].contentId` | string | 데이터셋 미션 ID (`MISSION_0001` 형식) |
 | `items[].title` | string | 장소명 |
 | `items[].addr1` | string \| null | 주소 |
-| `items[].mapX` | **string** | 경도. ⚠️ **숫자가 아니라 문자열로 옵니다** (Postgres `decimal` 컬럼 특성). 프론트에서 `parseFloat` 필요 |
-| `items[].mapY` | **string** | 위도. 위와 동일 |
+| `items[].mapX` | number \| null | 경도. (Postgres `decimal`이지만 응답은 엔티티 `numericTransformer`로 number로 직렬화됩니다) |
+| `items[].mapY` | number \| null | 위도. 위와 동일 |
 | `items[].firstimage` | string \| null | 대표 이미지 URL |
 | `items[].contenttypeid` | string \| null | |
 | `items[].areacode` | string \| null | |
@@ -183,8 +183,8 @@ curl "http://localhost:3000/api/spots?page=1&limit=1&sigungucode=16"
       "contentId": "MISSION_0005",
       "title": "해운대 빛축제",
       "addr1": "부산광역시 해운대구 해운대해변로 280 (중동)",
-      "mapX": "129.1626049105",
-      "mapY": "35.1595354549",
+      "mapX": 129.1626049105,
+      "mapY": 35.1595354549,
       "firstimage": "http://tong.visitkorea.or.kr/cms/resource/12/3576412_image2_1.jpg",
       "contenttypeid": "15",
       "areacode": "6",
@@ -233,8 +233,8 @@ curl http://localhost:3000/api/spots/930
   "contentId": "MISSION_0117",
   "title": "흰여울문화마을",
   "addr1": "부산광역시 영도구 흰여울길",
-  "mapX": "129.0440200000",
-  "mapY": "35.0788500000",
+  "mapX": 129.04402,
+  "mapY": 35.07885,
   "firstimage": "https://www.visitbusan.net/uploadImgs/files/cntnts/20191222164810529_ttiel",
   "contenttypeid": "busan_attraction",
   "areacode": "6",
