@@ -21,6 +21,8 @@ import { secondsUntilKstMidnight } from '../common/utils/kst.util';
 import { ErrorCode, errBody } from '../common/errors/error-code';
 import { resolveLang, pickText } from '../common/utils/lang.util';
 import { VisitDto } from './dto/visit.dto';
+import { LocationLogsService } from '../location-logs/location-logs.service';
+import { LocationServiceCode } from '../location-logs/constants';
 
 const DEFENSE_TTL = 300; // 5분
 const DEFENSE_KEY = (spotId: number) => `defense:${spotId}`;
@@ -49,10 +51,18 @@ export class ClaimsService {
     private readonly usersService: UsersService,
     private readonly scoresService: ScoresService,
     private readonly districtsService: DistrictsService,
+    private readonly locationLogs: LocationLogsService,
   ) {}
 
   async visit(dto: VisitDto, userId: string, team: string) {
     const { spotId, lat, lng } = dto;
+
+    // 위치정보 이용사실 기록(법 제16조 2항)은 좌표를 전송받은 시점에 남긴다 — 페널티·거리 미달
+    // 등으로 인증이 실패해도 "위치정보를 전송받은 사실"은 이미 발생했으므로 아래 검증들보다 먼저 호출한다.
+    this.locationLogs.record({
+      subjectId: userId,
+      service: LocationServiceCode.SPOT_CLAIM,
+    });
 
     // 결투 패배 페널티 중에는 스팟 점령 시도 자체를 차단 (realtime/duels 모듈에서 설정하는 penalty:{userId} 키 재사용)
     // 사전 체크: 페널티 중인 유저의 요청을 빠르게 실패시켜 불필요한 방어 타이머 점유를 피한다.

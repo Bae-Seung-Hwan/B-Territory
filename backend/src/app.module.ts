@@ -16,6 +16,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
 import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
+import { LocationLogsModule } from './location-logs/location-logs.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
     ScoresModule,
     DistrictsModule,
     HallOfFameModule,
+    LocationLogsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
 import { ClaimsService } from './claims.service';
 import { VisitDto } from './dto/visit.dto';
+import { LocationServiceCode } from '../location-logs/constants';
 
 describe('ClaimsService', () => {
   describe('visit', () => {
@@ -50,6 +51,7 @@ describe('ClaimsService', () => {
         record: jest.fn().mockResolvedValue(undefined),
       };
       const districtsService = { getWeight: jest.fn().mockReturnValue(1) };
+      const locationLogs = { record: jest.fn() };
       const service = new ClaimsService(
         { upsert: jest.fn() } as never,
         {} as never,
@@ -59,8 +61,9 @@ describe('ClaimsService', () => {
         usersService as never,
         scoresService as never,
         districtsService as never,
+        locationLogs as never,
       );
-      return { service, redis };
+      return { service, redis, locationLogs };
     }
 
     it('방문 확인과 점령 저장 사이에 spot이 삭제된 경합(FK 위반 23503)을 404로 변환한다', async () => {
@@ -78,6 +81,27 @@ describe('ClaimsService', () => {
         service.visit(visitDto, 'user-1', 'A'),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(redis.del).toHaveBeenCalledWith('defense:1');
+    });
+
+    it('점령이 실패해도 위치정보 이용사실은 기록한다 (법 제16조 2항)', async () => {
+      const fkError = new QueryFailedError('INSERT ...', [], {
+        name: 'error',
+        message:
+          'insert or update on table "spot_claims" violates foreign key constraint',
+        code: '23503',
+      } as unknown as Error);
+      const { service, locationLogs } = makeService(
+        jest.fn().mockRejectedValue(fkError),
+      );
+
+      await expect(
+        service.visit(visitDto, 'user-1', 'A'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      // 좌표를 전송받은 사실 자체는 인증 성공 여부와 무관하게 남아야 한다.
+      expect(locationLogs.record).toHaveBeenCalledWith({
+        subjectId: 'user-1',
+        service: LocationServiceCode.SPOT_CLAIM,
+      });
     });
 
     it('FK 위반이 아닌 다른 DB 에러는 그대로 전파한다', async () => {
