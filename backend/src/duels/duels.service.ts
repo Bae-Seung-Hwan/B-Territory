@@ -26,6 +26,10 @@ import {
   PENALTY_TTL,
 } from './constants';
 import { ErrorCode, errBody } from '../common/errors/error-code';
+import {
+  PG_FOREIGN_KEY_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 
 export type DuelResultOutcome =
   | { status: 'waiting' }
@@ -474,6 +478,7 @@ export class DuelsService {
 
     // 원장에 남길 이벤트 시점의 팀. CAS와 같은 트랜잭션에서 append해야 하므로 미리 읽어둔다.
     // 탈퇴 등으로 유저 row가 사라졌으면 applyScoreDelta도 no-op이 되므로 원장 행도 남기지 않는다.
+    // 이 조회와 insert 사이에 참가자가 사라지는 경우는 트랜잭션 안에서 SAVEPOINT로 처리한다.
     const teamByUserId = new Map(
       (await this.usersService.findByIds([winnerId, loserId])).map((u) => [
         u.id,
@@ -519,17 +524,36 @@ export class DuelsService {
         ] as const) {
           const team = teamByUserId.get(userId);
           if (team === undefined) continue;
-          await this.scoresService.record(manager, {
-            userId,
-            team,
-            type:
-              userId === winnerId
-                ? ScoreEventType.DUEL_WIN
-                : ScoreEventType.DUEL_LOSS,
-            personalPoints: points,
-            teamPoints: 0,
-            duelId: duel.id,
-          });
+
+          // 위 팀 스냅샷은 트랜잭션 밖에서 읽은 값이라, 그 뒤에 참가자가 삭제되면 스킵 판정이
+          // 낡아 사라진 유저의 uuid로 insert를 시도하게 된다 → FK 위반. Postgres는 실패한 문이
+          // 트랜잭션 전체를 abort시키므로 catch만으로는 결투 확정까지 함께 날아간다. SAVEPOINT로
+          // 이 insert만 되돌려, 사라진 참가자의 원장 행만 건너뛰고 나머지는 그대로 커밋한다.
+          //
+          // 이 insert에서 외부 상태에 달린 FK는 userId뿐이다 — duelId는 바로 위에서 이 트랜잭션이
+          // 갱신한 행이라 반드시 존재하고 spotId는 넘기지 않는다. 그래서 23503을 "참가자가 사라짐"
+          // 으로 읽어도 다른 원인을 삼키지 않는다.
+          await manager.query('SAVEPOINT duel_ledger');
+          try {
+            await this.scoresService.record(manager, {
+              userId,
+              team,
+              type:
+                userId === winnerId
+                  ? ScoreEventType.DUEL_WIN
+                  : ScoreEventType.DUEL_LOSS,
+              personalPoints: points,
+              teamPoints: 0,
+              duelId: duel.id,
+            });
+            await manager.query('RELEASE SAVEPOINT duel_ledger');
+          } catch (err) {
+            if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
+            await manager.query('ROLLBACK TO SAVEPOINT duel_ledger');
+            this.logger.warn(
+              `결투 원장 append 생략 — 참가자가 사라짐 duelId=${duel.id} userId=${userId}`,
+            );
+          }
         }
         return true;
       });

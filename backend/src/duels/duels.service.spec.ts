@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import {
   BadRequestException,
   ConflictException,
@@ -388,6 +388,60 @@ describe('DuelsService', () => {
         txManager,
         expect.objectContaining({ userId: challenger.id }),
       );
+    });
+
+    it('팀 스냅샷 이후 참가자가 사라져도 그 원장 행만 건너뛰고 결투는 확정된다', async () => {
+      // 팀 스냅샷은 트랜잭션 밖에서 읽으므로, 그 뒤 참가자가 삭제되면 스킵 판정이 낡아
+      // 사라진 uuid로 insert를 시도한다(FK 위반). Postgres는 실패한 문이 트랜잭션 전체를
+      // abort시키므로, SAVEPOINT로 되돌리지 않으면 결투 확정까지 함께 날아간다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+
+      const fkError = new QueryFailedError('INSERT ...', [], {
+        name: 'error',
+        message:
+          'insert or update on table "score_events" violates foreign key constraint',
+        code: '23503',
+      } as unknown as Error);
+      // 패자만 사라진 상황 — 승자 행은 정상 기록돼야 한다.
+      scoresService.record.mockImplementation((_m, event) =>
+        event.userId === opponentId
+          ? Promise.reject(fkError)
+          : Promise.resolve(undefined),
+      );
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).resolves.toMatchObject({ status: 'confirmed' });
+
+      expect(scoresService.record).toHaveBeenCalledTimes(2);
+      // 실패한 insert만 SAVEPOINT로 되돌린다 — 트랜잭션은 계속 살아 있어야 한다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'ROLLBACK TO SAVEPOINT duel_ledger',
+      );
+      // 페널티 롤백은 트랜잭션 실패 경로에서만 일어난다 — 여기선 일어나면 안 된다.
+      expect(redis.clearPenalty).not.toHaveBeenCalled();
+    });
+
+    it('FK 위반이 아닌 원장 insert 실패는 삼키지 않는다', async () => {
+      // 23503만 "참가자가 사라짐"으로 읽는다. 그 외 오류까지 흡수하면 진짜 장애가 조용히 묻힌다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+      scoresService.record.mockRejectedValue(new Error('connection lost'));
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).rejects.toThrow('connection lost');
+      // 트랜잭션이 깨졌으므로 미리 걸어둔 페널티는 되돌려야 한다.
+      expect(redis.clearPenalty).toHaveBeenCalledWith(opponentId);
     });
 
     it('승자 주변에 아군이 2명 이상이면 1.5배 점수를 적용한다', async () => {
