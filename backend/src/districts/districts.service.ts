@@ -16,15 +16,14 @@ import {
 // 수도로 지정된 구에서 점령하는 모든 팀의 점수(개인·팀)에 곱해지는 배수.
 export const CAPITAL_MULTIPLIER = 1.2;
 
-// 해당 주의 수도(sigunguCode)를 담는 Redis 공유 키 — 모든 인스턴스가 이 값을 단일 소스로 읽는다.
-// 인메모리 캐시로 두면 수도를 지정한 인스턴스만 갱신돼 다른 인스턴스가 최대 일주일간 stale해진다.
-//
-// 키를 주 단위로 스코프하는 것이 중요하다. 단일 키('capital:current')로 두면 주가 바뀐 뒤에도
-// 지난주 값이 그대로 읽혀, "이번 주 수도"를 묻는 조회가 지난주 수도를 반환한다(캐시가 주 경계를
-// 모르기 때문). 주별 키는 주가 넘어가는 순간 자동으로 미스가 되어 DB 원장을 다시 보게 만든다.
-const capitalKey = (weekStart: Date) => `capital:week:${weekStart.getTime()}`;
 // 한 주(7일) + 여유 1일. 자기 주가 지나면 더 읽힐 일이 없으므로 그대로 만료되게 둔다.
 const CAPITAL_TTL_SEC = 8 * 24 * 60 * 60;
+// "이번 주 수도 없음"을 캐싱하는 sentinel 값과 그 TTL. sigunguCode는 항상 숫자 문자열이라
+// 실제 값과 충돌하지 않는다. 미지정 상태를 캐싱하지 않으면 점령마다 Redis 미스 + DB findOne이
+// 한 번씩 더 돈다. sentinel은 SET NX로만 쓰므로(writeCapitalNoneCache) 지정자가 이미 써둔
+// 실제 수도를 덮지 않고, TTL도 짧게 잡아 지정이 늦게 반영되는 창을 줄인다.
+const CAPITAL_NONE = '-';
+const CAPITAL_NONE_TTL_SEC = 60;
 // 부팅 시 이번 주 수도 보장(catch-up)을 기다리는 상한(ms). 초과하면 포기하고 부팅을 계속한다.
 const CAPITAL_BOOT_TIMEOUT_MS = 3000;
 // 런타임 수도 캐시 접근 상한(ms). Redis 정상 응답은 1ms 미만이라 여유가 크고, 도달 불가일 때
@@ -60,6 +59,8 @@ export class DistrictsService implements OnModuleInit {
   // 런타임 가중치 조회용 캐시 (sigunguCode → weight). 부팅 시 CSV에서 로드되는 정적 값이라
   // 인스턴스별 메모리 캐시로 충분하다(모든 인스턴스가 같은 CSV로 동일하게 로드).
   private weightCache = new Map<string, number>();
+  // 수도 캐시 키에 붙는 원장 식별자 — 최초 필요 시 한 번만 해석해 재사용한다(cacheNamespace).
+  private cacheNs: Promise<string> | null = null;
 
   constructor(
     @InjectRepository(District)
@@ -82,6 +83,11 @@ export class DistrictsService implements OnModuleInit {
         `District 가중치 캐시가 비어 있습니다 — CSV 시딩 실패로 점령 점수 가중치가 모두 1.0이 됩니다. CSV 경로 확인 필요: ${this.csvPath()}`,
       );
     }
+
+    // 수도 캐시 키를 이 인스턴스가 보는 원장에 묶는다. 여기서 미리 해석해두면 이후 조회·지정이
+    // 매번 DB를 치지 않고, 식별자를 못 읽는 환경(권한·접속 문제)을 부팅 시점에 드러낸다
+    // (바로 위 시딩이 이미 DB를 요구하므로 DB는 살아 있는 상태).
+    await this.cacheNamespace();
 
     // 이번 주 수도가 없으면 여기서 지정한다(놓친 주 catch-up).
     //
@@ -238,6 +244,70 @@ export class DistrictsService implements OnModuleInit {
   }
 
   /**
+   * 수도 캐시 키에 새길 원장 식별자 — "이 캐시가 어느 DB 원장을 근거로 만들어졌는지"를 키에
+   * 담는다. 여러 환경(dev·test·prod)이 한 Redis를 공유하면 같은 주의 캐시 키가 그대로 겹쳐,
+   * 다른 DB를 보는 인스턴스가 써넣은 수도를 읽어 자기 원장엔 없는 버프가 걸린다. 네임스페이스가
+   * 다르면 서로의 키를 볼 일이 없어 이 오염이 원천 차단된다.
+   *
+   * system_identifier는 클러스터 고유값이지만 pg_control_system()이 기본적으로 superuser
+   * 전용이라, 권한이 없으면 DB OID로 폴백한다(한 클러스터 안의 DB 구분에는 충분).
+   *
+   * 다만 같은 DB에 백업을 복구하거나 원장을 수동으로 지우는 경우는 네임스페이스가 그대로라
+   * 여전히 캐시 TTL(최대 8일) 동안 옛 수도가 읽힐 수 있다. 그때는 캐시 키를 비우면 된다.
+   */
+  private async resolveCacheNamespace(): Promise<string> {
+    try {
+      const [row] = await this.dataSource.query<{ ns: string }[]>(
+        `SELECT current_database() || ':' || system_identifier AS ns
+           FROM pg_control_system()`,
+      );
+      return row.ns;
+    } catch (err) {
+      this.logger.warn(
+        'system_identifier 조회 실패 — DB OID로 캐시 네임스페이스를 구성합니다 (권한 부족 추정)',
+        err as Error,
+      );
+      const [row] = await this.dataSource.query<{ ns: string }[]>(
+        `SELECT current_database() || ':' || oid AS ns
+           FROM pg_database WHERE datname = current_database()`,
+      );
+      return row.ns;
+    }
+  }
+
+  /**
+   * 원장 식별자를 한 번만 조회해 재사용한다. onModuleInit이 미리 채우지만, 이 서비스의 init
+   * 훅보다 먼저 도는 경로가 있어 지연 해석도 함께 지원한다 — Bull 프로세서는 코어 BullModule
+   * (거리 2)에 속하고 Nest는 거리 내림차순으로 초기화하므로, 재시도 중이던 designate 잡이
+   * DistrictsService.onModuleInit보다 먼저 실행될 수 있다. 고정 플레이스홀더를 쓰면 그때
+   * 아무도 읽지 않는 키에 캐시를 쓰게 되므로, 필요한 시점에 해석해 항상 올바른 키를 만든다.
+   * 실패하면 메모를 비워 다음 호출이 다시 시도한다.
+   */
+  private async cacheNamespace(): Promise<string> {
+    if (!this.cacheNs) {
+      this.cacheNs = this.resolveCacheNamespace().catch((err: unknown) => {
+        this.cacheNs = null;
+        throw err;
+      });
+    }
+    return this.cacheNs;
+  }
+
+  /**
+   * 해당 주의 수도(sigunguCode)를 담는 Redis 공유 키 — 모든 인스턴스가 이 값을 단일 소스로
+   * 읽는다. 인메모리 캐시로 두면 수도를 지정한 인스턴스만 갱신돼 다른 인스턴스가 최대 일주일간
+   * stale해진다. e2e에서 공유 상태를 정리·검증할 때도 이 메서드로 키를 만든다.
+   *
+   * 키를 주 단위로 스코프하는 것이 중요하다. 단일 키('capital:current')로 두면 주가 바뀐 뒤에도
+   * 지난주 값이 그대로 읽혀, "이번 주 수도"를 묻는 조회가 지난주 수도를 반환한다(캐시가 주 경계를
+   * 모르기 때문). 주별 키는 주가 넘어가는 순간 자동으로 미스가 되어 DB 원장을 다시 보게 만든다.
+   * 원장 식별자(resolveCacheNamespace)까지 붙여 환경 간 오염도 함께 막는다.
+   */
+  async capitalCacheKey(weekStart: Date): Promise<string> {
+    return `capital:${await this.cacheNamespace()}:week:${weekStart.getTime()}`;
+  }
+
+  /**
    * 이번 주 수도가 원장에 없으면 지정한다(놓친 주 catch-up). 이미 있으면 재지정하지 않고
    * 캐시만 원장 값으로 맞춘다 — designateWeeklyCapital이 weekStart 기준으로 멱등이기 때문.
    */
@@ -260,8 +330,9 @@ export class DistrictsService implements OnModuleInit {
    */
   private async readCapitalCache(weekStart: Date): Promise<string | null> {
     try {
+      const key = await this.capitalCacheKey(weekStart);
       return await this.withTimeout(
-        this.redis.get(capitalKey(weekStart)),
+        this.redis.get(key),
         CAPITAL_CACHE_TIMEOUT_MS,
       );
     } catch (err) {
@@ -278,14 +349,37 @@ export class DistrictsService implements OnModuleInit {
   private async writeCapitalCache(
     weekStart: Date,
     sigunguCode: string,
+    ttlSeconds: number = CAPITAL_TTL_SEC,
   ): Promise<void> {
     try {
+      const key = await this.capitalCacheKey(weekStart);
       await this.withTimeout(
-        this.redis.set(capitalKey(weekStart), sigunguCode, CAPITAL_TTL_SEC),
+        this.redis.set(key, sigunguCode, ttlSeconds),
         CAPITAL_CACHE_TIMEOUT_MS,
       );
     } catch (err) {
       this.logger.warn('수도 캐시 재적재 실패 (조회는 계속)', err as Error);
+    }
+  }
+
+  /**
+   * "이번 주 수도 없음"을 캐싱 — 반드시 SET NX여야 한다.
+   *
+   * 이 값을 쓰는 쪽은 조회자(원장 미스)인데, 같은 순간 지정자가 이미 실제 수도를 캐시에
+   * 써뒀을 수 있다. 크론이 도는 월요일 00:05 근처가 정확히 그 창이다 — 조회자가 findOne을
+   * 지정자의 INSERT 커밋 직전에 실행하면 null을 받고, 그 뒤에 sentinel을 덮어써 클러스터
+   * 전체가 최대 TTL 동안 "수도 없음"으로 응답한다(수도 구 점령이 1.2배 대신 1.0배).
+   * NX로 쓰면 이미 값이 있을 때 조용히 실패하므로 지정자의 값을 절대 덮지 않는다.
+   */
+  private async writeCapitalNoneCache(weekStart: Date): Promise<void> {
+    try {
+      const key = await this.capitalCacheKey(weekStart);
+      await this.withTimeout(
+        this.redis.tryAcquireLock(key, CAPITAL_NONE_TTL_SEC, CAPITAL_NONE),
+        CAPITAL_CACHE_TIMEOUT_MS,
+      );
+    } catch (err) {
+      this.logger.warn('수도 미지정 캐싱 실패 (조회는 계속)', err as Error);
     }
   }
 
@@ -296,14 +390,20 @@ export class DistrictsService implements OnModuleInit {
    * 판정 기준은 "이번 주(월요일 00:00 KST) 지정 행"이지 "가장 최근 지정 행"이 아니다.
    * 최신 행을 쓰면 어떤 이유로든 이번 주 지정이 누락됐을 때 지난주 수도가 무기한 유효한
    * 것처럼 보인다(캐시 TTL이 만료돼도 DB 폴백이 같은 값을 다시 써넣어 되살아난다).
-   * 이번 주 지정이 없으면 "수도 없음"이 정직한 답이고, 부팅 catch-up이 곧 채운다.
+   * 이번 주 지정이 없으면 "수도 없음"이 정직한 답이고, 부팅 catch-up이 곧 채운다. 그 "없음"도
+   * 짧은 TTL로 캐싱한다 — 캐싱하지 않으면 미지정 구간의 모든 점령이 Redis 미스 + DB findOne을
+   * 한 번씩 더 돈다.
    */
   async getCurrentCapital(now: Date = new Date()): Promise<string | null> {
     const weekStart = startOfKstWeek(now);
     const cached = await this.readCapitalCache(weekStart);
+    if (cached === CAPITAL_NONE) return null;
     if (cached !== null) return cached;
     const current = await this.capitalRepo.findOne({ where: { weekStart } });
-    if (!current) return null;
+    if (!current) {
+      await this.writeCapitalNoneCache(weekStart);
+      return null;
+    }
     await this.writeCapitalCache(weekStart, current.sigunguCode);
     return current.sigunguCode;
   }

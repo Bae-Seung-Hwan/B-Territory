@@ -17,9 +17,6 @@ import {
 import { startOfKstWeek } from '../src/common/utils/kst.util';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-// 수도 공유 캐시는 주 단위로 스코프된다 — 주가 바뀌면 지난주 값이 읽히지 않게 하기 위함.
-const weekKey = (d: Date = new Date()) =>
-  `capital:week:${startOfKstWeek(d).getTime()}`;
 
 const mockFirebaseService = {
   verifyIdToken: (token: string) => Promise.resolve({ uid: token }),
@@ -71,6 +68,12 @@ describe('Capital (e2e)', () => {
       'TRUNCATE TABLE "score_events", "district_claim_history", "spot_claims", "district_claims", "capital_designations", "users", "spots" RESTART IDENTITY CASCADE',
     );
 
+  // 수도 공유 캐시는 주 단위로 스코프되고(주가 바뀌면 지난주 값이 읽히지 않게), 원장 식별자로도
+  // 스코프된다(여러 환경이 한 Redis를 공유해도 서로의 캐시를 읽지 않게). 키 구성이 서비스와
+  // 어긋나면 이 스펙이 엉뚱한 키를 지우게 되므로 서비스의 키 빌더를 그대로 쓴다.
+  const weekKey = (d: Date = new Date()): Promise<string> =>
+    districtsService.capitalCacheKey(startOfKstWeek(d));
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -91,7 +94,7 @@ describe('Capital (e2e)', () => {
     await truncateAll();
     // 부팅 시 catch-up이 이번 주 수도를 지정했을 수 있으므로(다른 스펙이 남긴 spot 기준),
     // 원장과 함께 공유 캐시도 비워 이 스펙이 깨끗한 상태에서 시작하게 한다.
-    await redisService.del(weekKey());
+    await redisService.del(await weekKey());
 
     await userRepo.save([
       {
@@ -158,7 +161,7 @@ describe('Capital (e2e)', () => {
     await Promise.all([
       redisService.del(`defense:${capitalSpotId}`),
       redisService.del(`defense:${nonCapitalSpotId}`),
-      redisService.del(weekKey()),
+      redisService.del(await weekKey()),
     ]);
     await app.close();
   });
@@ -251,7 +254,7 @@ describe('Capital (e2e)', () => {
     await dataSource.query(
       'TRUNCATE TABLE "capital_designations" RESTART IDENTITY',
     );
-    await redisService.del(weekKey());
+    await redisService.del(await weekKey());
 
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
@@ -272,7 +275,7 @@ describe('Capital (e2e)', () => {
     const dbRow = await dataSource.query<{ sigunguCode: string }[]>(
       'SELECT "sigunguCode" FROM capital_designations LIMIT 1',
     );
-    const redisCurrent = await redisService.get(weekKey());
+    const redisCurrent = await redisService.get(await weekKey());
     expect(redisCurrent).toBe(dbRow[0].sigunguCode);
     expect(redisCurrent).toBe(capitalSigungucode);
   });
@@ -283,7 +286,7 @@ describe('Capital (e2e)', () => {
       await dataSource.query(
         'TRUNCATE TABLE "capital_designations" RESTART IDENTITY',
       );
-      await redisService.del(weekKey());
+      await redisService.del(await weekKey());
       await dataSource.query(
         'INSERT INTO capital_designations ("sigunguCode", "weekStart") VALUES ($1, $2)',
         [sigunguCode, startOfKstWeek(new Date(Date.now() - WEEK_MS))],
@@ -336,5 +339,60 @@ describe('Capital (e2e)', () => {
       const designated = await districtsService.designateWeeklyCapital();
       expect(designated?.sigunguCode).toBe(capitalSigungucode);
     });
+
+    it('이번 주 수도가 없으면 "없음"도 캐싱한다 (미지정 구간 반복 조회 비용 제거)', async () => {
+      await seedLastWeekOnly(capitalSigungucode);
+
+      await expect(districtsService.getCurrentCapital()).resolves.toBeNull();
+      // 미지정을 캐싱하지 않으면 이후 모든 점령이 Redis 미스 + DB findOne을 한 번씩 더 돈다.
+      await expect(redisService.get(await weekKey())).resolves.not.toBeNull();
+
+      // 캐시가 실제로 쓰이는지 — 원장에 직접 행을 넣어도 TTL 동안은 "없음"으로 응답한다.
+      // 지정 경로(writeCapitalCache)는 평범한 SET이라 sentinel을 즉시 덮으므로, 이 창은
+      // 지정을 수행하지 않은 다른 인스턴스에만 짧게 보인다.
+      await dataSource.query(
+        'INSERT INTO capital_designations ("sigunguCode", "weekStart") VALUES ($1, $2)',
+        [capitalSigungucode, startOfKstWeek(new Date())],
+      );
+      await expect(districtsService.getCurrentCapital()).resolves.toBeNull();
+
+      // 캐시를 비우면 곧바로 원장 값을 읽는다 (sentinel이 영구 고착되지 않는다).
+      await redisService.del(await weekKey());
+      await expect(districtsService.getCurrentCapital()).resolves.toBe(
+        capitalSigungucode,
+      );
+    });
+
+    it('"없음" 캐싱이 지정자가 먼저 써둔 수도를 덮지 않는다 (SET NX)', async () => {
+      // 크론이 도는 월요일 00:05 근처의 경합: 조회자가 원장 findOne을 지정자의 INSERT 커밋
+      // 직전에 실행하면 null을 받는다. 그 사이 지정자는 이미 캐시에 실제 수도를 써뒀는데,
+      // 조회자가 sentinel을 평범한 SET으로 덮으면 클러스터 전체가 TTL 동안 "수도 없음"으로
+      // 응답한다(수도 구 점령이 1.2배 대신 1.0배). NX로 써야 이 창이 닫힌다.
+      await seedLastWeekOnly(capitalSigungucode);
+      const key = await weekKey();
+      // 지정자가 먼저 캐시에 써둔 상태를 만든다 (원장 커밋은 아직 보이지 않는 시점).
+      await redisService.set(key, capitalSigungucode, 60);
+      // 조회자는 그 직전의 미스를 본 상태로 진행한다.
+      const getSpy = jest
+        .spyOn(redisService, 'get')
+        .mockResolvedValueOnce(null);
+      try {
+        await expect(districtsService.getCurrentCapital()).resolves.toBeNull();
+        // 핵심 단언 — 지정자의 값이 그대로 살아 있어야 한다.
+        await expect(redisService.get(key)).resolves.toBe(capitalSigungucode);
+      } finally {
+        getSpy.mockRestore();
+        await redisService.del(key);
+      }
+    });
+  });
+
+  it('수도 캐시 키는 원장(DB)별로 스코프된다 — 한 Redis를 공유해도 환경 간 오염이 없다', async () => {
+    // 리뷰에서 실제로 재현된 케이스: 다른 DB를 보는 앱이 같은 Redis에 붙으면 같은 주의 캐시
+    // 키가 겹쳐, 자기 원장엔 없는 수도가 그대로 읽힌다(유령 수도). 키에 원장 식별자를 새겨 막는다.
+    const [{ db }] = await dataSource.query<{ db: string }[]>(
+      'SELECT current_database() AS db',
+    );
+    await expect(weekKey()).resolves.toContain(`capital:${db}:`);
   });
 });
