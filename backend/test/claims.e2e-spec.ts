@@ -10,6 +10,9 @@ import { FirebaseService } from '../src/common/firebase/firebase.service';
 import { User } from '../src/users/entities/user.entity';
 import { Spot } from '../src/spots/entities/spot.entity';
 import { ClaimsService } from '../src/claims/claims.service';
+import { RedisService } from '../src/common/redis/redis.service';
+import { DistrictsService } from '../src/districts/districts.service';
+import { startOfKstWeek } from '../src/common/utils/kst.util';
 import {
   ScoreEvent,
   ScoreEventType,
@@ -58,6 +61,8 @@ describe('Claims (e2e)', () => {
   let scoreRepo: Repository<ScoreEvent>;
   let historyRepo: Repository<DistrictClaimHistory>;
   let claimsService: ClaimsService;
+  let districtsService: DistrictsService;
+  let redisService: RedisService;
   let dataSource: DataSource;
   let spotId: number;
   let weightedSpotId: number;
@@ -67,9 +72,19 @@ describe('Claims (e2e)', () => {
 
   // districts는 부팅 시 CSV로 시딩된 레퍼런스 데이터라 truncate 대상에서 제외한다
   // (가중치 캐시는 부팅 시 메모리에 로드되므로 점수 산정에 영향 없음).
+  // capital_designations는 포함한다 — 남아 있으면 이 스펙의 점령 점수에 수도 배수 1.2배가
+  // 섞여 들어간다. 지금 단언은 미등록 구(99TEST)나 toBeGreaterThan이라 통과하지만,
+  // 정확한 값으로 조이는 순간 실행 순서에 따라 플래키해지는 자리다.
   const truncateAll = () =>
     dataSource.query(
-      'TRUNCATE TABLE "score_events", "district_claim_history", "spot_claims", "district_claims", "users", "spots" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "score_events", "district_claim_history", "spot_claims", "district_claims", "capital_designations", "users", "spots" RESTART IDENTITY CASCADE',
+    );
+
+  // 원장만 비우면 부팅 catch-up이 이미 써둔 수도 공유 캐시가 그대로 남아 배수가 계속 걸린다.
+  // 캐시는 원장을 뒤따르는 값이므로 같이 지워야 truncate가 실제로 효력을 갖는다.
+  const clearCapitalCache = async () =>
+    redisService.del(
+      await districtsService.capitalCacheKey(startOfKstWeek(new Date())),
     );
 
   beforeAll(async () => {
@@ -88,9 +103,12 @@ describe('Claims (e2e)', () => {
     scoreRepo = moduleFixture.get(getRepositoryToken(ScoreEvent));
     historyRepo = moduleFixture.get(getRepositoryToken(DistrictClaimHistory));
     claimsService = moduleFixture.get(ClaimsService);
+    districtsService = moduleFixture.get(DistrictsService);
+    redisService = moduleFixture.get(RedisService);
     dataSource = moduleFixture.get(DataSource);
 
     await truncateAll();
+    await clearCapitalCache();
 
     await userRepo.save([
       {
@@ -138,6 +156,7 @@ describe('Claims (e2e)', () => {
 
   afterAll(async () => {
     await truncateAll();
+    await clearCapitalCache();
     await app.close();
   });
 

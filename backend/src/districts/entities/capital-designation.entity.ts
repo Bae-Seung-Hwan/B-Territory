@@ -3,7 +3,6 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
-  Index,
 } from 'typeorm';
 
 /**
@@ -15,7 +14,6 @@ import {
  * 행은 절대 수정/삭제하지 않는다(과거 어느 주에 어느 구가 수도였는지 감사용 소스).
  */
 @Entity('capital_designations')
-@Index(['designatedAt'])
 export class CapitalDesignation {
   @PrimaryGeneratedColumn()
   id: number;
@@ -31,8 +29,9 @@ export class CapitalDesignation {
   @Column({ type: 'timestamptz', unique: true })
   weekStart: Date;
 
-  // district_claim_history.capturedAt과 동일하게 timestamptz로 저장 — 최신 지정 판정이
-  // DB 세션 타임존과 무관하게 절대 시각을 보존하도록 한다.
+  // district_claim_history.capturedAt과 동일하게 timestamptz로 저장 — 감사 기록이 DB 세션
+  // 타임존과 무관하게 절대 시각을 보존하도록 한다. 조회는 전부 weekStart(unique 인덱스) 기준이라
+  // 이 컬럼에는 별도 인덱스를 두지 않는다.
   @CreateDateColumn({ type: 'timestamptz' })
   designatedAt: Date;
 }
