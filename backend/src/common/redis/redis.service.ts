@@ -20,6 +20,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       host: this.config.get<string>('REDIS_HOST', 'localhost'),
       port: this.config.get<number>('REDIS_PORT', 6379),
       db: this.config.get<number>('REDIS_DB', 0),
+      // Redis에 도달하지 못할 때(닫힌 포트·네트워크 파티션 등) 명령이 offline 큐에서
+      // 무한 대기하지 않도록 유한 시간 안에 예외로 전환한다. 이 값이 없으면 부팅 시
+      // warmCapitalCache 같은 호출이 app.listen()까지 도달하지 못해 앱 전체가 멈춘다.
+      // retryStrategy는 기본값(계속 재접속)이라 Redis가 돌아오면 자동 회복된다.
+      connectTimeout: 5000,
+      maxRetriesPerRequest: 3,
     });
     this.client.on('error', (err) => {
       this.logger.error(`connection error: ${err.message}`);

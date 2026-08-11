@@ -54,6 +54,14 @@ import { HealthModule } from './health/health.module';
           host: config.get<string>('REDIS_HOST', 'localhost'),
           port: config.get<number>('REDIS_PORT', 6379),
           db: config.get<number>('REDIS_DB', 0),
+          // RedisService와 동일하게, Redis에 도달하지 못할 때 부팅 시 Bull 큐 호출
+          // (getRepeatableJobs 등)이 offline 큐에서 무한 대기하지 않고 유한 시간 안에
+          // 예외로 전환되게 한다. 이 값이 없으면 Redis 미도달 시 각 모듈의 큐 등록부가
+          // app.listen()까지 도달하지 못해 앱 전체가 멈춘다(수도 기능과 무관한 API 포함).
+          // bull은 blocking용 서브 연결(bclient·subscriber)에는 maxRetriesPerRequest를
+          // 자체적으로 null로 덮어쓰므로, 이 값은 일반 명령용 client 연결에만 적용된다.
+          connectTimeout: 5000,
+          maxRetriesPerRequest: 3,
         },
       }),
     }),
