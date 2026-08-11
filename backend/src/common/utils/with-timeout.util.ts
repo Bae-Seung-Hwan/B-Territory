@@ -7,10 +7,15 @@
  * 끝나도 안전한 경로(캐시 적재 같은 best-effort)에만 써야 한다.
  */
 export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  // 타이머는 원본이 먼저 끝나면 즉시 해제한다. 점령 경로(getCapitalMultiplier)가 요청마다
+  // 이 래퍼를 두 번(캐시 read/write) 타므로, 정리하지 않으면 Redis가 1ms에 답해도 요청마다
+  // 500ms 타이머가 두 개씩 쌓여 트래픽에 비례해 낭비된다.
+  let timer: NodeJS.Timeout;
   return Promise.race([
     p,
     new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms).unref();
+      timer = setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms);
+      timer.unref();
     }),
-  ]);
+  ]).finally(() => clearTimeout(timer));
 }
