@@ -1,0 +1,92 @@
+import { useState } from 'react';
+import { Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { Redirect, useRouter } from 'expo-router';
+import { isAxiosError } from 'axios';
+import { auth } from '@/lib/firebase';
+import { useHandleAuthError } from '@/hooks/use-auth-error';
+import { useRegisterMutation } from '@/hooks/use-auth';
+import { useTranslation } from '@/i18n';
+import { BrandColors } from '@/constants/theme';
+import { Button } from '@/components/ui/Button';
+import { NicknameNationalityFields } from '@/components/auth/NicknameNationalityFields';
+
+/**
+ * Google/Apple 로그인으로 처음 들어온 유저가 닉네임/국적만 입력하고 가입을 마치는 화면.
+ * 이메일/비밀번호 회원가입(register.tsx)과 달리 계정 생성·이메일 인증은 이미 Provider
+ * 쪽에서 끝난 상태로 여기 도착하므로(useFinishSocialLogin), 남은 절차는 registerUser()
+ * 한 번뿐이다.
+ */
+export default function CompleteProfileScreen() {
+  const router = useRouter();
+  const { t } = useTranslation();
+  const handleAuthError = useHandleAuthError();
+  const registerMutation = useRegisterMutation();
+
+  const [nickname, setNickname] = useState('');
+  const [selectedCode, setSelectedCode] = useState<string | null>(null);
+
+  const canSubmit =
+    nickname.trim().length >= 2 && selectedCode !== null && !registerMutation.isPending;
+
+  const handleSubmit = async () => {
+    if (!canSubmit || !selectedCode) return;
+    try {
+      await registerMutation.mutateAsync({ nickname: nickname.trim(), nationality: selectedCode });
+      router.replace('/');
+    } catch (err) {
+      // 다른 기기에서 거의 동시에 가입을 마친 레이스는 에러가 아니라 정상 진입으로 취급한다.
+      if (isAxiosError(err) && err.response?.status === 409) {
+        router.replace('/');
+        return;
+      }
+      handleAuthError(err, 'auth.errors.registerFailed');
+    }
+  };
+
+  // 이 화면은 Google/Apple 로그인 직후에만 의미가 있다 — Firebase 세션 없이 직접
+  // 진입했다면(딥링크 등) 로그인 화면으로 되돌린다.
+  if (!auth.currentUser) {
+    return <Redirect href="/(auth)/login" />;
+  }
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <Text style={styles.title}>{t('auth.completeProfile.title')}</Text>
+        <Text style={styles.subtitle}>{t('auth.completeProfile.subtitle')}</Text>
+
+        <NicknameNationalityFields
+          nickname={nickname}
+          onNicknameChange={setNickname}
+          selectedCode={selectedCode}
+          onSelectCountry={setSelectedCode}
+          editable={!registerMutation.isPending}
+        />
+
+        <Button
+          title={t('auth.completeProfile.submit')}
+          onPress={handleSubmit}
+          disabled={!canSubmit}
+          loading={registerMutation.isPending}
+          style={styles.submitButton}
+        />
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: BrandColors.background },
+  content: {
+    alignItems: 'center',
+    paddingTop: 80,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+  },
+  title: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
+  subtitle: { fontSize: 14, color: '#888', marginTop: 8, marginBottom: 24, textAlign: 'center' },
+  submitButton: { marginTop: 8 },
+});
