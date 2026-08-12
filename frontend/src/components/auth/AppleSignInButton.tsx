@@ -1,32 +1,79 @@
-import { Alert, StyleSheet } from 'react-native';
-import { Button } from '@/components/ui/Button';
-import { useTranslation } from '@/i18n';
+import { useEffect, useState } from 'react';
+import { Platform, StyleSheet } from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
+import { OAuthProvider, signInWithCredential } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import { useHandleAuthError } from '@/hooks/use-auth-error';
+import { useFinishSocialLogin } from '@/hooks/use-social-auth';
 
 /**
- * Sign in with Apple 골격 (App Store 심사 Guideline 4.8 — Google 로그인 제공 시 필수).
+ * Sign in with Apple (App Store 심사 Guideline 4.8 — Google 로그인 제공 시 필수).
  *
- * 아직 기능 없는 스텁이다: 네이티브 모듈(expo-apple-authentication)은 Dev Build가
- * 필요한데 프로젝트는 아직 Expo Go 단계라 설치하지 않았다 (app.json에 iOS bundle
- * identifier도 없음). Dev Build 전환 시점과 남은 작업은 docs/integrations.md 참고.
- * iOS 전용 제약(Guideline 4.8)과 별개로 Android에서도 노출하기로 함.
+ * Apple 브랜딩 규정상 커스텀 버튼이 아니라 네이티브 `AppleAuthenticationButton`을 써야
+ * 하고, 그 컴포넌트 자체가 iOS 미지원 환경(Android, 구버전 iOS)에서는 null을 렌더링한다
+ * (isAvailableAsync 체크는 그 자산이 없는 안드로이드에서 개발모드 경고를 피하기 위함).
+ * 소셜 로그인 자체가 iOS 전용 기능이라 Android에는 아예 노출하지 않는다.
  */
 export function AppleSignInButton() {
-  const { t } = useTranslation();
+  const [isAvailable, setIsAvailable] = useState(false);
+  const handleAuthError = useHandleAuthError();
+  const finishSocialLogin = useFinishSocialLogin();
 
-  const handlePress = () => {
-    Alert.alert(t('common.comingSoon'), t('auth.login.appleComingSoonMessage'));
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    AppleAuthentication.isAvailableAsync().then(setIsAvailable);
+  }, []);
+
+  if (Platform.OS !== 'ios' || !isAvailable) return null;
+
+  const handlePress = async () => {
+    try {
+      // Firebase가 재전송 공격 방지를 위해 원문 nonce(rawNonce)를 요구하는데, Apple에는
+      // 해시만 넘겨야 한다 — OAuthProvider.credential에 둘 다 실어 보내면 Firebase가
+      // 해시를 재계산해 identityToken 안의 값과 대조한다.
+      const rawNonce = Crypto.randomUUID();
+      const hashedNonce = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        rawNonce,
+      );
+
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce: hashedNonce,
+      });
+
+      if (!credential.identityToken) {
+        throw new Error('Apple 로그인 응답에 identityToken이 없습니다.');
+      }
+
+      const provider = new OAuthProvider('apple.com');
+      const firebaseCredential = provider.credential({
+        idToken: credential.identityToken,
+        rawNonce,
+      });
+      await signInWithCredential(auth, firebaseCredential);
+      await finishSocialLogin();
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === 'ERR_REQUEST_CANCELED') return;
+      handleAuthError(err, 'auth.errors.loginFailed');
+    }
   };
 
   return (
-    <Button
-      title={t('auth.login.apple')}
-      onPress={handlePress}
-      variant="secondary"
+    <AppleAuthentication.AppleAuthenticationButton
+      buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+      buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+      cornerRadius={12}
       style={styles.button}
+      onPress={handlePress}
     />
   );
 }
 
 const styles = StyleSheet.create({
-  button: { marginTop: 12, opacity: 0.6 },
+  button: { width: '100%', height: 50, marginTop: 12 },
 });

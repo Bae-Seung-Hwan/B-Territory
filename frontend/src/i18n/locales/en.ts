@@ -4,7 +4,6 @@ export const en: Translations = {
   common: {
     cancel: 'Cancel',
     close: 'Close',
-    comingSoon: 'Coming soon',
   },
   onboarding: {
     subtitle: 'Busan Territory Tour Game',
@@ -19,9 +18,6 @@ export const en: Translations = {
       submit: 'Log In',
       or: 'or',
       google: 'Continue with Google',
-      googleComingSoonMessage: 'Google login will be supported after Firebase integration.',
-      apple: 'Continue with Apple',
-      appleComingSoonMessage: 'Apple login will be supported soon.',
       noAccount: "Don't have an account?",
       registerLink: 'Sign up',
     },
@@ -55,6 +51,11 @@ export const en: Translations = {
       nationalitySearchPlaceholder: 'Search country',
       nationalityPlaceholder: 'Select a country',
       submit: 'Sign Up',
+    },
+    completeProfile: {
+      title: 'Complete your profile',
+      subtitle: "Just a nickname and your nationality, and you're ready to go",
+      submit: 'Get Started',
     },
     session: {
       loadFailed: 'Could not load your account.\nPlease check your network connection.',

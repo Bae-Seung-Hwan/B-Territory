@@ -17,6 +17,8 @@ import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
+import { useGoogleLogin } from '@/hooks/use-google-login';
+import { useFinishSocialLogin } from '@/hooks/use-social-auth';
 import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -60,6 +62,7 @@ export default function LoginScreen() {
   };
 
   const handleAuthError = useHandleAuthError();
+  const finishSocialLogin = useFinishSocialLogin();
 
   const handleLogin = async () => {
     if (!canSubmit) return;
@@ -74,11 +77,19 @@ export default function LoginScreen() {
     }
   };
 
-  // 실제 연동은 hooks/use-google-login.ts(useGoogleLogin)에 준비돼 있다. Expo Go
-  // 실기기에서 OAuth 화면을 닫을 때 앱이 꺼지는 문제 때문에 Dev Build 전환 전까지는
-  // 의도적으로 배선하지 않고 "준비 중" 스텁만 노출한다.
-  const handleGoogleLogin = () => {
-    Alert.alert(t('common.comingSoon'), t('auth.login.googleComingSoonMessage'));
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const { isConfigured: isGoogleConfigured, promptGoogleLogin } = useGoogleLogin({
+    onSuccess: finishSocialLogin,
+    onError: (err) => handleAuthError(err, 'auth.errors.loginFailed'),
+  });
+
+  const handleGoogleLogin = async () => {
+    setGoogleLoading(true);
+    try {
+      await promptGoogleLogin();
+    } finally {
+      setGoogleLoading(false);
+    }
   };
 
   const openTermsSheet = () => {
@@ -146,7 +157,8 @@ export default function LoginScreen() {
         title={t('auth.login.google')}
         onPress={handleGoogleLogin}
         variant="secondary"
-        style={styles.googleButton}
+        disabled={!isGoogleConfigured}
+        loading={googleLoading}
       />
 
       <AppleSignInButton />
@@ -260,7 +272,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   button: { marginTop: 8 },
-  googleButton: { opacity: 0.6 },
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 24 },
   dividerLine: { flex: 1, height: 1, backgroundColor: BrandColors.border },
   dividerText: { color: '#666', fontSize: 12, marginHorizontal: 12 },

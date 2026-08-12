@@ -11,6 +11,15 @@ function requireEnv(name) {
   return value;
 }
 
+// google-signin 네이티브 SDK의 config plugin은(옵션 없이 호출 시) GoogleService-Info.plist/
+// google-services.json 존재를 전제로 한다. 이 프로젝트는 Firebase JS SDK만 쓰고 네이티브
+// Firebase 설정 파일이 없으므로, 대신 iosUrlScheme만 넘겨 "Firebase 없이" 모드로 강제한다.
+// 값이 없으면(아직 Google Cloud Console에서 iOS OAuth client를 발급받지 않음) 이 plugin은
+// validateOptions에서 즉시 throw하므로, iOS 빌드를 시작하기 전까지는 plugin 자체를 아예
+// 배열에서 뺀다 — Android 네이티브 로그인은 Google Cloud Console에 SHA-1만 등록하면 되고
+// 이 plugin이 건드리는 iOS Info.plist와 무관하게 동작한다.
+const googleIosUrlScheme = process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME;
+
 module.exports = {
   expo: {
     name: 'B-territory',
@@ -52,6 +61,7 @@ module.exports = {
       ],
       'expo-localization',
       'expo-web-browser',
+      'expo-apple-authentication',
       // react-native-maps는 앱 빌드(prebuild) 시점에 네이티브 매니페스트/Info.plist에
       // 키를 박아 넣는 방식이라 EXPO_PUBLIC_* 런타임 변수가 아니라 이 config plugin
       // props로 전달해야 한다. 값은 로컬 .env(GOOGLE_MAPS_ANDROID_API_KEY /
@@ -63,6 +73,14 @@ module.exports = {
           iosGoogleMapsApiKey: process.env.GOOGLE_MAPS_IOS_API_KEY,
         },
       ],
+      ...(googleIosUrlScheme
+        ? [
+            [
+              '@react-native-google-signin/google-signin',
+              { iosUrlScheme: googleIosUrlScheme },
+            ],
+          ]
+        : []),
     ],
     experiments: {
       typedRoutes: true,
