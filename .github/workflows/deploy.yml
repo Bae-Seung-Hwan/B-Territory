@@ -28,12 +28,11 @@ concurrency:
 jobs:
   # 배포 전 게이트 — lint·build·unit·마이그레이션 정합성·e2e를 먼저 통과시킨다.
   #
-  # develop은 룰셋(develop-protection)으로 보호돼 PR + 승인 1건 없이는 push할 수 없다.
-  # 그래도 이 게이트가 필요한 이유는, 그 룰셋이 **status check 통과를 요구하지 않기** 때문:
-  #   - CI가 실패했거나 아예 돌지 않은 PR도 승인만 받으면 머지된다
-  #   - "머지 전 최신화" 요구가 없어, 머지 결과 조합은 CI를 거친 적이 없을 수 있다
-  #   - dismiss_stale_reviews_on_push=false — 승인 후 밀어넣은 커밋은 재승인 없이 머지된다
+  # develop은 룰셋(develop-protection)으로 보호돼 PR + 승인 1건 + status check 통과 없이는
+  # push할 수 없다. 그래도 이 게이트를 남기는 이유는 룰셋이 못 막는 경로가 있기 때문:
   #   - workflow_dispatch 수동 배포는 PR 경로를 아예 타지 않는다
+  #   - dismiss_stale_reviews_on_push=false — 승인 후 밀어넣은 커밋은 재승인 없이 머지된다
+  #   - 룰셋 설정은 언제든 바뀔 수 있다
   # 즉 develop에 도달했다는 사실만으로는 테스트 통과가 보장되지 않는다. 실제 배포 대상
   # 커밋으로 여기서 다시 돌리는 것이 유일하게 확실한 게이트다.
   test:

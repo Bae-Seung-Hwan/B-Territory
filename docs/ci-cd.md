@@ -149,25 +149,33 @@ repos/<owner>/<repo>/rules/branches/develop`.
 | PR 필수 + 승인 | 1건 |
 | 우회 허용 대상(`bypass_actors`) | 없음 — 소유자도 직접 push 불가 |
 | 강제 push / 브랜치 삭제 | 차단 |
-| **status check 통과 요구** | **없음** |
+| **status check 통과 요구** | **`Backend Lint & Build`, `Type Check, Lint & Build`** |
+| 머지 전 브랜치 최신화 요구 | 함(`strict_required_status_checks_policy`) |
 | 승인 후 push 시 승인 무효화 | 안 함 |
 | 허용 머지 방식 | merge, squash, rebase |
 
-즉 **리뷰 없는 직접 push는 불가능하지만, 테스트 통과는 머지 조건이 아니다.** 배포 워크플로가
-`test` job을 게이트로 두는 것은 그 간극 때문이다:
+status check 요구가 붙으면서 "CI가 실패했거나 아예 돌지 않은 PR이 승인 1건으로 머지되는" 경로와
+"머지 결과 조합이 CI를 거친 적이 없는" 경로는 막혔다. 그래도 배포 워크플로가 `test` job을
+게이트로 두는 이유는 남은 간극 때문이다:
 
-- CI가 실패했거나 아예 돌지 않은 PR도 승인 1건이면 머지된다
-- "머지 전 최신화" 요구가 없어, 머지 결과 조합은 CI를 거친 적이 없을 수 있다
-- 승인 후 밀어넣은 커밋은 재승인 없이 머지된다
 - `workflow_dispatch` 수동 배포는 PR 경로를 아예 타지 않는다
+- 승인 후 밀어넣은 커밋은 재승인 없이 머지된다(`dismiss_stale_reviews_on_push=false`)
+- 룰셋 설정은 언제든 바뀔 수 있고, 배포 대상 커밋 자체로 검증하는 것이 유일하게 확실하다
+
+### required status check와 `paths` 필터 (중요)
+
+`ci.yml`·`frontend-ci.yml`의 `on.pull_request`에는 **`paths` 필터를 두지 않는다.** 필터에 걸려
+워크플로가 실행되지 않으면 required check가 "Expected — waiting for status" 상태로 남아 PR이
+영구히 머지 불가가 된다(룰셋은 skip을 pass로 치지 않는다). 프론트 전용 PR에서도 백엔드 CI가
+한 번 돌지만, 퍼블릭 레포라 `ubuntu-latest` 러너 분은 무료다.
+
+`push` 트리거(`frontend-ci.yml`)와 `deploy.yml`의 `paths`는 required check와 무관하므로
+그대로 유지한다.
 
 ### 룰셋에 추가하면 좋은 것 (선택)
 
 Settings → Rules → `develop-protection`:
 
-- **Require status checks to pass** → `Backend Lint & Build`
-  (머지 시점에도 걸러져, 실패하는 PR이 develop에 들어와 배포 게이트에서 되튕기는 낭비가 준다)
-- **Require branches to be up to date before merging**
 - **Dismiss stale reviews on push**
 
 > 머지 방식 주의: 의존 관계가 있는 PR(예: 기능 브랜치를 base로 삼은 후속 PR)이 열려 있을 때
