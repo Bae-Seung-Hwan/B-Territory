@@ -67,6 +67,12 @@ npx expo start --dev-client
 로컬에 SDK/JDK를 갖출 필요가 없지만, 네이티브 변경마다 클라우드 빌드를 기다려야 한다.
 `GOOGLE_MAPS_ANDROID_API_KEY`는 로컬 `.env`가 아니라 EAS 환경변수(`development`)에서 읽힌다.
 
+> **`preview`/`production` 프로필은 아직 빌드 안 됨.** EAS 대시보드엔 `development`
+> environment에만 변수가 등록돼 있다. `app.config.js`의 `requireEnv('GOOGLE_MAPS_ANDROID_API_KEY')`는
+> 값이 없으면 즉시 throw하므로, 지금 상태로 `--profile preview`나 `--profile production`으로
+> 빌드하면 config 평가 단계에서 바로 실패한다. 해당 프로필로 빌드하려면 EAS 대시보드에서 그
+> environment에도 같은 변수를 먼저 등록해야 한다.
+
 ### 방법 B. 로컬 빌드
 
 ```bash
@@ -87,6 +93,11 @@ npx expo run:android          # prebuild + Gradle 빌드 + 설치 + 실행
 | NDK | `28.2.13676358` | `react-native-reanimated`가 C++를 소스 빌드 |
 | CMake | `3.22.1` | 〃 |
 | Gradle | `9.3.1` | `android/`의 wrapper가 자동 사용 |
+
+> 이 값들의 출처인 `android/`는 `.gitignore`된 prebuild 생성물이라 저장소에 남지 않는다.
+> Expo SDK를 올리면 이 표가 조용히 낡을 수 있으니, SDK 업그레이드 후엔
+> [Gradle 트러블슈팅](#android-빌드)의 `grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties`
+> 같은 방식으로 `android/` 안의 실제 값을 다시 확인해 표를 갱신한다.
 
 ### WSL2에서 Windows 에뮬레이터로 빌드하기
 
