@@ -107,5 +107,6 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
 
 ### 지도
 
-- [ ] `useGameStore`의 `occupiedDistricts`가 채워지면 `BusanMapView`의 동명 prop에 연결해 폴백
-      팔레트 대신 국적/팀별 색상으로 교체 ([integrations.md](./integrations.md#확장-포인트-점령-시각화--실시간-소켓) 참고)
+- [ ] `useGameStore`의 `occupiedDistricts`가 채워지면 `DistrictPolygons`가 그 스토어를 직접
+      구독하도록 만들어 폴백 팔레트 대신 국적/팀별 색상으로 교체(`BusanMapView`에 신규 prop을
+      추가하는 방향이 아니다) ([integrations.md](./integrations.md#확장-포인트-점령-시각화--실시간-소켓) 참고)

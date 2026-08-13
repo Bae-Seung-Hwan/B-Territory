@@ -21,7 +21,9 @@
 
 ### 확장 포인트 (점령 시각화 / 실시간 소켓)
 
-- `BusanMapView`는 `occupiedDistricts?: Record<string, string>` / `onDistrictPress?: (sigCd: string) => void` prop을 옵셔널로 받는다. 지금은 아무도 값을 넘기지 않아 `src/utils/districtColors.ts#getDistrictFillColor`가 그래프 컬러링 폴백 팔레트만 반환하지만, `useGameStore`의 `occupiedDistricts`가 실제로 채워지면 이 prop에 연결해 국적/팀별 색상으로 교체하면 된다.
+- `BusanMapView`는 `occupiedDistricts`/`onDistrictPress` 같은 prop을 받지 않는다(`style`/`spots`/`coords`/`onReady`뿐). `onDistrictPress`는 `DistrictPolygons`가 갖는 prop이고, `BusanMapView`가 내부적으로 이미 배선해(`handleDistrictPress`) 탭 시 `DistrictDetailSheet`를 연다 — 외부에서 값을 넘기는 지점이 아니다.
+- 점령 색상도 아직 연결돼 있지 않다. `DistrictPolygons.tsx`는 `src/utils/districtColors.ts#getDistrictFillColor(sigCd)`가 반환하는 그래프 컬러링 폴백 팔레트를 모듈 로드 시점에 `DISTRICT_RINGS`로 구워 두고 쓴다 — `sigCd`만 받는 시그니처라 지금 형태로는 점령 맵을 반영할 수 없다.
+- `useGameStore`의 `occupiedDistricts`가 실제로 채워지면, `districtColors.ts`에 이미 적혀 있는 설계 의도대로 `DistrictPolygons`가 그 스토어를 직접 구독하게 만든다(`MapHUD`가 같은 방식으로 읽는다) — `BusanMapView`에 신규 prop을 추가하는 방향이 아니다.
 - `BusanMapView`는 `useSocket()`이나 어떤 스토어도 직접 구독하지 않는 controlled 컴포넌트로 유지했다. 실시간 플레이어 위치 같은 데이터가 필요해지면 `spots`/`coords`와 동일한 패턴으로 신규 prop을 추가하면 되고, 소켓 배선 자체는 `map/index.tsx`(또는 상위)에서 처리한다.
 
 ## 실시간 통신 (Socket.io)

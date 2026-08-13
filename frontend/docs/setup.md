@@ -73,6 +73,10 @@ npx expo start --dev-client
 npx expo run:android          # prebuild + Gradle 빌드 + 설치 + 실행
 ```
 
+`package.json`의 `npm run android`도 동일한 명령이다(`ios`도 마찬가지로 `expo run:ios`). 다만
+`npm run ios`는 `eas.json`에 iOS 프로필이 없어 로컬 Xcode 빌드를 시도하게 되는데 아직 한 번도
+성공시킨 적이 없다 — [known-issues.md](./known-issues.md#apple-sign-in) 참고.
+
 필요한 도구는 다음과 같다. **버전이 어긋나면 대부분 아래 트러블슈팅의 증상으로 나타난다.**
 
 | 구성요소 | 버전 | 비고 |
@@ -167,8 +171,10 @@ npx tsc --noEmit
 npx expo install --check
 ```
 
-불일치하는 패키지가 나오면(예: `@react-native-async-storage/async-storage`가 기대
-버전인 `2.2.0`이 아니라 `3.x`로 설치된 경우) 아래로 맞추고 캐시를 지운 뒤 재시작한다.
+불일치하는 패키지가 나오면 아래처럼 `npx expo install <패키지>@<기대 버전>`으로 맞추고 캐시를
+지운 뒤 재시작한다. (`@react-native-async-storage/async-storage`는 `package.json`에 `^` 없이
+`2.2.0`으로 정확히 고정해둬서 이 패키지 자체는 지금 이 드리프트가 나지 않는다. 아래는 형태만
+보여주는 예시다.)
 
 ```bash
 npx expo install @react-native-async-storage/async-storage@2.2.0

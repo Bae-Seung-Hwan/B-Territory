@@ -7,7 +7,7 @@ Expo SDK 56 기반 React Native 앱.
 ```bash
 cp .env.example .env   # 환경변수 채우기 (docs/setup.md 참고)
 npm install
-npx expo start --dev-client
+npx expo start
 ```
 
 `react-native-maps` 같은 네이티브 모듈을 쓰므로 **Expo Go로는 실행되지 않는다.** 기기나
