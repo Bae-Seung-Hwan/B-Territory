@@ -33,8 +33,12 @@ interface FestivalApiResponse {
 const BASE_URL = 'https://apis.data.go.kr/B551011/KorService2';
 const AREA_CODE = '6'; // 부산
 const NUM_OF_ROWS = 100;
-// 이미 시작해 진행 중인 축제까지 놓치지 않도록 과거로 넉넉히 조회한다.
-// (searchFestival2는 eventStartDate 이후 축제를 주므로 시작일이 오래된 장기 축제 대비)
+// searchFestival2의 eventStartDate는 "시작일이 이 날짜 이후"가 아니라 "이 날짜 이후까지
+// 진행되는 축제"로 동작한다(2026-02-09 조회에 시작일 2025-12-05인 트리축제가 잡히는 것으로
+// 확인). 따라서 과거로 넉넉히 잡아도 시작일이 오래된 장기 축제를 더 건지지는 못하고,
+// 이미 종료된 축제까지 가져와 findAll에서 걸러지기만 한다.
+// 그럼에도 0이 아닌 값을 두는 이유는 아래 정리 로직 때문이다 — 최근 종료된 축제가 응답에
+// 들어와야 "API가 더 이상 주지 않는 종료 축제"와 구분돼 즉시 삭제되지 않는다.
 const LOOKBACK_DAYS = 180;
 // 외부 API 단일 요청 상한(ms). 없으면 TourAPI가 응답을 끊지 않을 때 동기화 잡이 무한정
 // 살아 있고, 프로세서 동시성이 1이라 다음 날 잡부터 뒤에 쌓인다.
