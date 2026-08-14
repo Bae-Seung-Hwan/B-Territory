@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
-import { useChatSocket } from '@/hooks/use-chat-socket';
+import { useChatSocket, type ChatSocketError } from '@/hooks/use-chat-socket';
 import { useChatStore, type ChatFeedItem } from '@/store/useChatStore';
 import { useLocation } from '@/hooks/use-location';
 import { fetchBusanSpots, type Spot } from '@/api/spots';
@@ -26,10 +26,21 @@ function spotCoords(spot: Spot) {
   return { lat: Number(spot.mapY), lng: Number(spot.mapX) };
 }
 
+function chatErrorKey(error: ChatSocketError): string {
+  switch (error) {
+    case 'connection':
+      return 'chat.errors.connection';
+    case 'rateLimit':
+      return 'chat.errors.rateLimit';
+    default:
+      return 'chat.errors.unknown';
+  }
+}
+
 export default function ChatScreen() {
   const { t } = useTranslation();
   const messages = useChatStore((s) => s.messages);
-  const { sendMessage, shareLocation } = useChatSocket();
+  const { sendMessage, shareLocation, chatError } = useChatSocket();
   const { coords } = useLocation();
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<ChatFeedItem>>(null);
@@ -98,6 +109,11 @@ export default function ChatScreen() {
       {!CHAT_ENABLED && (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{t('chat.disabledBanner')}</Text>
+        </View>
+      )}
+      {CHAT_ENABLED && chatError && (
+        <View style={styles.banner}>
+          <Text style={styles.bannerText}>{t(chatErrorKey(chatError))}</Text>
         </View>
       )}
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
