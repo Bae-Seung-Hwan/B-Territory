@@ -25,7 +25,7 @@ GOOGLE_MAPS_ANDROID_API_KEY=<Google Maps Android 키>
 GOOGLE_MAPS_IOS_API_KEY=<Google Maps iOS 키>
 ```
 
-> Firebase/Google 값은 [integrations.md](./integrations.md)의 "Firebase Authentication" 절 참고. `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`가 비어 있으면 로그인 화면의 Google 버튼이 "준비 중" alert로 폴백된다.
+> Firebase/Google 값은 [integrations.md](./integrations.md)의 "Firebase Authentication" 절 참고. `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`는 지금 당장은 채우지 않아도 된다 — 이 값을 읽는 `use-google-login.ts`를 아무도 호출하지 않고, 로그인 화면의 Google 버튼은 값과 무관하게 항상 "준비 중" alert만 띄우는 스텁이기 때문이다([구글 로그인 재활성화](./known-issues.md#인증) 시 필요).
 > Google Maps 키 발급/제한 방법은 [integrations.md](./integrations.md)의 "Google Maps" 절 참고. 네이티브 모듈이라 Dev Build가 필요하다([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md)).
 
 ## 실행
