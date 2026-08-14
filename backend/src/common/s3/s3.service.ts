@@ -33,9 +33,13 @@ export class S3Service {
     const region = this.config.get<string>('AWS_REGION', 'ap-northeast-2');
     this.bucket = this.config.get<string>('S3_BUCKET', '');
     // CDN/커스텀 도메인이 있으면 그걸 쓰고, 없으면 표준 S3 가상호스트 URL로 구성.
-    this.publicBase =
+    // 후행 슬래시는 제거한다 — URL은 `${publicBase}/${key}`로 만들고 그 결과가
+    // mission_photos.imageUrl에 영구 저장되므로, base를 "https://cdn.example.com/"처럼
+    // 적어두면 `//missions/...`가 행에 구워져 환경변수만 고쳐서는 되돌릴 수 없다.
+    this.publicBase = (
       this.config.get<string>('S3_PUBLIC_BASE_URL', '') ||
-      `https://${this.bucket}.s3.${region}.amazonaws.com`;
+      `https://${this.bucket}.s3.${region}.amazonaws.com`
+    ).replace(/\/+$/, '');
     this.client = new S3Client({ region });
   }
 

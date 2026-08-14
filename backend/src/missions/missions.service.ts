@@ -6,12 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  Repository,
-  DataSource,
-  EntityManager,
-  QueryFailedError,
-} from 'typeorm';
+import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Review } from './entities/review.entity';
 import { MissionPhoto } from './entities/mission-photo.entity';
 import { RedisService } from '../common/redis/redis.service';
@@ -24,6 +19,10 @@ import { secondsUntilKstMidnight } from '../common/utils/kst.util';
 import { verifySpotProximity } from '../common/geo/spot-proximity.util';
 import { assertSupportedImage } from '../common/s3/image-signature.util';
 import { ErrorCode, errBody } from '../common/errors/error-code';
+import {
+  PG_FOREIGN_KEY_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 import { ReviewMissionDto } from './dto/review-mission.dto';
 
 // 미션 보너스 기본값(가중치 곱하기 전). 개인 점수에만 기여하고 팀 점수는 0.
@@ -278,19 +277,56 @@ export class MissionsService {
         }
       });
     } catch (err) {
-      // FK 위반(23503): 근접 검증 이후 이 시점 사이에 spot이 삭제된 경합 —
-      // claims.visit과 동일하게 404로 처리한다.
-      const pgCode = (err instanceof QueryFailedError &&
-        (err.driverError as { code?: string })?.code) as string | undefined;
-      if (pgCode === '23503') {
-        throw new NotFoundException(
-          errBody(ErrorCode.SPOT_NOT_FOUND, '관광지를 찾을 수 없습니다.'),
+      // FK 위반(23503): 검증 시점과 이 시점 사이에 참조 대상이 사라진 경합.
+      //
+      // claims.visit과 달리 이 트랜잭션에는 외부 상태에 달린 FK가 둘이다 —
+      // reviews/mission_photos의 spotId(spots)와, 그 둘 + score_events의 userId(users).
+      // 코드(23503)만으로는 어느 쪽인지 알 수 없어, 무조건 SPOT_NOT_FOUND로 읽으면
+      // 유저가 삭제된 경우에 "존재하는 관광지를 찾을 수 없다"는 거짓 응답이 나가고
+      // 사진 경로에서는 방금 올린 S3 객체까지 지우면서 진짜 원인을 가린다.
+      // 그래서 실제로 무엇이 사라졌는지 확인한 뒤 매핑한다(에러 경로에서만 도는 쿼리).
+      if (pgErrorCode(err) === PG_FOREIGN_KEY_VIOLATION) {
+        throw await this.explainMissingReference(
+          input.spotId,
+          input.userId,
+          err,
         );
       }
       throw err;
     }
 
     return personal;
+  }
+
+  /**
+   * FK 위반이 난 뒤, 참조 대상 중 실제로 사라진 쪽을 확인해 그에 맞는 예외를 만든다.
+   * 둘 다 멀쩡하면 우리가 모르는 원인이므로 원본 에러를 그대로 돌려준다 — 추측으로
+   * 404를 내면 500이어야 할 장애가 정상 응답처럼 보인다.
+   */
+  private async explainMissingReference(
+    spotId: number,
+    userId: string,
+    original: unknown,
+  ): Promise<unknown> {
+    const [row] = await this.dataSource.query<
+      { spot_exists: boolean; user_exists: boolean }[]
+    >(
+      `SELECT EXISTS(SELECT 1 FROM spots WHERE id = $1) AS spot_exists,
+              EXISTS(SELECT 1 FROM users WHERE id = $2) AS user_exists`,
+      [spotId, userId],
+    );
+
+    if (!row?.spot_exists) {
+      return new NotFoundException(
+        errBody(ErrorCode.SPOT_NOT_FOUND, '관광지를 찾을 수 없습니다.'),
+      );
+    }
+    if (!row.user_exists) {
+      return new NotFoundException(
+        errBody(ErrorCode.USER_NOT_REGISTERED, '등록되지 않은 사용자입니다.'),
+      );
+    }
+    return original;
   }
 
   /**
