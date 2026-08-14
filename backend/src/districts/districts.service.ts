@@ -89,9 +89,20 @@ export class DistrictsService implements OnModuleInit {
     }
 
     // 수도 캐시 키를 이 인스턴스가 보는 원장에 묶는다. 여기서 미리 해석해두면 이후 조회·지정이
-    // 매번 DB를 치지 않고, 식별자를 못 읽는 환경(권한·접속 문제)을 부팅 시점에 드러낸다
-    // (바로 위 시딩이 이미 DB를 요구하므로 DB는 살아 있는 상태).
-    await this.cacheNamespace();
+    // 매번 DB를 치지 않고, 식별자를 못 읽는 환경(권한·접속 문제)이 부팅 로그에 드러난다.
+    //
+    // 실패해도 부팅은 계속한다 — 네임스페이스는 캐시 키에만 쓰이고, 런타임 경로(readCapitalCache
+    // 등)는 이 실패를 이미 캐시 미스로 흡수해 DB 원장으로 답한다. 여기만 fail-fast로 두면
+    // 캐시 전용 관심사 때문에 수도와 무관한 API까지 통째로 못 뜬다. cacheNamespace는 실패를
+    // 메모하지 않으므로 다음 호출이 다시 시도한다.
+    try {
+      await this.cacheNamespace();
+    } catch (err) {
+      this.logger.warn(
+        '수도 캐시 네임스페이스 해석 실패 (부팅은 계속) — 런타임에 재시도되고, 그때까지는 DB 원장으로 답한다',
+        err as Error,
+      );
+    }
 
     // 이번 주 수도가 없으면 여기서 지정한다(놓친 주 catch-up).
     //
@@ -248,22 +259,35 @@ export class DistrictsService implements OnModuleInit {
    */
   private async resolveCacheNamespace(): Promise<string> {
     try {
-      const [row] = await this.dataSource.query<{ ns: string }[]>(
+      return await this.queryCacheNamespace(
         `SELECT current_database() || ':' || system_identifier AS ns
            FROM pg_control_system()`,
       );
-      return row.ns;
     } catch (err) {
       this.logger.warn(
         'system_identifier 조회 실패 — DB OID로 캐시 네임스페이스를 구성합니다 (권한 부족 추정)',
         err as Error,
       );
-      const [row] = await this.dataSource.query<{ ns: string }[]>(
+      return this.queryCacheNamespace(
         `SELECT current_database() || ':' || oid AS ns
            FROM pg_database WHERE datname = current_database()`,
       );
-      return row.ns;
     }
+  }
+
+  /**
+   * 두 쿼리 모두 정상 DB에서는 반드시 1행을 반환하지만, 빈 결과를 그대로 두면 row가 undefined가
+   * 되어 "Cannot read properties of undefined"라는 엉뚱한 TypeError가 난다. 호출부(캐시 래퍼)는
+   * 이 실패를 캐시 미스로 흡수하므로, 원인을 알아볼 수 있는 오류로 바꿔 던지는 것으로 충분하다.
+   */
+  private async queryCacheNamespace(sql: string): Promise<string> {
+    const [row] = await this.dataSource.query<{ ns: string }[]>(sql);
+    if (!row) {
+      throw new Error(
+        `캐시 네임스페이스 조회가 빈 결과를 반환했습니다: ${sql}`,
+      );
+    }
+    return row.ns;
   }
 
   /**
@@ -502,12 +526,21 @@ export class DistrictsService implements OnModuleInit {
     } catch (err) {
       if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         const winner = await this.capitalRepo.findOne({ where: { weekStart } });
-        const winnerCode = winner?.sigunguCode ?? sigunguCode;
-        await this.writeCapitalCache(weekStart, winnerCode);
+        if (!winner) {
+          // 23505는 이번 주 행이 이미 커밋됐다는 뜻이고(경합 트랜잭션 커밋까지 insert가
+          // 블록된다), READ COMMITTED에서 뒤이은 findOne은 반드시 그 행을 본다. 안 보이면
+          // 전제가 깨진 것이므로 예외로 올려 Bull 재시도에 맡긴다 — 여기서 경합에 진 자신의
+          // 랜덤 픽으로 대체하면 원장에 없는 수도가 8일 TTL로 공유 캐시에 박혀, weekStart
+          // UNIQUE 설계가 막으려던 유령 수도가 그대로 재현된다.
+          throw new Error(
+            `이번 주 수도 unique 위반인데 확정 행을 읽지 못했습니다 (weekStart=${weekStart.toISOString()})`,
+          );
+        }
+        await this.writeCapitalCache(weekStart, winner.sigunguCode);
         this.logger.log(
-          `이번 주 수도 동시 지정 경합 — 확정된 수도 채택: ${winnerCode}`,
+          `이번 주 수도 동시 지정 경합 — 확정된 수도 채택: ${winner.sigunguCode}`,
         );
-        return { sigunguCode: winnerCode };
+        return { sigunguCode: winner.sigunguCode };
       }
       throw err;
     }
