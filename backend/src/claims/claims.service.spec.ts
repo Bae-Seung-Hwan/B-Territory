@@ -50,7 +50,10 @@ describe('ClaimsService', () => {
       const scoresService = {
         record: jest.fn().mockResolvedValue(undefined),
       };
-      const districtsService = { getWeight: jest.fn().mockReturnValue(1) };
+      const districtsService = {
+        getWeight: jest.fn().mockReturnValue(1),
+        getCapitalMultiplier: jest.fn().mockResolvedValue(1),
+      };
       const locationLogs = { record: jest.fn() };
       const service = new ClaimsService(
         { upsert: jest.fn() } as never,

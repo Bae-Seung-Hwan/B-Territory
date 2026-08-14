@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   ScoresService,
   ScoreRange,
@@ -7,6 +7,10 @@ import {
 } from '../scores/scores.service';
 import { RedisService } from '../common/redis/redis.service';
 import { seasonIndexOf, seasonRange } from '../common/utils/kst.util';
+import {
+  readJsonCache,
+  writeJsonCache,
+} from '../common/utils/redis-cache.util';
 
 // 랭킹 상위 노출 수.
 const RANK_LIMIT = 100;
@@ -30,6 +34,8 @@ export interface RankingResult<T> {
 
 @Injectable()
 export class HallOfFameService {
+  private readonly logger = new Logger(HallOfFameService.name);
+
   constructor(
     private readonly scores: ScoresService,
     private readonly redis: RedisService,
@@ -68,8 +74,14 @@ export class HallOfFameService {
     const range = seasonRange(idx);
     const cacheKey = `hof:${kind}:${idx}`;
 
-    const cached = await this.redis.get(cacheKey);
-    if (cached !== null) return JSON.parse(cached) as RankingResult<T>;
+    // 캐시는 순수한 가속 장치다 — 랭킹은 DB만으로 계산되므로 Redis 장애를 미스로 흡수하고
+    // 조회를 계속한다. 감싸지 않으면 Redis가 죽었을 때 랭킹 API가 통째로 500이 된다.
+    const cached = await readJsonCache<RankingResult<T>>(
+      this.redis,
+      cacheKey,
+      this.logger,
+    );
+    if (cached !== null) return cached;
 
     const now = Date.now();
     const entries = await fetch(range);
@@ -83,7 +95,7 @@ export class HallOfFameService {
 
     // 종료된 시즌은 원장이 불변이라 오래 캐시, 진행 중/예정은 짧게.
     const ttl = now >= range.end.getTime() ? DONE_TTL_SEC : LIVE_TTL_SEC;
-    await this.redis.set(cacheKey, JSON.stringify(result), ttl);
+    await writeJsonCache(this.redis, cacheKey, result, ttl, this.logger);
     return result;
   }
 }

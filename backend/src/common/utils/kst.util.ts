@@ -12,6 +12,21 @@ export function secondsUntilKstMidnight(now: Date = new Date()): number {
   return Math.max(1, Math.ceil((nextMidnightKstMs - kstMs) / 1000));
 }
 
+/**
+ * 주어진 시각이 속한 KST 주의 시작(월요일 00:00 KST)에 해당하는 절대 시각(Date).
+ * 수도 지정 크론(월요일 00:00 KST)과 같은 주 경계를 써서 "이번 주 이미 지정됐는지"를 판정한다.
+ * KST는 DST가 없어 고정 오프셋 계산으로 충분하다.
+ */
+export function startOfKstWeek(now: Date = new Date()): Date {
+  const kstMs = now.getTime() + KST_OFFSET_MS;
+  // kstMs를 UTC로 해석한 요일 = KST 요일 (0=일 … 6=토). 월요일을 주 시작으로 삼는다.
+  const kstDay = new Date(kstMs).getUTCDay();
+  const daysSinceMonday = (kstDay + 6) % 7; // Mon=0, Tue=1, …, Sun=6
+  const startKstMs =
+    Math.floor(kstMs / DAY_MS) * DAY_MS - daysSinceMonday * DAY_MS;
+  return new Date(startKstMs - KST_OFFSET_MS);
+}
+
 // 시즌 시작: 2026-09-01 00:00 KST. 이전은 pre-season(시즌 0). 3개월(분기) 단위, KST 월 경계 기준.
 // 월 1일에 시작하므로 월 단위 판정으로 경계가 정확하다(일/시 성분 불필요).
 const SEASON_START_YEAR = 2026;
