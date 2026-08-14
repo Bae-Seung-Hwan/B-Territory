@@ -75,6 +75,30 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      # **용도는 배포 게이트다.** deploy.yml의 `up --wait`가 이 검사 결과로 배포 성공/실패를
+      # 판정해, "컨테이너는 떴지만 앱이 응답 못 하는" 버전이 배포를 통과하지 못하게 한다.
+      #
+      # 상시 감시가 아님에 주의: 도커는 unhealthy가 됐다고 컨테이너를 재시작하지 않고,
+      # restart: unless-stopped도 프로세스 종료(exit)에만 반응한다. 따라서 배포 이후 앱이
+      # 멈추면 `docker ps`에 unhealthy로 표시될 뿐 자동 조치는 없다 — 런타임 감시(autoheal
+      # 컨테이너나 외부 모니터링)는 이 파일의 범위 밖이고 별도 과제로 남아 있다.
+      #
+      # alpine 이미지엔 curl이 없어 busybox wget을 쓴다.
+      #
+      # 루트(/api)가 아니라 /api/health를 보는 이유: 루트는 정적 문자열이라 DB가 죽어도 200이
+      # 나온다. /api/health는 DB 도달 불가면 503을 반환해(Redis 불가는 degraded 200 — 앱이
+      # 견디도록 설계됨) "떴지만 아무것도 못 하는" 인스턴스가 배포 게이트를 통과하지 못한다.
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q -O /dev/null http://localhost:3000/api/health || exit 1',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # 부팅 시 CSV 시딩·캐시 로드가 있어 초기 구동에 여유를 준다(이 구간의 실패는 미집계).
+      start_period: 40s
     restart: unless-stopped
 
   # 관광지 CSV 일회성 시딩 전용 서비스. profiles로 묶여 있어 `up`으로는 뜨지 않고

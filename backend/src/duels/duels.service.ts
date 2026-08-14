@@ -11,6 +11,8 @@ import { DataSource, In, Repository } from 'typeorm';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
+import { ScoresService } from '../scores/scores.service';
+import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { sortedPairKey } from '../common/utils/pair-key.util';
 import {
   ALLY_BONUS_MIN_COUNT,
@@ -24,6 +26,10 @@ import {
   PENALTY_TTL,
 } from './constants';
 import { ErrorCode, errBody } from '../common/errors/error-code';
+import {
+  PG_FOREIGN_KEY_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 
 export type DuelResultOutcome =
   | { status: 'waiting' }
@@ -51,6 +57,7 @@ export class DuelsService {
     private readonly dataSource: DataSource,
     private readonly redis: RedisService,
     private readonly usersService: UsersService,
+    private readonly scoresService: ScoresService,
   ) {}
 
   private lockKey(a: string, b: string): string {
@@ -469,6 +476,16 @@ export class DuelsService {
       BASE_DUEL_SCORE * (allyBonus ? ALLY_BONUS_MULTIPLIER : 1),
     );
 
+    // 원장에 남길 이벤트 시점의 팀. CAS와 같은 트랜잭션에서 append해야 하므로 미리 읽어둔다.
+    // 탈퇴 등으로 유저 row가 사라졌으면 applyScoreDelta도 no-op이 되므로 원장 행도 남기지 않는다.
+    // 이 조회와 insert 사이에 참가자가 사라지는 경우는 트랜잭션 안에서 SAVEPOINT로 처리한다.
+    const teamByUserId = new Map(
+      (await this.usersService.findByIds([winnerId, loserId])).map((u) => [
+        u.id,
+        u.team,
+      ]),
+    );
+
     const penalty = await this.redis.setPenalty(loserId, PENALTY_TTL);
 
     let claimed: boolean;
@@ -494,6 +511,50 @@ export class DuelsService {
 
         await this.usersService.applyScoreDelta(winnerId, scoreDelta, manager);
         await this.usersService.applyScoreDelta(loserId, -scoreDelta, manager);
+
+        // 점수 원장에도 append한다 — 개인 랭킹(명예의 전당)은 users.score가 아니라
+        // SUM(score_events.personalPoints)로 산출되므로, 여기서 기록하지 않으면 결투 점수가
+        // /users/me의 score에는 반영되는데 개인 랭킹에서는 통째로 빠져 두 값이 어긋난다.
+        // teamPoints는 항상 0 — 결투 점수는 팀 점수·구 집계에 절대 포함되지 않는다(기획 확정).
+        // 원장에는 명목 증감을 그대로 남긴다. users.score는 GREATEST(0, ...)로 하한이 걸리므로
+        // 0에서 더 깎인 유저는 두 값이 갈리는데, 원장은 감사 로그라 실제 판정을 보존한다.
+        for (const [userId, points] of [
+          [winnerId, scoreDelta],
+          [loserId, -scoreDelta],
+        ] as const) {
+          const team = teamByUserId.get(userId);
+          if (team === undefined) continue;
+
+          // 위 팀 스냅샷은 트랜잭션 밖에서 읽은 값이라, 그 뒤에 참가자가 삭제되면 스킵 판정이
+          // 낡아 사라진 유저의 uuid로 insert를 시도하게 된다 → FK 위반. Postgres는 실패한 문이
+          // 트랜잭션 전체를 abort시키므로 catch만으로는 결투 확정까지 함께 날아간다. SAVEPOINT로
+          // 이 insert만 되돌려, 사라진 참가자의 원장 행만 건너뛰고 나머지는 그대로 커밋한다.
+          //
+          // 이 insert에서 외부 상태에 달린 FK는 userId뿐이다 — duelId는 바로 위에서 이 트랜잭션이
+          // 갱신한 행이라 반드시 존재하고 spotId는 넘기지 않는다. 그래서 23503을 "참가자가 사라짐"
+          // 으로 읽어도 다른 원인을 삼키지 않는다.
+          await manager.query('SAVEPOINT duel_ledger');
+          try {
+            await this.scoresService.record(manager, {
+              userId,
+              team,
+              type:
+                userId === winnerId
+                  ? ScoreEventType.DUEL_WIN
+                  : ScoreEventType.DUEL_LOSS,
+              personalPoints: points,
+              teamPoints: 0,
+              duelId: duel.id,
+            });
+            await manager.query('RELEASE SAVEPOINT duel_ledger');
+          } catch (err) {
+            if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
+            await manager.query('ROLLBACK TO SAVEPOINT duel_ledger');
+            this.logger.warn(
+              `결투 원장 append 생략 — 참가자가 사라짐 duelId=${duel.id} userId=${userId}`,
+            );
+          }
+        }
         return true;
       });
     } catch (err) {

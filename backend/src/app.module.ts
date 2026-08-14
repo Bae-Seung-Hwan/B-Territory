@@ -18,6 +18,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
 import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -55,6 +56,15 @@ import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
           host: config.get<string>('REDIS_HOST', 'localhost'),
           port: config.get<number>('REDIS_PORT', 6379),
           db: config.get<number>('REDIS_DB', 0),
+          // RedisService와 동일하게, Redis에 도달하지 못할 때 부팅 시 Bull 큐 호출
+          // (getRepeatableJobs 등)이 예외로 전환되기까지 걸리는 시간을 줄인다. ioredis
+          // 기본값은 20회라 재시도 백오프(min(times*50, 2000)ms)까지 더하면 큐 등록부가
+          // 수십 초 동안 app.listen()에 도달하지 못한다 — 실측으로 부팅 4개 큐에 43초가
+          // 걸렸다. 무한 대기는 아니지만 그 사이 앱 전체가 응답 불가다.
+          // bull은 blocking용 서브 연결(bclient·subscriber)에는 maxRetriesPerRequest를
+          // 자체적으로 null로 덮어쓰므로, 이 값은 일반 명령용 client 연결에만 적용된다.
+          connectTimeout: 5000,
+          maxRetriesPerRequest: 3,
         },
       }),
     }),
@@ -71,6 +81,7 @@ import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
     ScoresModule,
     DistrictsModule,
     HallOfFameModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

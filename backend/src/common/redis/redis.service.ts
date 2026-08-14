@@ -20,6 +20,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       host: this.config.get<string>('REDIS_HOST', 'localhost'),
       port: this.config.get<number>('REDIS_PORT', 6379),
       db: this.config.get<number>('REDIS_DB', 0),
+      // Redis에 도달하지 못할 때(닫힌 포트·네트워크 파티션 등) 명령이 예외로 전환되기까지
+      // 걸리는 시간을 줄인다. ioredis 기본값은 20회(RedisOptions.js)이고 재시도 백오프가
+      // min(times*50, 2000)ms라, 기본값이면 명령 하나가 예외가 되기까지 실측 12~24초가
+      // 걸린다 — 그 사이 부팅은 app.listen()에 도달하지 못하고 요청은 그대로 매달린다.
+      // 무한 대기는 아니지만 앱 전체가 응답 불가인 시간이 그만큼 길어진다.
+      // retryStrategy는 기본값(계속 재접속)이라 Redis가 돌아오면 자동 회복된다.
+      connectTimeout: 5000,
+      maxRetriesPerRequest: 3,
     });
     this.client.on('error', (err) => {
       this.logger.error(`connection error: ${err.message}`);
@@ -28,6 +36,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy() {
     await this.client.quit();
+  }
+
+  /** 연결 확인용 PING — 헬스체크가 Redis 도달 가능 여부를 판정하는 데 쓴다. */
+  async ping(): Promise<string> {
+    return this.client.ping();
   }
 
   async get(key: string): Promise<string | null> {
