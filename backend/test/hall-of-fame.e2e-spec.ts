@@ -172,6 +172,39 @@ describe('HallOfFame (e2e)', () => {
     expect(parsed.ranking[0]).toMatchObject({ team: 'A', score: 130 });
   });
 
+  it('Redis 도달 불가여도 DB로 랭킹을 계산해 200을 반환한다', async () => {
+    // 캐시는 순수한 가속 장치다 — Redis 장애가 랭킹 API 전체를 500으로 만들면 안 된다.
+    // 감싸지 않으면 redis.get()이 null 대신 MaxRetriesPerRequestError를 던져 그대로 올라간다.
+    const err = new Error(
+      'Reached the max retries per request limit (which is 3).',
+    );
+    const getSpy = jest.spyOn(redisService, 'get').mockRejectedValue(err);
+    const setSpy = jest.spyOn(redisService, 'set').mockRejectedValue(err);
+    try {
+      const res = await request(app.getHttpServer())
+        .get('/api/hall-of-fame/teams?season=1')
+        .expect(200);
+
+      const body = res.body as RankingBody;
+      expect(body.ranking[0]).toMatchObject({ team: 'A', score: 130 });
+      expect(getSpy).toHaveBeenCalled();
+    } finally {
+      getSpy.mockRestore();
+      setSpy.mockRestore();
+    }
+  });
+
+  it('캐시에 깨진 값이 있으면 미스로 취급하고 DB로 폴백한다', async () => {
+    await redisService.set('hof:teams:1', '{not json', 60);
+
+    const res = await request(app.getHttpServer())
+      .get('/api/hall-of-fame/teams?season=1')
+      .expect(200);
+
+    const body = res.body as RankingBody;
+    expect(body.ranking[0]).toMatchObject({ team: 'A', score: 130 });
+  });
+
   it('이벤트 없는 시즌은 빈 랭킹을 반환한다', async () => {
     const res = await request(app.getHttpServer())
       .get('/api/hall-of-fame/teams?season=99')

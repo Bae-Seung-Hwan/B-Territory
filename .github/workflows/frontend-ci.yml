@@ -6,11 +6,11 @@ on:
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend-ci.yml'
+  # PR엔 paths 필터를 두지 않는다 — develop-protection이 이 job을 required status check로
+  # 요구하므로, 필터에 걸려 실행되지 않으면 체크가 영원히 "Expected" 상태로 남아 머지가
+  # 막힌다(룰셋은 skip을 pass로 치지 않는다). 백엔드 전용 PR에서도 그냥 한 번 돈다.
   pull_request:
     branches: [develop, main]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend-ci.yml'
 
 jobs:
   check:

@@ -7,6 +7,7 @@ import { DuelsService } from './duels.service';
 import { GeoCleanupProcessor } from './geo-cleanup.processor';
 import { DuelCleanupProcessor } from './duel-cleanup.processor';
 import { UsersModule } from '../users/users.module';
+import { ScoresModule } from '../scores/scores.module';
 import { DUEL_SWEEP_INTERVAL_MS, GEO_PRUNE_INTERVAL_MS } from './constants';
 
 @Module({
@@ -15,6 +16,8 @@ import { DUEL_SWEEP_INTERVAL_MS, GEO_PRUNE_INTERVAL_MS } from './constants';
     BullModule.registerQueue({ name: 'geo-cleanup' }),
     BullModule.registerQueue({ name: 'duel-cleanup' }),
     UsersModule,
+    // 결투 승패를 점수 원장(score_events)에 append하기 위함 — 개인 랭킹의 근거가 된다.
+    ScoresModule,
   ],
   providers: [DuelsService, GeoCleanupProcessor, DuelCleanupProcessor],
   exports: [DuelsService],
