@@ -115,6 +115,11 @@ export const en: Translations = {
     locationShared: '{{nickname}} is at {{spot}}',
     locationSharedUnknown: '{{nickname}} shared their location',
     you: 'Me',
+    errors: {
+      connection: 'Chat connection failed. Retrying…',
+      rateLimit: 'You sent messages too quickly. Please try again shortly',
+      unknown: 'Failed to send message',
+    },
   },
   ranking: {
     title: 'Ranking',

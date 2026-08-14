@@ -110,6 +110,11 @@ export const ko = {
     locationShared: '{{nickname}}님이 {{spot}} 공략 중',
     locationSharedUnknown: '{{nickname}}님이 위치를 공유했습니다',
     you: '나',
+    errors: {
+      connection: '채팅 연결에 실패했습니다. 다시 접속을 시도합니다',
+      rateLimit: '메시지를 너무 자주 보냈습니다. 잠시 후 다시 시도해주세요',
+      unknown: '메시지 전송에 실패했습니다',
+    },
   },
   ranking: {
     title: '랭킹',
