@@ -2,6 +2,7 @@ import {
   secondsUntilKstMidnight,
   kstDateString,
   kstYyyymmdd,
+  startOfKstWeek,
   seasonIndexOf,
   seasonRange,
 } from './kst.util';
@@ -54,6 +55,38 @@ describe('kstYyyymmdd', () => {
     const base = new Date('2026-08-03T15:30:00Z'); // KST 8/4
     expect(kstYyyymmdd(base, -1)).toBe('20260803');
     expect(kstYyyymmdd(base, 30)).toBe('20260903');
+  });
+});
+
+describe('startOfKstWeek', () => {
+  // 2026-07-13은 월요일. 그 주 시작 = 2026-07-13 00:00 KST = 2026-07-12T15:00:00Z
+  const MONDAY_WEEK_START = '2026-07-12T15:00:00.000Z';
+
+  it('주중(수요일 정오)에는 그 주 월요일 00:00 KST를 반환한다', () => {
+    // 2026-07-15 12:00 KST = 2026-07-15T03:00:00Z
+    expect(startOfKstWeek(new Date('2026-07-15T03:00:00Z')).toISOString()).toBe(
+      MONDAY_WEEK_START,
+    );
+  });
+
+  it('월요일 00:00 KST 정각에는 그 시각 자신을 반환한다', () => {
+    expect(startOfKstWeek(new Date(MONDAY_WEEK_START)).toISOString()).toBe(
+      MONDAY_WEEK_START,
+    );
+  });
+
+  it('일요일 밤(주의 끝)에는 그 주 월요일을 반환한다 (Sun=주 마지막)', () => {
+    // 2026-07-19(일) 23:00 KST = 2026-07-19T14:00:00Z → 같은 주(7/13 월요일 시작)
+    expect(startOfKstWeek(new Date('2026-07-19T14:00:00Z')).toISOString()).toBe(
+      MONDAY_WEEK_START,
+    );
+  });
+
+  it('다음 월요일 00:00 KST에는 새 주로 넘어간다', () => {
+    // 2026-07-20(월) 00:00 KST = 2026-07-19T15:00:00Z → 새 주 시작 자신
+    expect(startOfKstWeek(new Date('2026-07-19T15:00:00Z')).toISOString()).toBe(
+      '2026-07-19T15:00:00.000Z',
+    );
   });
 });
 
