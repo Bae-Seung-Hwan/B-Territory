@@ -13,5 +13,9 @@ export const queryKeys = {
   },
   districts: {
     detail: (sigunguCode: string) => ['districts', 'detail', sigunguCode] as const,
+    currentCapital: ['districts', 'capital', 'current'] as const,
+  },
+  missions: {
+    reviews: (spotId: number) => ['missions', 'reviews', spotId] as const,
   },
 } as const;

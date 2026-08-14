@@ -21,8 +21,20 @@ export interface DistrictClaim {
   calculatedAt: string | null;
 }
 
+/** GET /api/districts/capital/current — 이번 주 수도. 미지정 시 sigunguCode/district가 null이고 multiplier는 1. */
+export interface CurrentCapital {
+  sigunguCode: string | null;
+  multiplier: number;
+  district: District | null;
+}
+
 export async function fetchDistrict(sigunguCode: string): Promise<District> {
   const { data } = await apiClient.get<District>(`/api/districts/${sigunguCode}`);
+  return data;
+}
+
+export async function fetchCurrentCapital(): Promise<CurrentCapital> {
+  const { data } = await apiClient.get<CurrentCapital>('/api/districts/capital/current');
   return data;
 }
 
