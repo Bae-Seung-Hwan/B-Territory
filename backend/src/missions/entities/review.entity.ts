@@ -20,12 +20,15 @@ export class Review {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ type: 'uuid' })
-  userId: string;
+  // 유저 탈퇴(hard-delete) 후에도 리뷰 행은 남긴다 — 지우면 다른 유저들이 보는 관광지
+  // 평균 별점·리뷰 수가 조용히 바뀐다. team을 비정규화해 두므로 userId가 NULL이 되어도
+  // 팀 표시는 보존된다(score_events·spot_claims와 동일한 SET NULL 패턴).
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'userId' })
-  user: User;
+  user: User | null;
 
   // 작성 시점 팀 비정규화 (집계/표시 시 users 조인 없이 사용).
   @Column({ length: 2 })

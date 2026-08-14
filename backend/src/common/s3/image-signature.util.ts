@@ -26,15 +26,21 @@ export function assertSupportedImage(buffer: Buffer): DetectedImage {
   return detected;
 }
 
+// 최소 길이는 포맷별 시그니처 길이로 각각 판정한다. 하나로 묶어 가장 긴 WebP(12바이트)를
+// 일괄 적용하면, 3바이트 시그니처면 충분한 JPEG가 4~11바이트일 때 근거 없이 거부된다.
 function detectImage(buffer: Buffer): DetectedImage | null {
-  if (buffer.length < 12) return null;
-
   // JPEG: FF D8 FF
-  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff)
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  )
     return { mimetype: 'image/jpeg', ext: '.jpg' };
 
   // PNG: 89 50 4E 47 0D 0A 1A 0A
   if (
+    buffer.length >= 8 &&
     buffer[0] === 0x89 &&
     buffer[1] === 0x50 &&
     buffer[2] === 0x4e &&
@@ -48,6 +54,7 @@ function detectImage(buffer: Buffer): DetectedImage | null {
 
   // WebP: 'RIFF' .... 'WEBP'
   if (
+    buffer.length >= 12 &&
     buffer.toString('ascii', 0, 4) === 'RIFF' &&
     buffer.toString('ascii', 8, 12) === 'WEBP'
   )

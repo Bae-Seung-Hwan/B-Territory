@@ -20,12 +20,15 @@ export class MissionPhoto {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ type: 'uuid' })
-  userId: string;
+  // 유저 탈퇴(hard-delete) 후에도 사진 기록은 남긴다 — 이 행위로 지급된 score_events는
+  // SET NULL로 보존되므로, 증빙만 사라지면 원장과 어긋난다.
+  // team을 비정규화해 두므로 userId가 NULL이 되어도 팀 표시는 보존된다.
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'userId' })
-  user: User;
+  user: User | null;
 
   @Column({ length: 2 })
   team: string;

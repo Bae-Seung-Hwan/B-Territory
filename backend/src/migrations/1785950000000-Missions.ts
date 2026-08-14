@@ -13,26 +13,26 @@ export class Missions1785950000000 implements MigrationInterface {
     );
 
     await queryRunner.query(
-      `CREATE TABLE "reviews" ("id" SERIAL NOT NULL, "userId" uuid NOT NULL, "team" character varying(2) NOT NULL, "spotId" integer NOT NULL, "rating" integer NOT NULL, "content" text, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_reviews" PRIMARY KEY ("id"))`,
+      `CREATE TABLE "reviews" ("id" SERIAL NOT NULL, "userId" uuid, "team" character varying(2) NOT NULL, "spotId" integer NOT NULL, "rating" integer NOT NULL, "content" text, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_reviews" PRIMARY KEY ("id"))`,
     );
     await queryRunner.query(
       `CREATE INDEX "IDX_8c57ce699daa4d290952ce9906" ON "reviews" ("spotId", "createdAt")`,
     );
     await queryRunner.query(
-      `ALTER TABLE "reviews" ADD CONSTRAINT "FK_7ed5659e7139fc8bc039198cc1f" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE`,
+      `ALTER TABLE "reviews" ADD CONSTRAINT "FK_7ed5659e7139fc8bc039198cc1f" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL`,
     );
     await queryRunner.query(
       `ALTER TABLE "reviews" ADD CONSTRAINT "FK_f007c312fa67da681bee04f39df" FOREIGN KEY ("spotId") REFERENCES "spots"("id") ON DELETE CASCADE`,
     );
 
     await queryRunner.query(
-      `CREATE TABLE "mission_photos" ("id" SERIAL NOT NULL, "userId" uuid NOT NULL, "team" character varying(2) NOT NULL, "spotId" integer NOT NULL, "imageUrl" character varying NOT NULL, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_mission_photos" PRIMARY KEY ("id"))`,
+      `CREATE TABLE "mission_photos" ("id" SERIAL NOT NULL, "userId" uuid, "team" character varying(2) NOT NULL, "spotId" integer NOT NULL, "imageUrl" character varying NOT NULL, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_mission_photos" PRIMARY KEY ("id"))`,
     );
     await queryRunner.query(
       `CREATE INDEX "IDX_6762a7d51d81722666ed758bce" ON "mission_photos" ("spotId", "createdAt")`,
     );
     await queryRunner.query(
-      `ALTER TABLE "mission_photos" ADD CONSTRAINT "FK_bd49af4056a8bfb623c2939d999" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE`,
+      `ALTER TABLE "mission_photos" ADD CONSTRAINT "FK_bd49af4056a8bfb623c2939d999" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL`,
     );
     await queryRunner.query(
       `ALTER TABLE "mission_photos" ADD CONSTRAINT "FK_ec85a311434b9013f45b2be0437" FOREIGN KEY ("spotId") REFERENCES "spots"("id") ON DELETE CASCADE`,

@@ -35,7 +35,15 @@ const REVIEW_LIST_LIMIT = 50;
 // 방문 체크인 후 사진·리뷰 제출을 허용하는 창(초). 체크인 시점 기준 롤링 24시간.
 const VISIT_WINDOW_SECONDS = 24 * 60 * 60;
 
-interface UploadedPhoto {
+/**
+ * 업로드된 이미지 — 컨트롤러(multer)와 서비스가 공유하는 단일 정의.
+ *
+ * tsconfig의 types가 ["jest","node"]로 제한돼 multer의 전역 Express.Multer 확장이 로드되지
+ * 않으므로, 실제로 쓰는 필드만 담은 최소 타입으로 받는다.
+ * 파일명·mimetype은 클라이언트가 위조할 수 있어 담지 않는다 — 확장자와 Content-Type은
+ * 서비스가 매직 바이트로 판별한 실제 포맷에서 파생시킨다.
+ */
+export interface UploadedPhoto {
   buffer: Buffer;
 }
 
@@ -200,26 +208,29 @@ export class MissionsService {
 
   /** 관광지 리뷰 목록 (최신순, 최대 50건) + 평균 별점·전체 개수. */
   async listReviews(spotId: number) {
-    const items = await this.reviewRepo
-      .createQueryBuilder('review')
-      .leftJoin('review.user', 'user')
-      .select('review.id', 'id')
-      .addSelect('review.rating', 'rating')
-      .addSelect('review.content', 'content')
-      .addSelect('review.team', 'team')
-      .addSelect('review.createdAt', 'createdAt')
-      .addSelect('user.nickname', 'nickname')
-      .where('review.spotId = :spotId', { spotId })
-      .orderBy('review.createdAt', 'DESC')
-      .limit(REVIEW_LIST_LIMIT)
-      .getRawMany();
-
-    const stats = await this.reviewRepo
-      .createQueryBuilder('review')
-      .select('COUNT(*)', 'count')
-      .addSelect('AVG(review.rating)', 'avg')
-      .where('review.spotId = :spotId', { spotId })
-      .getRawOne<{ count: string; avg: string | null }>();
+    // 목록과 통계는 서로 독립적인 쿼리다. 인증 없는 공개 조회라 순차로 기다리면
+    // 응답 시간이 그대로 두 배가 되므로 병렬로 던진다.
+    const [items, stats] = await Promise.all([
+      this.reviewRepo
+        .createQueryBuilder('review')
+        .leftJoin('review.user', 'user')
+        .select('review.id', 'id')
+        .addSelect('review.rating', 'rating')
+        .addSelect('review.content', 'content')
+        .addSelect('review.team', 'team')
+        .addSelect('review.createdAt', 'createdAt')
+        .addSelect('user.nickname', 'nickname')
+        .where('review.spotId = :spotId', { spotId })
+        .orderBy('review.createdAt', 'DESC')
+        .limit(REVIEW_LIST_LIMIT)
+        .getRawMany(),
+      this.reviewRepo
+        .createQueryBuilder('review')
+        .select('COUNT(*)', 'count')
+        .addSelect('AVG(review.rating)', 'avg')
+        .where('review.spotId = :spotId', { spotId })
+        .getRawOne<{ count: string; avg: string | null }>(),
+    ]);
 
     return {
       spotId,
