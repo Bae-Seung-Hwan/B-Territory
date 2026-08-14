@@ -67,11 +67,13 @@ npx expo start --dev-client
 로컬에 SDK/JDK를 갖출 필요가 없지만, 네이티브 변경마다 클라우드 빌드를 기다려야 한다.
 `GOOGLE_MAPS_ANDROID_API_KEY`는 로컬 `.env`가 아니라 EAS 환경변수(`development`)에서 읽힌다.
 
-> **`preview`/`production` 프로필은 아직 빌드 안 됨.** EAS 대시보드엔 `development`
-> environment에만 변수가 등록돼 있다. `app.config.js`의 `requireEnv('GOOGLE_MAPS_ANDROID_API_KEY')`는
-> 값이 없으면 즉시 throw하므로, 지금 상태로 `--profile preview`나 `--profile production`으로
-> 빌드하면 config 평가 단계에서 바로 실패한다. 해당 프로필로 빌드하려면 EAS 대시보드에서 그
-> environment에도 같은 변수를 먼저 등록해야 한다.
+> **`preview`/`production` 프로필은 아직 빌드 안 됨.** `eas.json`의 각 프로필에 `environment`
+> 필드를 명시해뒀다(`development`/`preview`/`production`이 각각 동명의 environment를 읽는다).
+> EAS 대시보드엔 `development` environment에만 변수가 등록돼 있다. `app.config.js`의
+> `requireEnv('GOOGLE_MAPS_ANDROID_API_KEY')`는 값이 없으면 즉시 throw하므로, 지금 상태로
+> `--profile preview`나 `--profile production`으로 빌드하면 config 평가 단계에서 바로
+> 실패한다. 해당 프로필로 빌드하려면 EAS 대시보드에서 그 environment에도 같은 변수를 먼저
+> 등록해야 한다.
 
 ### 방법 B. 로컬 빌드
 
@@ -79,9 +81,14 @@ npx expo start --dev-client
 npx expo run:android          # prebuild + Gradle 빌드 + 설치 + 실행
 ```
 
-`package.json`의 `npm run android`도 동일한 명령이다(`ios`도 마찬가지로 `expo run:ios`). 다만
-`npm run ios`는 `eas.json`에 iOS 프로필이 없어 로컬 Xcode 빌드를 시도하게 되는데 아직 한 번도
-성공시킨 적이 없다 — [known-issues.md](./known-issues.md#apple-sign-in) 참고.
+`package.json`의 `npm run android:build`도 동일한 명령이다(iOS는 `npm run ios:build` →
+`expo run:ios`). `expo run:*`는 `eas.json`을 읽지 않는 로컬 빌드 전용 명령이라, iOS도 항상 로컬
+Xcode 빌드로 동작한다 — macOS + Xcode가 필요하고 아직 한 번도 성공시킨 적이 없다.
+[known-issues.md](./known-issues.md#apple-sign-in) 참고.
+
+> `npm run android`/`ios`(build 접미사 없음)는 `expo start --android`/`--ios`로, 방법 A로 이미
+> 설치한 Dev Build를 대상으로 dev server만 띄운다. 로컬 SDK 없이 방법 A만 따른 환경에서는
+> 이 두 스크립트를 쓰고, 네이티브 의존성이 바뀌어 재빌드가 필요할 때만 `:build` 쪽을 쓴다.
 
 필요한 도구는 다음과 같다. **버전이 어긋나면 대부분 아래 트러블슈팅의 증상으로 나타난다.**
 
@@ -121,26 +128,29 @@ mkdir -p ~/Android/Sdk/cmdline-tools
 unzip commandlinetools-linux-*.zip -d ~/Android/Sdk/cmdline-tools
 mv ~/Android/Sdk/cmdline-tools/cmdline-tools ~/Android/Sdk/cmdline-tools/latest
 
-# 2) SDK 패키지
-export ANDROID_HOME=$HOME/Android/Sdk
-yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-  "platform-tools" "platforms;android-36" "build-tools;36.0.0" \
-  "ndk;28.2.13676358" "cmake;3.22.1"
-
-# 3) JDK 17 (apt로 설치해도 되고, 아래는 sudo 없이 받는 방법)
+# 2) JDK 17 (apt로 설치해도 되고, 아래는 sudo 없이 받는 방법) — sdkmanager가 Java 프로그램이라 SDK 패키지 설치보다 먼저 필요
 mkdir -p ~/.jdks
 curl -sL "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse" \
   | tar -xz -C ~/.jdks
 ```
 
-`~/.bashrc`에 등록한다.
+`~/.bashrc`에 등록한다. `sdkmanager`를 쓰려면 이 `JAVA_HOME`이 먼저 잡혀 있어야 한다.
 
 ```bash
 export JAVA_HOME=$HOME/.jdks/jdk-17.0.20+8   # 실제 설치된 디렉터리명으로
 export ANDROID_HOME=$HOME/Android/Sdk
 export ANDROID_SDK_ROOT=$ANDROID_HOME
 export PATH=$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+```
+
+새 셸을 열거나 `source ~/.bashrc`로 위 export를 적용한 뒤 SDK 패키지를 설치한다.
+
+```bash
+# 3) SDK 패키지
+yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+  "platform-tools" "platforms;android-36" "build-tools;36.0.0" \
+  "ndk;28.2.13676358" "cmake;3.22.1"
 ```
 
 > Windows `adb.exe`를 `alias adb="adb.exe"`나 심볼릭 링크로 쓰고 있었다면 **제거한다.**

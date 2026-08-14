@@ -115,6 +115,7 @@ Google의 OAuth "Web" 클라이언트는 redirect URI로 `http`/`https`만 허�
 
 네이티브 모듈(`expo-apple-authentication`)이 필요하다. Dev Build로는 이미 전환했고
 `app.config.js`에 `ios.bundleIdentifier`(`com.bterritory.app`)도 설정돼 있어 전제 조건 자체는
-갖춰졌다. 다만 `eas.json`에는 아직 android 프로필만 있어 iOS 빌드를 한 번도 돌리지 않았다.
+갖춰졌다. 다만 `eas.json`의 `development`/`preview` 프로필엔 `android` 하위 설정만 있고 iOS 전용
+설정(credentials 등)이 없어 iOS 빌드를 한 번도 돌리지 않았다.
 
 남은 작업은 [known-issues.md](./known-issues.md#apple-sign-in) 참고.

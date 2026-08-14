@@ -95,10 +95,10 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
 
 ### Apple Sign In
 
-골격만 있고 `eas.json`에 iOS 프로필이 없어 iOS 빌드를 한 번도 돌리지 않았다. 아래는 iOS 빌드
-파이프라인을 세우는 시점에 함께 진행한다.
+골격만 있고 `eas.json`의 각 프로필에 iOS 전용 설정(credentials 등)이 없어 iOS 빌드를 한 번도
+돌리지 않았다. 아래는 iOS 빌드 파이프라인을 세우는 시점에 함께 진행한다.
 
-- [ ] `eas.json`에 iOS 빌드 프로필 추가
+- [ ] `eas.json` 각 프로필에 iOS 빌드 설정 추가
 - [ ] Apple Developer 계정에서 Sign in with Apple capability 활성화
 - [ ] `npx expo install expo-apple-authentication`
 - [ ] Firebase 콘솔에서 Apple Provider 활성화
