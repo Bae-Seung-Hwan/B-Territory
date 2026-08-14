@@ -106,7 +106,14 @@ export const en: Translations = {
   },
   chat: {
     title: 'Chat',
-    placeholder: 'Team chat will appear here',
+    disabledBanner: 'Chat server integration coming soon',
+    emptyState: 'No messages yet',
+    inputPlaceholder: 'Type a message',
+    send: 'Send',
+    shareLocation: "I'm here",
+    locationShared: '{{nickname}} is at {{spot}}',
+    locationSharedUnknown: '{{nickname}} shared their location',
+    you: 'Me',
   },
   ranking: {
     title: 'Ranking',
