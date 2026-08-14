@@ -26,3 +26,47 @@ const TILE_SIZE = 256;
 export function zoomFromLongitudeDelta(longitudeDelta: number, viewportWidth: number): number {
   return Math.log2((360 * viewportWidth) / (TILE_SIZE * longitudeDelta));
 }
+
+const EARTH_RADIUS_M = 6_371_000;
+
+/** 두 좌표 사이의 대권거리(미터). 채팅 탭의 "근처 관광지" 판정처럼 소규모 지역에서만 쓴다. */
+export function haversineDistanceMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * 주어진 좌표에서 가장 가까운 항목을 찾는다. team:location 이벤트엔 spotId가 없어서
+ * (백엔드 PR #34 스키마), 채팅 화면이 좌표만으로 "○○님이 [관광지] 공략 중"을 표시하려면
+ * 이 계산을 직접 해야 한다.
+ */
+export function nearestByCoords<T>(
+  point: { lat: number; lng: number },
+  items: T[],
+  toCoords: (item: T) => { lat: number; lng: number },
+  maxDistanceM = Infinity,
+): T | null {
+  let closest: T | null = null;
+  // 상한을 초기 최단거리로 두면 별도 비교 없이 "이보다 가까운 것만" 채택된다.
+  let closestDistance = maxDistanceM;
+  for (const item of items) {
+    const coords = toCoords(item);
+    // 좌표가 없는 항목(백엔드 mapX/mapY가 null)은 Number() 변환에서 NaN이 되는데,
+    // 그대로 두면 (0,0)이나 NaN 비교로 엉뚱한 항목이 뽑힌다.
+    if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) continue;
+    const distance = haversineDistanceMeters(point, coords);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closest = item;
+    }
+  }
+  return closest;
+}

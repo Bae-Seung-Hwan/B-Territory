@@ -102,7 +102,19 @@ export const ko = {
   },
   chat: {
     title: '채팅',
-    placeholder: '팀 채팅이 표시됩니다',
+    disabledBanner: '채팅 서버 연동 준비 중입니다',
+    emptyState: '아직 메시지가 없습니다',
+    inputPlaceholder: '메시지를 입력하세요',
+    send: '전송',
+    shareLocation: '여기 공략 중',
+    locationShared: '{{nickname}}님이 {{spot}} 공략 중',
+    locationSharedUnknown: '{{nickname}}님이 위치를 공유했습니다',
+    you: '나',
+    errors: {
+      connection: '채팅 연결에 실패했습니다. 다시 접속을 시도합니다',
+      rateLimit: '메시지를 너무 자주 보냈습니다. 잠시 후 다시 시도해주세요',
+      unknown: '메시지 전송에 실패했습니다',
+    },
   },
   ranking: {
     title: '랭킹',
