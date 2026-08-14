@@ -1,7 +1,10 @@
+import { WsException } from '@nestjs/websockets';
 import { ChatGateway } from './chat.gateway';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
+import { WsExceptionsFilter } from '../common/filters/ws-exception.filter';
+import { ErrorCode } from '../common/errors/error-code';
 
 interface MockSocket {
   id: string;
@@ -182,11 +185,37 @@ describe('ChatGateway', () => {
       expect(client.roomEmit).not.toHaveBeenCalled();
     });
 
+    // 문자열로 던지면 필터가 code를 붙일 근거가 없어 WS_ERROR로 뭉개지고, 프론트가
+    // 도배 차단을 다른 실패와 구분하지 못한다.
+    it('레이트리밋 예외는 code가 있는 errBody로 던진다', async () => {
+      redis.consumeRateLimit.mockResolvedValue(false);
+      const client = mockSocket('t');
+      client.data.user = { id: 'u1', team: 'A', nickname: '유저A' };
+
+      const err: unknown = await gateway
+        .handleChatMessage(client as never, { text: '안녕' })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WsException);
+      expect((err as WsException).getError()).toMatchObject({
+        code: ErrorCode.CHAT_RATE_LIMIT,
+      });
+    });
+
     it('인증되지 않은 소켓의 메시지는 예외', async () => {
       const client = mockSocket('t'); // data.user 미설정
       await expect(
         gateway.handleChatMessage(client as never, { text: 'x' }),
       ).rejects.toThrow();
     });
+  });
+
+  // 필터가 빠지면 NestJS 기본 필터가 `{ status, message, cause }`를 내보내 code가 사라진다.
+  // 데코레이터 누락은 타입 검사에도 테스트에도 잡히지 않으므로 메타데이터로 고정한다.
+  it('realtime과 동일하게 WsExceptionsFilter가 걸려 있다', () => {
+    const filters =
+      (Reflect.getMetadata('__exceptionFilters__', ChatGateway) as unknown[]) ??
+      [];
+    expect(filters).toContain(WsExceptionsFilter);
   });
 });

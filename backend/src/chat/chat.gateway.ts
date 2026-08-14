@@ -7,11 +7,13 @@ import {
   WebSocketServer,
   WsException,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, UseFilters } from '@nestjs/common';
 import { Namespace, Socket } from 'socket.io';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
+import { WsExceptionsFilter } from '../common/filters/ws-exception.filter';
+import { ErrorCode, errBody } from '../common/errors/error-code';
 import {
   getSocketUser,
   useSocketAuth,
@@ -37,6 +39,10 @@ const LOC_WINDOW_SEC = 10;
  * 달라 별도 채널로 둔다. 프론트는 두 채널에 위치를 중복 전송하지 않도록 조율한다.
  */
 @WebSocketGateway({ namespace: '/chat', cors: { origin: '*' } })
+// realtime 게이트웨이와 같은 필터를 건다. 없으면 NestJS 기본 필터가 예외를
+// `{ status, message, cause }`로 내보내 code 필드가 빠지는데, 프론트는 code로 문구를
+// 매핑하므로 이 게이트웨이의 실패만 분기할 수 없게 된다.
+@UseFilters(WsExceptionsFilter)
 export class ChatGateway implements OnGatewayInit {
   private readonly logger = new Logger(ChatGateway.name);
 
@@ -53,7 +59,12 @@ export class ChatGateway implements OnGatewayInit {
     return `team:${team}`;
   }
 
-  /** 레이트리밋 초과 시 WsException. */
+  /**
+   * 레이트리밋 초과 시 WsException.
+   *
+   * 에러는 문자열이 아니라 errBody 객체로 던진다 — 문자열이면 필터가 code를 붙일 근거가
+   * 없어 일반값(WS_ERROR)으로 뭉개지고, 프론트가 "도배 차단"을 다른 실패와 구분할 수 없다.
+   */
   private async assertRate(
     kind: string,
     userId: string,
@@ -66,7 +77,12 @@ export class ChatGateway implements OnGatewayInit {
       windowSec,
     );
     if (!allowed) {
-      throw new WsException('요청이 너무 잦습니다. 잠시 후 다시 시도하세요.');
+      throw new WsException(
+        errBody(
+          ErrorCode.CHAT_RATE_LIMIT,
+          '요청이 너무 잦습니다. 잠시 후 다시 시도하세요.',
+        ),
+      );
     }
   }
 
