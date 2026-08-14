@@ -15,7 +15,12 @@ import { useFinishSocialLogin } from '@/hooks/use-social-auth';
  * (isAvailableAsync 체크는 그 자산이 없는 안드로이드에서 개발모드 경고를 피하기 위함).
  * 소셜 로그인 자체가 iOS 전용 기능이라 Android에는 아예 노출하지 않는다.
  */
-export function AppleSignInButton() {
+interface AppleSignInButtonProps {
+  /** 약관 동의 시트를 띄우고, 사용자가 동의를 마치면 resolve(true), 취소하면 resolve(false). */
+  requestConsent: () => Promise<boolean>;
+}
+
+export function AppleSignInButton({ requestConsent }: AppleSignInButtonProps) {
   const [isAvailable, setIsAvailable] = useState(false);
   const handleAuthError = useHandleAuthError();
   const finishSocialLogin = useFinishSocialLogin();
@@ -28,6 +33,8 @@ export function AppleSignInButton() {
   if (Platform.OS !== 'ios' || !isAvailable) return null;
 
   const handlePress = async () => {
+    const agreed = await requestConsent();
+    if (!agreed) return;
     try {
       // Firebase가 재전송 공격 방지를 위해 원문 nonce(rawNonce)를 요구하는데, Apple에는
       // 해시만 넘겨야 한다 — OAuthProvider.credential에 둘 다 실어 보내면 Firebase가

@@ -38,6 +38,18 @@ export default function LoginScreen() {
   const [agreePrivacy, setAgreePrivacy] = useState(false);
   const [termsView, setTermsView] = useState<'list' | 'service' | 'privacy'>('list');
   const allAgreed = agreeTerms && agreePrivacy;
+  // Google/Apple 버튼이 이 시트를 통해 동의를 요구할 때만 채워진다. 채워져 있으면
+  // "계속하기"가 회원가입 화면으로 이동하는 대신 이 resolver로 결과를 돌려준다.
+  const consentResolveRef = useRef<((agreed: boolean) => void) | null>(null);
+
+  const requestSocialConsent = () =>
+    new Promise<boolean>((resolve) => {
+      consentResolveRef.current = resolve;
+      setAgreeTerms(false);
+      setAgreePrivacy(false);
+      setTermsView('list');
+      termsSheetRef.current?.present();
+    });
 
   const canSubmit = email.trim().length > 0 && password.length > 0 && !loading;
 
@@ -84,6 +96,8 @@ export default function LoginScreen() {
   });
 
   const handleGoogleLogin = async () => {
+    const agreed = await requestSocialConsent();
+    if (!agreed) return;
     setGoogleLoading(true);
     try {
       await promptGoogleLogin();
@@ -106,8 +120,19 @@ export default function LoginScreen() {
   };
 
   const handleContinueToRegister = () => {
+    const resolveConsent = consentResolveRef.current;
+    consentResolveRef.current = null;
     termsSheetRef.current?.dismiss();
-    router.push('/(auth)/register');
+    if (resolveConsent) {
+      resolveConsent(true);
+    } else {
+      router.push('/(auth)/register');
+    }
+  };
+
+  const handleTermsSheetDismiss = () => {
+    consentResolveRef.current?.(false);
+    consentResolveRef.current = null;
   };
 
 
@@ -161,7 +186,7 @@ export default function LoginScreen() {
         loading={googleLoading}
       />
 
-      <AppleSignInButton />
+      <AppleSignInButton requestConsent={requestSocialConsent} />
 
       <TouchableOpacity style={styles.registerLink} onPress={openTermsSheet}>
         <Text style={styles.registerLinkText}>
@@ -170,7 +195,11 @@ export default function LoginScreen() {
         </Text>
       </TouchableOpacity>
 
-      <BottomSheet ref={termsSheetRef} snapPoints={[termsView === 'list' ? '58%' : '70%']}>
+      <BottomSheet
+        ref={termsSheetRef}
+        snapPoints={[termsView === 'list' ? '58%' : '70%']}
+        onDismiss={handleTermsSheetDismiss}
+      >
         {termsView === 'list' ? (
           <>
             <Text style={styles.termsTitle}>{t('auth.terms.title')}</Text>

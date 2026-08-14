@@ -36,6 +36,10 @@ export function useGoogleLogin({ onSuccess, onError }: UseGoogleLoginOptions) {
   const promptGoogleLogin = useCallback(async () => {
     try {
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      // signIn()은 기기에 남은 이전 세션이 있으면 계정 선택 화면 없이 그 계정으로
+      // 조용히 재로그인해버린다. 매번 계정을 고를 수 있게 하려면 로그인 전에
+      // 네이티브 Google 세션을 비워야 한다(Firebase 세션과는 무관해 안전하다).
+      await GoogleSignin.signOut();
       const response = await GoogleSignin.signIn();
       if (!isSuccessResponse(response)) return; // 사용자가 취소함
 
