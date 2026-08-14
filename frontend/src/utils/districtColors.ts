@@ -31,6 +31,11 @@ export const DISTRICT_STROKE_WIDTH = 1;
 export const OUTSIDE_MASK_COLOR = '#000000';
 export const OUTSIDE_MASK_ALPHA = 0.45;
 
+/** 이번 주 수도 강조 — 나머지 15개 구의 채움색과 겹치지 않는 금색으로 테두리를 두껍게 그린다 */
+export const CAPITAL_STROKE_COLOR = '#FFD700';
+export const CAPITAL_STROKE_WIDTH = 4;
+export const CAPITAL_FILL_ALPHA = 0.18;
+
 // TODO: 실제 점령(occupy) 기능이 붙으면 국적/팀 코드 → 색상 매핑을 정의해 이 함수를 확장한다.
 // 점령 상태는 useGameStore.occupiedDistricts가 이미 들고 있으므로(MapHUD가 같은 방식으로 읽는다)
 // DistrictPolygons가 그 스토어를 직접 구독하면 된다 — prop으로 내려보낼 필요가 없다.

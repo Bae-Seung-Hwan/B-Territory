@@ -3,6 +3,9 @@ import { Polygon } from 'react-native-maps';
 import busanSigGeoJson from '@/assets/geo/busan_sig.json';
 import { BUSAN_BOUNDS } from '@/constants/busan';
 import {
+  CAPITAL_FILL_ALPHA,
+  CAPITAL_STROKE_COLOR,
+  CAPITAL_STROKE_WIDTH,
   DISTRICT_STROKE_COLOR,
   DISTRICT_STROKE_WIDTH,
   OUTSIDE_MASK_ALPHA,
@@ -10,6 +13,7 @@ import {
   getDistrictFillColor,
 } from '@/utils/districtColors';
 import { withAlpha } from '@/constants/theme';
+import { useGameStore } from '@/store/useGameStore';
 
 interface GeoJsonFeature {
   properties: { SIG_CD: string };
@@ -41,6 +45,8 @@ const DISTRICT_RINGS = (busanSigGeoJson as { features: GeoJsonFeature[] }).featu
 );
 
 const STROKE_COLOR = withAlpha(DISTRICT_STROKE_COLOR, 0.9);
+const CAPITAL_STROKE = withAlpha(CAPITAL_STROKE_COLOR, 0.95);
+const CAPITAL_FILL = withAlpha(CAPITAL_STROKE_COLOR, CAPITAL_FILL_ALPHA);
 
 // 부산 바깥을 덮는 마스크. 지도를 넉넉히 덮는 사각형 하나에서 각 구의 외곽 ring을 구멍으로
 // 뚫어, 구 경계 안쪽만 원래 지도 밝기로 남긴다. 구가 서로 맞닿아 있어도 구멍끼리 겹치지
@@ -73,6 +79,13 @@ export const DistrictPolygons = memo(function DistrictPolygons({
   tappable = false,
   onDistrictPress,
 }: DistrictPolygonsProps) {
+  // 이번 주 수도는 매주 한 번만 바뀌므로, 이 selector로 인한 리렌더는 무시할 만하다
+  // (팬/줌·GPS 5초 갱신과 달리 store 변경 자체가 드물다).
+  const capitalSigCd = useGameStore((s) => s.capitalDistrict?.sigunguCode ?? null);
+  const capitalRing = capitalSigCd
+    ? DISTRICT_RINGS.find((ring) => ring.sigCd === capitalSigCd)
+    : undefined;
+
   return (
     <>
       {/* 구 폴리곤보다 먼저 그려 경계선이 마스크 위에 오게 한다. 테두리(strokeWidth 0)를 그리지
@@ -94,6 +107,18 @@ export const DistrictPolygons = memo(function DistrictPolygons({
           onPress={tappable ? () => onDistrictPress?.(sigCd) : undefined}
         />
       ))}
+      {/* 나머지 구와 같은 위치에 덧그려 금색 테두리+옅은 채움으로 수도만 도드라지게 한다 */}
+      {capitalRing && (
+        <Polygon
+          key={`capital-${capitalRing.key}`}
+          coordinates={capitalRing.coordinates}
+          strokeWidth={CAPITAL_STROKE_WIDTH}
+          strokeColor={CAPITAL_STROKE}
+          fillColor={CAPITAL_FILL}
+          tappable={tappable}
+          onPress={tappable ? () => onDistrictPress?.(capitalSigCd!) : undefined}
+        />
+      )}
     </>
   );
 });
