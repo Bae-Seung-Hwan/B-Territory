@@ -6,7 +6,8 @@ import { BottomSheet } from '@/components/ui/BottomSheet';
 import { BrandColors, withAlpha } from '@/constants/theme';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchDistrict, fetchDistrictClaim } from '@/api/districts';
-import { getDistrictFillColor } from '@/utils/districtColors';
+import { getDistrictFillColor, CAPITAL_STROKE_COLOR } from '@/utils/districtColors';
+import { useGameStore } from '@/store/useGameStore';
 import { useTranslation } from '@/i18n';
 
 interface DistrictDetailSheetProps {
@@ -27,6 +28,8 @@ export const DistrictDetailSheet = forwardRef<BottomSheetModal, DistrictDetailSh
   function DistrictDetailSheet({ sigCd, sigunguCode, onDismiss }, ref) {
     const { t } = useTranslation();
     const enabled = sigunguCode != null;
+    const capitalDistrict = useGameStore((s) => s.capitalDistrict);
+    const isCapital = capitalDistrict != null && capitalDistrict.sigunguCode === sigunguCode;
 
     const districtQuery = useQuery({
       queryKey: queryKeys.districts.detail(sigunguCode ?? ''),
@@ -61,6 +64,14 @@ export const DistrictDetailSheet = forwardRef<BottomSheetModal, DistrictDetailSh
             <Text style={styles.title}>{district?.nameKo ?? '—'}</Text>
           </View>
           {district && <Text style={styles.subtitle}>{district.nameEn}</Text>}
+
+          {isCapital && (
+            <View style={styles.capitalBadge}>
+              <Text style={styles.capitalText}>
+                {t('map.districtDetail.capitalBadge', { multiplier: capitalDistrict!.multiplier })}
+              </Text>
+            </View>
+          )}
 
           {isLoading && <ActivityIndicator style={styles.loading} color={BrandColors.accent} />}
 
@@ -128,6 +139,15 @@ const styles = StyleSheet.create({
     backgroundColor: withAlpha(BrandColors.accent, 0.15),
   },
   claimText: { color: BrandColors.accent, fontSize: 12, fontWeight: '700' },
+  capitalBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: withAlpha(CAPITAL_STROKE_COLOR, 0.15),
+  },
+  capitalText: { color: CAPITAL_STROKE_COLOR, fontSize: 12, fontWeight: '700' },
   field: { gap: 2, marginTop: 6 },
   fieldLabel: { color: '#888', fontSize: 11 },
   fieldValue: { color: '#e6e6e6', fontSize: 14 },

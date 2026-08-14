@@ -165,6 +165,7 @@ export const ko = {
       claimedAt: '점령 확정 시각',
       notAggregated: '아직 점령 이력이 없습니다',
       scoreWeight: '점수 가중치',
+      capitalBadge: '이번 주 수도 ×{{multiplier}}',
       loadFailed: '구 정보를 불러오지 못했습니다',
       retry: '다시 시도',
     },
@@ -192,6 +193,23 @@ export const ko = {
       spotNotFound: '관광지를 찾을 수 없습니다',
       dailyLimit: '이 관광지는 오늘 이미 점령했습니다 (KST 자정에 초기화)',
       failed: '점령에 실패했습니다',
+    },
+    // 리뷰 작성 미션 — 사전 체크인(GPS 50m) 후 별점+리뷰를 등록한다(점령 미션과 별개, 개인 보너스).
+    reviewMission: {
+      title: '리뷰 작성',
+      summary: '리뷰 {{count}}개 · 평균 ★{{average}}',
+      checkinButton: '체크인하고 리뷰 작성',
+      contentPlaceholder: '리뷰를 남겨보세요 (선택, 최대 1000자)',
+      submitButton: '리뷰 등록',
+      success: '리뷰 등록 완료! +{{points}}점',
+      errors: {
+        visitRequired: '먼저 현장에서 체크인해주세요 (체크인 후 24시간 이내 작성 가능)',
+        dailyLimit: '이 관광지 리뷰는 오늘 이미 작성했습니다 (KST 자정에 초기화)',
+        noCoordinates: '이 관광지는 좌표 정보가 없어 체크인할 수 없습니다',
+        spotNotFound: '관광지를 찾을 수 없습니다',
+        outOfRange: '현재 위치가 관광지에서 너무 멀어 체크인할 수 없습니다',
+        failed: '리뷰 등록에 실패했습니다',
+      },
     },
     categoryFilter: {
       title: '카테고리',
