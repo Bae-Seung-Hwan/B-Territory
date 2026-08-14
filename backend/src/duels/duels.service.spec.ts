@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import {
   BadRequestException,
   ConflictException,
@@ -10,6 +10,8 @@ import { DuelsService } from './duels.service';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
+import { ScoresService } from '../scores/scores.service';
+import { ScoreEventType } from '../scores/entities/score-event.entity';
 import {
   BASE_DUEL_SCORE,
   ALLY_BONUS_MULTIPLIER,
@@ -53,8 +55,9 @@ describe('DuelsService', () => {
     >
   >;
   let usersService: jest.Mocked<
-    Pick<UsersService, 'findById' | 'applyScoreDelta'>
+    Pick<UsersService, 'findById' | 'findByIds' | 'applyScoreDelta'>
   >;
+  let scoresService: jest.Mocked<Pick<ScoresService, 'record'>>;
 
   const challenger = { id: 'user-a', team: 'KR' };
   const opponentId = 'user-b';
@@ -104,8 +107,15 @@ describe('DuelsService', () => {
 
     usersService = {
       findById: jest.fn().mockResolvedValue({ id: opponentId, team: 'JP' }),
+      // 원장에 남길 이벤트 시점 팀 조회 — 승자/패자 두 유저를 한 번에 읽는다.
+      findByIds: jest.fn().mockResolvedValue([
+        { id: challenger.id, team: challenger.team },
+        { id: opponentId, team: 'JP' },
+      ]),
       applyScoreDelta: jest.fn().mockResolvedValue(undefined),
     };
+
+    scoresService = { record: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -114,6 +124,7 @@ describe('DuelsService', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: RedisService, useValue: redis },
         { provide: UsersService, useValue: usersService },
+        { provide: ScoresService, useValue: scoresService },
       ],
     }).compile();
 
@@ -326,6 +337,111 @@ describe('DuelsService', () => {
         expect.any(Number),
       );
       expect(redis.clearPenalty).not.toHaveBeenCalled();
+    });
+
+    it('승패를 점수 원장에 append한다 — 팀 점수는 0, 같은 트랜잭션', async () => {
+      // 개인 랭킹은 users.score가 아니라 SUM(score_events.personalPoints)로 산출되므로,
+      // 원장에 남지 않으면 결투 점수가 /users/me와 명예의 전당에서 서로 다른 값이 된다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+
+      await service.submitResult(1, challenger.id, challenger.id);
+
+      expect(scoresService.record).toHaveBeenCalledWith(txManager, {
+        userId: challenger.id,
+        team: challenger.team,
+        type: ScoreEventType.DUEL_WIN,
+        personalPoints: BASE_DUEL_SCORE,
+        teamPoints: 0,
+        duelId: 1,
+      });
+      expect(scoresService.record).toHaveBeenCalledWith(txManager, {
+        userId: opponentId,
+        team: 'JP',
+        type: ScoreEventType.DUEL_LOSS,
+        personalPoints: -BASE_DUEL_SCORE,
+        teamPoints: 0,
+        duelId: 1,
+      });
+    });
+
+    it('탈퇴로 유저 row가 사라진 참가자는 원장 행을 남기지 않는다', async () => {
+      // applyScoreDelta도 대상 row가 없어 no-op이므로, 원장에만 유령 행이 남는 일이 없어야 한다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+      usersService.findByIds.mockResolvedValue([
+        { id: challenger.id, team: challenger.team },
+      ] as never);
+
+      await service.submitResult(1, challenger.id, challenger.id);
+
+      expect(scoresService.record).toHaveBeenCalledTimes(1);
+      expect(scoresService.record).toHaveBeenCalledWith(
+        txManager,
+        expect.objectContaining({ userId: challenger.id }),
+      );
+    });
+
+    it('팀 스냅샷 이후 참가자가 사라져도 그 원장 행만 건너뛰고 결투는 확정된다', async () => {
+      // 팀 스냅샷은 트랜잭션 밖에서 읽으므로, 그 뒤 참가자가 삭제되면 스킵 판정이 낡아
+      // 사라진 uuid로 insert를 시도한다(FK 위반). Postgres는 실패한 문이 트랜잭션 전체를
+      // abort시키므로, SAVEPOINT로 되돌리지 않으면 결투 확정까지 함께 날아간다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+
+      const fkError = new QueryFailedError('INSERT ...', [], {
+        name: 'error',
+        message:
+          'insert or update on table "score_events" violates foreign key constraint',
+        code: '23503',
+      } as unknown as Error);
+      // 패자만 사라진 상황 — 승자 행은 정상 기록돼야 한다.
+      scoresService.record.mockImplementation((_m, event) =>
+        event.userId === opponentId
+          ? Promise.reject(fkError)
+          : Promise.resolve(undefined),
+      );
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).resolves.toMatchObject({ status: 'confirmed' });
+
+      expect(scoresService.record).toHaveBeenCalledTimes(2);
+      // 실패한 insert만 SAVEPOINT로 되돌린다 — 트랜잭션은 계속 살아 있어야 한다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'ROLLBACK TO SAVEPOINT duel_ledger',
+      );
+      // 페널티 롤백은 트랜잭션 실패 경로에서만 일어난다 — 여기선 일어나면 안 된다.
+      expect(redis.clearPenalty).not.toHaveBeenCalled();
+    });
+
+    it('FK 위반이 아닌 원장 insert 실패는 삼키지 않는다', async () => {
+      // 23503만 "참가자가 사라짐"으로 읽는다. 그 외 오류까지 흡수하면 진짜 장애가 조용히 묻힌다.
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.submitDuelResult.mockResolvedValue({
+        status: 'confirmed',
+        winnerId: challenger.id,
+      });
+      redis.geoSearch.mockResolvedValue([]);
+      scoresService.record.mockRejectedValue(new Error('connection lost'));
+
+      await expect(
+        service.submitResult(1, challenger.id, challenger.id),
+      ).rejects.toThrow('connection lost');
+      // 트랜잭션이 깨졌으므로 미리 걸어둔 페널티는 되돌려야 한다.
+      expect(redis.clearPenalty).toHaveBeenCalledWith(opponentId);
     });
 
     it('승자 주변에 아군이 2명 이상이면 1.5배 점수를 적용한다', async () => {

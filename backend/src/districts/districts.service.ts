@@ -12,6 +12,12 @@ import {
   PG_UNIQUE_VIOLATION,
   pgErrorCode,
 } from '../common/utils/pg-error.util';
+import {
+  readCache,
+  writeCache,
+  writeCacheIfAbsent,
+} from '../common/utils/redis-cache.util';
+import { withTimeout } from '../common/utils/with-timeout.util';
 
 // 수도로 지정된 구에서 점령하는 모든 팀의 점수(개인·팀)에 곱해지는 배수.
 export const CAPITAL_MULTIPLIER = 1.2;
@@ -25,10 +31,8 @@ const CAPITAL_TTL_SEC = 8 * 24 * 60 * 60;
 const CAPITAL_NONE = '-';
 const CAPITAL_NONE_TTL_SEC = 60;
 // 부팅 시 이번 주 수도 보장(catch-up)을 기다리는 상한(ms). 초과하면 포기하고 부팅을 계속한다.
+// 캐시 접근 자체의 상한은 공용 헬퍼(redis-cache.util)가 갖고 있다.
 const CAPITAL_BOOT_TIMEOUT_MS = 3000;
-// 런타임 수도 캐시 접근 상한(ms). Redis 정상 응답은 1ms 미만이라 여유가 크고, 도달 불가일 때
-// 요청이 maxRetriesPerRequest 소진까지(실측 12~24초) 매달리지 않도록 짧게 끊는다.
-const CAPITAL_CACHE_TIMEOUT_MS = 500;
 
 interface DistrictCsvRow {
   sigunguCode: string;
@@ -85,9 +89,20 @@ export class DistrictsService implements OnModuleInit {
     }
 
     // 수도 캐시 키를 이 인스턴스가 보는 원장에 묶는다. 여기서 미리 해석해두면 이후 조회·지정이
-    // 매번 DB를 치지 않고, 식별자를 못 읽는 환경(권한·접속 문제)을 부팅 시점에 드러낸다
-    // (바로 위 시딩이 이미 DB를 요구하므로 DB는 살아 있는 상태).
-    await this.cacheNamespace();
+    // 매번 DB를 치지 않고, 식별자를 못 읽는 환경(권한·접속 문제)이 부팅 로그에 드러난다.
+    //
+    // 실패해도 부팅은 계속한다 — 네임스페이스는 캐시 키에만 쓰이고, 런타임 경로(readCapitalCache
+    // 등)는 이 실패를 이미 캐시 미스로 흡수해 DB 원장으로 답한다. 여기만 fail-fast로 두면
+    // 캐시 전용 관심사 때문에 수도와 무관한 API까지 통째로 못 뜬다. cacheNamespace는 실패를
+    // 메모하지 않으므로 다음 호출이 다시 시도한다.
+    try {
+      await this.cacheNamespace();
+    } catch (err) {
+      this.logger.warn(
+        '수도 캐시 네임스페이스 해석 실패 (부팅은 계속) — 런타임에 재시도되고, 그때까지는 DB 원장으로 답한다',
+        err as Error,
+      );
+    }
 
     // 이번 주 수도가 없으면 여기서 지정한다(놓친 주 catch-up).
     //
@@ -101,7 +116,7 @@ export class DistrictsService implements OnModuleInit {
     // best-effort다 — 실패해도 런타임 getCurrentCapital이 DB 원장을 직접 읽고, 다음 부팅이나
     // 다음 크론이 다시 시도한다. 부팅이 app.listen()에 도달하지 못하는 것만 막는다.
     try {
-      await this.withTimeout(
+      await withTimeout(
         this.ensureCurrentWeekCapital(),
         CAPITAL_BOOT_TIMEOUT_MS,
       );
@@ -121,19 +136,6 @@ export class DistrictsService implements OnModuleInit {
         err as Error,
       );
     }
-  }
-
-  /**
-   * 프로미스가 ms 안에 끝나지 않으면 거부한다(부팅 논블로킹용). 타임아웃이 이겨도 원본
-   * 프로미스의 지연 실패는 Promise.race 내부 핸들러가 처리하므로 unhandledRejection이 없다.
-   */
-  private withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-    return Promise.race([
-      p,
-      new Promise<T>((_, reject) => {
-        setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms).unref();
-      }),
-    ]);
   }
 
   private csvPath(): string {
@@ -256,22 +258,35 @@ export class DistrictsService implements OnModuleInit {
    */
   private async resolveCacheNamespace(): Promise<string> {
     try {
-      const [row] = await this.dataSource.query<{ ns: string }[]>(
+      return await this.queryCacheNamespace(
         `SELECT current_database() || ':' || system_identifier AS ns
            FROM pg_control_system()`,
       );
-      return row.ns;
     } catch (err) {
       this.logger.warn(
         'system_identifier 조회 실패 — DB OID로 캐시 네임스페이스를 구성합니다 (권한 부족 추정)',
         err as Error,
       );
-      const [row] = await this.dataSource.query<{ ns: string }[]>(
+      return this.queryCacheNamespace(
         `SELECT current_database() || ':' || oid AS ns
            FROM pg_database WHERE datname = current_database()`,
       );
-      return row.ns;
     }
+  }
+
+  /**
+   * 두 쿼리 모두 정상 DB에서는 반드시 1행을 반환하지만, 빈 결과를 그대로 두면 row가 undefined가
+   * 되어 "Cannot read properties of undefined"라는 엉뚱한 TypeError가 난다. 호출부(캐시 래퍼)는
+   * 이 실패를 캐시 미스로 흡수하므로, 원인을 알아볼 수 있는 오류로 바꿔 던지는 것으로 충분하다.
+   */
+  private async queryCacheNamespace(sql: string): Promise<string> {
+    const [row] = await this.dataSource.query<{ ns: string }[]>(sql);
+    if (!row) {
+      throw new Error(
+        `캐시 네임스페이스 조회가 빈 결과를 반환했습니다: ${sql}`,
+      );
+    }
+    return row.ns;
   }
 
   /**
@@ -320,44 +335,44 @@ export class DistrictsService implements OnModuleInit {
   }
 
   /**
-   * 수도 캐시 읽기 — 실패를 "미스"로 흡수한다.
+   * 수도 캐시 접근 — 실패를 모두 "미스"로 흡수한다(공용 헬퍼 redis-cache.util).
    *
-   * Redis 미스(연결됨·키 없음)와 Redis 도달 불가는 호출부가 구분할 필요가 없다. 둘 다
-   * DB 원장으로 폴백해야 하고, 원장이 진실의 원천이므로 결과도 같다. 감싸지 않으면
-   * 도달 불가일 때 redis.get()이 null이 아니라 MaxRetriesPerRequestError를 던져
-   * DB 폴백 라인에 도달조차 못 하고 조회가 500이 된다.
+   * 여기서 따로 감싸는 것은 키 생성 실패다. 키에는 원장 식별자가 들어가는데 그 해석이 DB를
+   * 타므로, DB가 흔들리면 키를 만들지 못한다. 그 경우도 캐시 미스와 똑같이 다뤄야 조회가
+   * 500이 되지 않는다 — 캐시는 원장을 뒤따르는 값일 뿐이고 원장이 진실의 원천이다.
    */
   private async readCapitalCache(weekStart: Date): Promise<string | null> {
     try {
       const key = await this.capitalCacheKey(weekStart);
-      return await this.withTimeout(
-        this.redis.get(key),
-        CAPITAL_CACHE_TIMEOUT_MS,
-      );
+      return await readCache(this.redis, key, this.logger);
     } catch (err) {
-      this.logger.warn('수도 캐시 조회 실패 — DB 원장으로 폴백', err as Error);
+      this.logger.warn(
+        '수도 캐시 키 생성 실패 — DB 원장으로 폴백',
+        err as Error,
+      );
       return null;
     }
   }
 
   /**
-   * 수도 캐시 재적재 — best-effort. 실패해도 DB 원장이 진실이라 조회는 계속된다.
-   * 지정 경로에서도 반드시 이 래퍼를 쓴다 — 맨 redis.set()은 Redis 미도달 시
-   * maxRetriesPerRequest 소진까지(실측 12~24초) 매달려 주간 지정 잡을 통째로 실패시킨다.
+   * 수도 캐시 재적재 — best-effort. 지정 경로에서도 반드시 이 래퍼를 쓴다. 맨 redis.set()은
+   * Redis 미도달 시 재시도 소진까지(실측 12~24초) 매달려 주간 지정 잡을 통째로 실패시킨다.
    */
   private async writeCapitalCache(
     weekStart: Date,
     sigunguCode: string,
-    ttlSeconds: number = CAPITAL_TTL_SEC,
   ): Promise<void> {
     try {
       const key = await this.capitalCacheKey(weekStart);
-      await this.withTimeout(
-        this.redis.set(key, sigunguCode, ttlSeconds),
-        CAPITAL_CACHE_TIMEOUT_MS,
+      await writeCache(
+        this.redis,
+        key,
+        sigunguCode,
+        CAPITAL_TTL_SEC,
+        this.logger,
       );
     } catch (err) {
-      this.logger.warn('수도 캐시 재적재 실패 (조회는 계속)', err as Error);
+      this.logger.warn('수도 캐시 키 생성 실패 (조회는 계속)', err as Error);
     }
   }
 
@@ -368,17 +383,19 @@ export class DistrictsService implements OnModuleInit {
    * 써뒀을 수 있다. 크론이 도는 월요일 00:05 근처가 정확히 그 창이다 — 조회자가 findOne을
    * 지정자의 INSERT 커밋 직전에 실행하면 null을 받고, 그 뒤에 sentinel을 덮어써 클러스터
    * 전체가 최대 TTL 동안 "수도 없음"으로 응답한다(수도 구 점령이 1.2배 대신 1.0배).
-   * NX로 쓰면 이미 값이 있을 때 조용히 실패하므로 지정자의 값을 절대 덮지 않는다.
    */
   private async writeCapitalNoneCache(weekStart: Date): Promise<void> {
     try {
       const key = await this.capitalCacheKey(weekStart);
-      await this.withTimeout(
-        this.redis.tryAcquireLock(key, CAPITAL_NONE_TTL_SEC, CAPITAL_NONE),
-        CAPITAL_CACHE_TIMEOUT_MS,
+      await writeCacheIfAbsent(
+        this.redis,
+        key,
+        CAPITAL_NONE,
+        CAPITAL_NONE_TTL_SEC,
+        this.logger,
       );
     } catch (err) {
-      this.logger.warn('수도 미지정 캐싱 실패 (조회는 계속)', err as Error);
+      this.logger.warn('수도 캐시 키 생성 실패 (조회는 계속)', err as Error);
     }
   }
 
@@ -508,12 +525,21 @@ export class DistrictsService implements OnModuleInit {
     } catch (err) {
       if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         const winner = await this.capitalRepo.findOne({ where: { weekStart } });
-        const winnerCode = winner?.sigunguCode ?? sigunguCode;
-        await this.writeCapitalCache(weekStart, winnerCode);
+        if (!winner) {
+          // 23505는 이번 주 행이 이미 커밋됐다는 뜻이고(경합 트랜잭션 커밋까지 insert가
+          // 블록된다), READ COMMITTED에서 뒤이은 findOne은 반드시 그 행을 본다. 안 보이면
+          // 전제가 깨진 것이므로 예외로 올려 Bull 재시도에 맡긴다 — 여기서 경합에 진 자신의
+          // 랜덤 픽으로 대체하면 원장에 없는 수도가 8일 TTL로 공유 캐시에 박혀, weekStart
+          // UNIQUE 설계가 막으려던 유령 수도가 그대로 재현된다.
+          throw new Error(
+            `이번 주 수도 unique 위반인데 확정 행을 읽지 못했습니다 (weekStart=${weekStart.toISOString()})`,
+          );
+        }
+        await this.writeCapitalCache(weekStart, winner.sigunguCode);
         this.logger.log(
-          `이번 주 수도 동시 지정 경합 — 확정된 수도 채택: ${winnerCode}`,
+          `이번 주 수도 동시 지정 경합 — 확정된 수도 채택: ${winner.sigunguCode}`,
         );
-        return { sigunguCode: winnerCode };
+        return { sigunguCode: winner.sigunguCode };
       }
       throw err;
     }
