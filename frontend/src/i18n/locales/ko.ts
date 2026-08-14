@@ -2,7 +2,6 @@ export const ko = {
   common: {
     cancel: '취소',
     close: '닫기',
-    comingSoon: '준비 중',
   },
   onboarding: {
     subtitle: '부산 점령 관광 게임',
@@ -17,9 +16,6 @@ export const ko = {
       submit: '로그인',
       or: '또는',
       google: 'Google로 계속하기',
-      googleComingSoonMessage: 'Google 로그인은 Firebase 연동 후 지원됩니다.',
-      apple: 'Apple로 계속하기',
-      appleComingSoonMessage: 'Apple 로그인은 곧 지원될 예정입니다.',
       noAccount: '아직 계정이 없으신가요?',
       registerLink: '회원가입 하기',
     },
@@ -53,6 +49,11 @@ export const ko = {
       nationalitySearchPlaceholder: '국가 검색',
       nationalityPlaceholder: '국가를 선택하세요',
       submit: '가입하기',
+    },
+    completeProfile: {
+      title: '프로필 완성',
+      subtitle: '닉네임과 국적만 알려주시면 바로 시작할 수 있어요',
+      submit: '시작하기',
     },
     session: {
       loadFailed: '로그인 정보를 불러오지 못했습니다.\n네트워크 상태를 확인해주세요.',
