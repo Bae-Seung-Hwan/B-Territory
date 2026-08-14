@@ -14,4 +14,10 @@ export const queryKeys = {
   districts: {
     detail: (sigunguCode: string) => ['districts', 'detail', sigunguCode] as const,
   },
+  ranking: {
+    teams: (season?: number) => ['ranking', 'teams', season ?? 'current'] as const,
+    users: (season?: number) => ['ranking', 'users', season ?? 'current'] as const,
+    teamRecords: ['ranking', 'records', 'teams'] as const,
+    userRecords: ['ranking', 'records', 'users'] as const,
+  },
 } as const;
