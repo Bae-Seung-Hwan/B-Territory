@@ -19,6 +19,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useGoogleLogin } from '@/hooks/use-google-login';
 import { useFinishSocialLogin } from '@/hooks/use-social-auth';
+import { useSocialLoginConsent } from '@/hooks/use-social-login-consent';
 import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -38,18 +39,18 @@ export default function LoginScreen() {
   const [agreePrivacy, setAgreePrivacy] = useState(false);
   const [termsView, setTermsView] = useState<'list' | 'service' | 'privacy'>('list');
   const allAgreed = agreeTerms && agreePrivacy;
-  // Google/Apple 버튼이 이 시트를 통해 동의를 요구할 때만 채워진다. 채워져 있으면
-  // "계속하기"가 회원가입 화면으로 이동하는 대신 이 resolver로 결과를 돌려준다.
-  const consentResolveRef = useRef<((agreed: boolean) => void) | null>(null);
-
-  const requestSocialConsent = () =>
-    new Promise<boolean>((resolve) => {
-      consentResolveRef.current = resolve;
+  const {
+    requestConsent: requestSocialConsent,
+    resolveConsent,
+    isAwaitingConsent,
+  } = useSocialLoginConsent({
+    onRequest: () => {
       setAgreeTerms(false);
       setAgreePrivacy(false);
       setTermsView('list');
       termsSheetRef.current?.present();
-    });
+    },
+  });
 
   const canSubmit = email.trim().length > 0 && password.length > 0 && !loading;
 
@@ -120,19 +121,18 @@ export default function LoginScreen() {
   };
 
   const handleContinueToRegister = () => {
-    const resolveConsent = consentResolveRef.current;
-    consentResolveRef.current = null;
-    termsSheetRef.current?.dismiss();
-    if (resolveConsent) {
+    const wasAwaitingSocialConsent = isAwaitingConsent();
+    if (wasAwaitingSocialConsent) {
       resolveConsent(true);
-    } else {
+    }
+    termsSheetRef.current?.dismiss();
+    if (!wasAwaitingSocialConsent) {
       router.push('/(auth)/register');
     }
   };
 
   const handleTermsSheetDismiss = () => {
-    consentResolveRef.current?.(false);
-    consentResolveRef.current = null;
+    resolveConsent(false);
   };
 
 
