@@ -124,7 +124,12 @@ export class FestivalsService {
         { today },
       );
     } else if (status === 'upcoming') {
-      qb.where('festival.eventStartDate > :today', { today });
+      // eventEndDate 조건이 없으면 종료일 < 시작일인 비정상 행이 upcoming에만 잡혀
+      // 기본 목록(= 진행 중 + 예정)과 어긋난다.
+      qb.where('festival.eventStartDate > :today', { today }).andWhere(
+        'festival.eventEndDate >= :today',
+        { today },
+      );
     } else {
       // 기본: 아직 끝나지 않은 축제(진행 중 + 예정)
       qb.where('festival.eventEndDate >= :today', { today });
@@ -167,13 +172,17 @@ export class FestivalsService {
       const rows: FestivalRow[] = [];
       for (const item of items) {
         if (!item.title?.trim()) continue;
+        // contentId는 NOT NULL UNIQUE인 upsert 키다. 비면 배치 INSERT 전체가
+        // not-null 위반으로 죽고, 빈 문자열이면 서로를 덮어쓴다.
+        const contentId = item.contentid?.trim();
+        if (!contentId) continue;
         // 날짜가 없으면 진행 상태 판정이 불가능하므로 제외 (NOT NULL 컬럼)
         const eventStartDate = parseYmd(item.eventstartdate);
         const eventEndDate = parseYmd(item.eventenddate);
         if (!eventStartDate || !eventEndDate) continue;
 
         rows.push({
-          contentId: item.contentid,
+          contentId,
           title: item.title.trim(),
           addr1: nullIfBlank(item.addr1),
           mapX: parseCoord(item.mapx),
@@ -186,7 +195,7 @@ export class FestivalsService {
           sigungucode: nullIfBlank(item.sigungucode),
           updatedAt: syncedAt,
         });
-        syncedContentIds.push(item.contentid);
+        syncedContentIds.push(contentId);
       }
 
       await this.upsertBatch(rows);
@@ -233,8 +242,15 @@ export class FestivalsService {
   private async upsertBatch(rows: FestivalRow[]): Promise<void> {
     if (rows.length === 0) return;
 
+    // 한 INSERT 안에 같은 contentId가 두 번 들어가면 ON CONFLICT DO UPDATE가
+    // SQLSTATE 21000("cannot affect row a second time")으로 죽는다. API 응답에
+    // 중복이 섞여도 동기화가 멈추지 않도록 뒤에 온 값을 남기고 접는다.
+    const deduped = [
+      ...new Map(rows.map((row) => [row.contentId, row])).values(),
+    ];
+
     const params: unknown[] = [];
-    const tuples = rows.map((row) => {
+    const tuples = deduped.map((row) => {
       const placeholders = UPSERT_COLUMNS.map((col) => {
         params.push(row[col]);
         return `$${params.length}`;

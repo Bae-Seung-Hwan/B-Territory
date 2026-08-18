@@ -116,7 +116,11 @@ export function parseYmd(value?: string): string | null {
  */
 export function contentIdOf(row: FestivalCsvRow): string {
   const id = row.source_id?.trim() ?? '';
-  return row.source?.trim() === 'kto_festival' ? id : `${row.source}:${id}`;
+  // 접두사도 반드시 트림된 값으로 만든다. 비교만 트림하면 " busan_festival"이
+  // " busan_festival:2368"이 되어, CSV 정리 후 재실행 시 upsert 키가 달라지고
+  // 같은 축제가 중복 행으로 들어간다.
+  const source = row.source?.trim() ?? '';
+  return source === 'kto_festival' ? id : `${source}:${id}`;
 }
 
 /**

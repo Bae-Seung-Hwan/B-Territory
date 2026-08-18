@@ -59,6 +59,18 @@ describe('seed-festivals-csv', () => {
         contentIdOf({ source: 'busan_festival', source_id: '2368' } as never),
       ).toBe('busan_festival:2368');
     });
+
+    // 접두사가 트림되지 않으면 CSV 공백 유무에 따라 upsert 키가 달라져,
+    // 재실행 시 같은 축제가 중복 행으로 들어간다.
+    it('출처 앞뒤 공백은 접두사에서도 제거한다', () => {
+      expect(
+        contentIdOf({ source: ' busan_festival ', source_id: '2368' } as never),
+      ).toBe('busan_festival:2368');
+    });
+
+    it('출처가 없으면 undefined가 접두사로 새지 않는다', () => {
+      expect(contentIdOf({ source_id: '2368' } as never)).toBe(':2368');
+    });
   });
 
   describe('normalizeSigunguCode', () => {
