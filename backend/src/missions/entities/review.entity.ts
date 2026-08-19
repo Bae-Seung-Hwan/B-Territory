@@ -37,6 +37,11 @@ export class Review {
   @Column({ type: 'int' })
   spotId: number;
 
+  // spots가 지워지면 함께 지운다(score_events의 SET NULL과 의도적으로 다름).
+  // 원장(score_events)은 유저·팀 단위로 집계하며 spotId는 출처 표시라 NULL이어도 행이 살아
+  // 있어야 하지만, 이 테이블은 오직 스팟별로만 조회된다(listReviews의 WHERE spotId = :spotId).
+  // spotId를 NULL로 남기면 어떤 쿼리로도 닿을 수 없는 죽은 행이 될 뿐이다.
+  // 대신 스팟이 함부로 지워지지 않도록 seed-spots-csv.ts의 삭제 조건이 이 테이블을 확인한다.
   @ManyToOne(() => Spot, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'spotId' })
   spot: Spot;

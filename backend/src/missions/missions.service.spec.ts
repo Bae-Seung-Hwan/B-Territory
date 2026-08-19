@@ -43,7 +43,10 @@ describe('MissionsService', () => {
         .mockResolvedValue({ created: true, token: 'mission-token' }),
       clearMissionDaily: jest.fn().mockResolvedValue(undefined),
     };
-    const districtsService = { getWeight: jest.fn().mockReturnValue(1) };
+    const districtsService = {
+      getWeight: jest.fn().mockReturnValue(1),
+      getCapitalMultiplier: jest.fn().mockResolvedValue(1),
+    };
     const service = new MissionsService(
       {} as never,
       dataSource as never,
@@ -116,5 +119,68 @@ describe('MissionsService', () => {
       otherError,
     );
     expect(dataSource.query).not.toHaveBeenCalled();
+  });
+
+  describe('점수 배수', () => {
+    // missions.service.ts의 REVIEW_PERSONAL_BASE(모듈 private). 바뀌면 이 테스트가 깨져서
+    // 배수 계산을 다시 확인하게 되는 편이 낫다.
+    const REVIEW_BASE = 50;
+
+    /** 트랜잭션이 성공하는 서비스를 만들고, 원장에 기록된 개인 점수를 캡처한다. */
+    function makeScoringService(weight: number, capitalMultiplier: number) {
+      const record = jest.fn();
+      const dataSource = {
+        transaction: jest.fn(
+          async (cb: (m: unknown) => Promise<unknown>) =>
+            await cb({ insert: jest.fn() }),
+        ),
+        query: jest.fn(),
+      };
+      const districtsService = {
+        getWeight: jest.fn().mockReturnValue(weight),
+        getCapitalMultiplier: jest.fn().mockResolvedValue(capitalMultiplier),
+      };
+      const service = new MissionsService(
+        {} as never,
+        dataSource as never,
+        {
+          getVisit: jest.fn().mockResolvedValue('15'),
+          markMissionDaily: jest
+            .fn()
+            .mockResolvedValue({ created: true, token: 't' }),
+          clearMissionDaily: jest.fn().mockResolvedValue(undefined),
+        } as never,
+        {} as never,
+        { applyScoreDelta: jest.fn() } as never,
+        { record } as never,
+        districtsService as never,
+      );
+      return { service, record };
+    }
+
+    it('구 가중치만 있으면 기본 점수에 가중치를 곱한다', async () => {
+      const { service, record } = makeScoringService(2, 1);
+
+      await service.submitReview(reviewDto, 'user-1', 'A');
+
+      expect(record).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ personalPoints: REVIEW_BASE * 2 }),
+      );
+    });
+
+    // 수도 배수는 구 가중치와 같은 "구 단위 배수"라 미션에도 걸린다(claims와 동일).
+    it('수도 구에서는 수도 배수까지 곱한다', async () => {
+      const { service, record } = makeScoringService(2, 1.2);
+
+      await service.submitReview(reviewDto, 'user-1', 'A');
+
+      expect(record).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          personalPoints: Math.round(REVIEW_BASE * 2 * 1.2),
+        }),
+      );
+    });
   });
 });

@@ -253,7 +253,14 @@ export class MissionsService {
     sigungucode: string | null;
     persist: (manager: EntityManager) => Promise<unknown>;
   }): Promise<number> {
-    const weight = this.districtsService.getWeight(input.sigungucode);
+    // 점수 배수 = 구 가중치 × 수도 배수 — claims와 동일하게 적용한다.
+    // 둘 다 "그 구에서 한 행동"에 걸리는 구 단위 배수라 한쪽만 빼면 근거가 없고,
+    // 그 주 활동을 수도로 모으려는 수도 지정의 목적에도 미션 방문이 기여한다.
+    const capitalMultiplier = await this.districtsService.getCapitalMultiplier(
+      input.sigungucode,
+    );
+    const weight =
+      this.districtsService.getWeight(input.sigungucode) * capitalMultiplier;
     const personal = Math.round(input.personalBase * weight);
 
     try {
