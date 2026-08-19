@@ -230,9 +230,8 @@ export class DistrictsService implements OnModuleInit {
 
   private async loadWeightCache(): Promise<void> {
     const all = await this.districtRepo.find();
-    this.weightCache = new Map(
-      all.map((d) => [d.sigunguCode, Number(d.scoreWeight)]),
-    );
+    // scoreWeight는 엔티티의 numericTransformer가 이미 number로 변환한다.
+    this.weightCache = new Map(all.map((d) => [d.sigunguCode, d.scoreWeight]));
   }
 
   /** 점령 점수 가중치. 미등록 구는 1.0. */

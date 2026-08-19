@@ -13,6 +13,23 @@ export function secondsUntilKstMidnight(now: Date = new Date()): number {
 }
 
 /**
+ * 지금의 KST 날짜를 'YYYY-MM-DD'로 반환 — 축제 진행 상태를 Postgres date 컬럼과
+ * 같은 형식으로 비교하기 위한 기준값. 서버 타임존과 무관하게 KST 하루를 쓴다.
+ */
+export function kstDateString(now: Date = new Date()): string {
+  return new Date(now.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * KST 날짜를 TourAPI 파라미터용 'YYYYMMDD'로 반환.
+ * days만큼 이전/이후로 이동한 날짜를 뽑을 수 있다(동기화 시 과거 조회 범위 계산용).
+ */
+export function kstYyyymmdd(now: Date = new Date(), offsetDays = 0): string {
+  const shifted = new Date(now.getTime() + KST_OFFSET_MS + offsetDays * DAY_MS);
+  return shifted.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+/**
  * 주어진 시각이 속한 KST 주의 시작(월요일 00:00 KST)에 해당하는 절대 시각(Date).
  * 수도 지정 크론(월요일 00:00 KST)과 같은 주 경계를 써서 "이번 주 이미 지정됐는지"를 판정한다.
  * KST는 DST가 없어 고정 오프셋 계산으로 충분하다.
