@@ -35,6 +35,9 @@
 ### 필요 작업 (TODO)
 
 - [ ] 소켓 연결 시작 시점 결정 (로그인 직후 vs 지도 화면 진입 시) 및 `SocketProvider`에 `connect()`/재연결·에러 처리 구현
+  - **`connect_error` 핸들러는 선택이 아니라 필수다.** 백엔드 인증이 라이프사이클 훅에서 네임스페이스 미들웨어로 옮겨가면서(PR #34), 인증 실패는 이제 전송 계층 끊김이 아니라 `CONNECT_ERROR` 패킷으로 온다. socket.io-client는 이 패킷을 받으면 `socket.destroy()`를 호출해 재접속 구독을 해제하므로 **자동 재접속이 돌지 않는다**(`socket.active === false`). Firebase ID 토큰은 1시간 만료라 만료 토큰으로 재접속을 시도하는 순간 소켓이 영구히 죽는다
+  - 대응: `socket.on('connect_error', ...)`에서 `getIdToken(true)`로 토큰을 갱신해 `socket.auth.token`에 다시 넣고 `socket.connect()`를 **명시적으로** 호출한다. 무한 재시도 방지를 위해 백오프·시도 횟수 제한을 함께 둔다
+  - 서버는 거부 사유를 `'unauthorized'` 고정 문구로만 보낸다(내부 에러 노출 방지). 만료 토큰인지 미가입 유저인지는 클라이언트가 구분할 수 없으므로, 토큰 갱신 후 재시도해도 계속 거부되면 로그인 화면으로 보내는 흐름이 필요하다
 - [ ] `useLocation()`을 지도 화면(`src/app/(main)/map/index.tsx`)에 연결하고, 좌표를 `location:update`로 보내는 주기/쓰로틀링 결정
 - [ ] `encounter:detected` 등 수신 이벤트를 `useOverlayStore`/`useGameStore`에 연결하는 지점 설계 (Provider 레벨 일괄 배선 권장 — PR #17 리뷰 코멘트 참고)
 - [ ] `DuelRequest`/`MiniGame`의 버튼 액션(`handleAccept` 등)을 실제 `duel:accept`/`duel:result` 소켓 emit으로 교체

@@ -81,6 +81,9 @@ export function useSocketAuth(
 ): void {
   namespace.use((socket, next) => {
     void (async () => {
+      // next()는 try 밖에서 부른다 — 안에서 부르면 next()가 동기적으로 실행하는 것이
+      // 던졌을 때 아래 catch에 걸려 next()가 두 번 호출된다.
+      let failure: Error | undefined;
       try {
         const user = await authenticateSocket(
           firebaseService,
@@ -89,12 +92,23 @@ export function useSocketAuth(
         );
         setSocketUser(socket, user);
         await onAuthenticated?.(socket, user);
-        next();
       } catch (err) {
-        // next(err)로 넘기면 클라이언트는 connect가 아니라 connect_error를 받는다.
-        logger.warn(`연결 거부: ${(err as Error).message}`);
-        next(err as Error);
+        failure = err as Error;
       }
+
+      if (!failure) {
+        next();
+        return;
+      }
+
+      // next(err)로 넘기면 클라이언트는 connect가 아니라 connect_error를 받는다.
+      //
+      // 상세 사유는 로그에만 남기고 클라이언트에는 고정 문구를 보낸다 — socket.io는
+      // 넘긴 Error의 message를 그대로 CONNECT_ERROR 패킷에 실어 보내므로(namespace.js),
+      // 그대로 넘기면 토큰 검증 과정에서 터진 DB/Firebase 내부 에러(접속 실패 호스트·포트,
+      // SQL 조각 등)가 미인증 상태의 아무에게나 노출된다.
+      logger.warn(`연결 거부: ${failure.message}`);
+      next(new Error('unauthorized'));
     })();
   });
 }

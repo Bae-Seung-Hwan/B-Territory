@@ -457,7 +457,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       .exec();
   }
 
-  /** 큐에 쌓인 알림을 원자적으로(MULTI) 읽고 비운다 — 드레인 도중 새로 들어온 알림을 잃지 않는다 */
+  /**
+   * 큐에 쌓인 알림을 원자적으로(MULTI) 읽고 비운다 — 드레인 도중 새로 들어온 알림을 잃지 않는다.
+   *
+   * 파싱은 엔트리별로 격리한다. 이 읽기는 파괴적이라(lrange + del이 먼저 확정된다) 손상된
+   * 엔트리 하나에서 throw하면 이미 삭제된 나머지 정상 알림까지 통째로 날아가고, 큐가 비어
+   * 있으므로 재접속해도 복구할 방법이 없다. 깨진 것만 버리고 나머지는 살려서 내보낸다.
+   */
   async drainNotifications(
     userId: string,
   ): Promise<{ event: string; payload: unknown }[]> {
@@ -468,8 +474,15 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       .del(key)
       .exec();
     const entries = (results?.[0]?.[1] as string[] | undefined) ?? [];
-    return entries.map(
-      (raw) => JSON.parse(raw) as { event: string; payload: unknown },
-    );
+
+    const parsed: { event: string; payload: unknown }[] = [];
+    for (const raw of entries) {
+      try {
+        parsed.push(JSON.parse(raw) as { event: string; payload: unknown });
+      } catch {
+        this.logger.warn(`손상된 알림 엔트리 폐기 (userId=${userId})`);
+      }
+    }
+    return parsed;
   }
 }

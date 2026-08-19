@@ -137,6 +137,24 @@ describe('ChatGateway', () => {
       expect(err).toBeInstanceOf(Error);
       expect(client.join).not.toHaveBeenCalled();
     });
+
+    // 회귀 가드: socket.io는 next()에 넘긴 Error의 message를 CONNECT_ERROR 패킷에 그대로
+    // 실어 보낸다. 내부 에러를 그대로 넘기면 미인증 상태의 누구나 DB 접속 정보 등을 본다.
+    it('내부 에러 메시지를 클라이언트로 넘기지 않는다', async () => {
+      const internal = 'connect ECONNREFUSED 10.0.1.5:5432';
+      firebase.verifyIdToken.mockRejectedValue(new Error(internal));
+      const warn = jest
+        .spyOn(gateway['logger'], 'warn')
+        .mockImplementation(() => undefined);
+
+      const err = await runMiddleware(mockSocket('valid-token'));
+
+      expect(err?.message).toBe('unauthorized');
+      expect(err?.message).not.toContain('ECONNREFUSED');
+      // 상세 사유는 서버 로그에는 남아야 한다.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(internal));
+      warn.mockRestore();
+    });
   });
 
   describe('메시지 릴레이', () => {
