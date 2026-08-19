@@ -1,5 +1,9 @@
 # 0001. Expo Go vs Dev Build
 
+> **상태: 전환 완료.** `react-native-maps`와 `expo-dev-client`가 도입되면서 아래 "결정"의
+> 전환 시점에 도달했다. 현재는 Expo Go를 쓰지 않으며, 개발에는 Dev Build가 필요하다.
+> 빌드 방법은 [setup.md의 "Android Dev Build"](../setup.md#android-dev-build) 참고.
+
 ## 배경
 
 Expo Go는 별도 빌드 없이 QR 스캔만으로 즉시 실행할 수 있어 개발 초기 속도가 빠르지만, 네이티브 모듈이 필요한 기능은 지원하지 않는다.
