@@ -17,6 +17,7 @@ import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
 import { FestivalsModule } from './festivals/festivals.module';
 import { HallOfFameModule } from './hall-of-fame/hall-of-fame.module';
+import { LocationLogsModule } from './location-logs/location-logs.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -79,6 +80,7 @@ import { HealthModule } from './health/health.module';
     DistrictsModule,
     FestivalsModule,
     HallOfFameModule,
+    LocationLogsModule,
     HealthModule,
   ],
   controllers: [AppController],

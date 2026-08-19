@@ -12,6 +12,7 @@ import { ClaimsProcessor } from './claims.processor';
 import { UsersModule } from '../users/users.module';
 import { ScoresModule } from '../scores/scores.module';
 import { DistrictsModule } from '../districts/districts.module';
+import { LocationLogsModule } from '../location-logs/location-logs.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { DistrictsModule } from '../districts/districts.module';
     UsersModule,
     ScoresModule,
     DistrictsModule,
+    LocationLogsModule,
   ],
   controllers: [ClaimsController],
   providers: [ClaimsService, ClaimsProcessor],
