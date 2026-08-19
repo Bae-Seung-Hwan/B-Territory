@@ -42,6 +42,7 @@ describe('RealtimeGateway 라이프사이클 훅', () => {
       {} as unknown as UsersService,
       redis as unknown as RedisService,
       { setNotifier: jest.fn() } as unknown as DuelsService,
+      { record: jest.fn() } as never,
     );
     // 훅이 예외를 삼키고 로그만 남기는지 확인해야 하므로 로거 출력을 가로챈다.
     warn = jest

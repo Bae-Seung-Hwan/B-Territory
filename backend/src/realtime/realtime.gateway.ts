@@ -31,6 +31,8 @@ import {
   ENCOUNTER_COOLDOWN_TTL,
   NOTIFICATION_QUEUE_TTL,
 } from '../duels/constants';
+import { LocationLogsService } from '../location-logs/location-logs.service';
+import { LocationServiceCode } from '../location-logs/constants';
 
 @UseFilters(WsExceptionsFilter)
 @WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
@@ -49,6 +51,7 @@ export class RealtimeGateway
     private readonly usersService: UsersService,
     private readonly redis: RedisService,
     private readonly duelsService: DuelsService,
+    private readonly locationLogs: LocationLogsService,
   ) {
     // 정리 잡(duel-cleanup)이 스윕한 결투의 참가자에게 알림을 보낼 수 있도록 콜백 주입
     this.duelsService.setNotifier((userId, event, payload) =>
@@ -144,6 +147,14 @@ export class RealtimeGateway
     @MessageBody(wsValidationPipe) dto: LocationUpdateDto,
   ) {
     const user = getSocketUser(client);
+
+    // 좌표를 전송받은 시점마다 이용사실을 기록한다(법 제16조 2항). 실시간 좌표는 빈도가 높아
+    // 큐 적재만 하고 응답을 막지 않는다 — 적재 실패는 LocationLogsService가 에러 로그로 남긴다.
+    this.locationLogs.record({
+      subjectId: user.id,
+      service: LocationServiceCode.DUEL_MATCH,
+    });
+
     await this.redis.geoAdd(user.id, dto.lat, dto.lng, user.team, client.id);
 
     const opponents = await this.duelsService.findNearbyOpponents(

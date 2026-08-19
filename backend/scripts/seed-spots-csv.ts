@@ -19,7 +19,7 @@ const CSV_PATH = path.join(__dirname, '../../data/mission_places_final.csv');
 // CSV의 sigungu_code는 소스에 따라 숫자 코드(kto_area_based)와 한글 구 이름
 // (busan_attraction)이 혼재되어 있어(DATA_README "구 코드 또는 구 이름"),
 // 구 단위 점령 집계(GROUP BY sigungucode)가 쪼개지지 않도록 코드로 정규화한다.
-const BUSAN_SIGUNGU_CODE_BY_NAME: Record<string, string> = {
+export const BUSAN_SIGUNGU_CODE_BY_NAME: Record<string, string> = {
   강서구: '1',
   금정구: '2',
   기장군: '3',
@@ -37,7 +37,9 @@ const BUSAN_SIGUNGU_CODE_BY_NAME: Record<string, string> = {
   중구: '15',
   해운대구: '16',
 };
-const VALID_SIGUNGU_CODES = new Set(Object.values(BUSAN_SIGUNGU_CODE_BY_NAME));
+export const VALID_SIGUNGU_CODES = new Set(
+  Object.values(BUSAN_SIGUNGU_CODE_BY_NAME),
+);
 const BUSAN_SIGUNGU_NAME_BY_CODE: Record<string, string> = Object.fromEntries(
   Object.entries(BUSAN_SIGUNGU_CODE_BY_NAME).map(([name, code]) => [
     code,

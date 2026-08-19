@@ -12,6 +12,7 @@
 | Firebase UID (Firebase Auth 이메일/비밀번호) | 구현됨 | `frontend/src/lib/firebase.ts`, `backend/src/common/firebase/` |
 | 포그라운드 GPS 위치 (실시간, 미저장) | 구현됨 — DB에 위치 이력 저장 안 함 | `frontend/src/hooks/use-location.ts` |
 | 구역 점령 기록 (스팟ID·팀·유저ID, 좌표 아님) | 구현됨 | `backend/src/claims/entities/*.entity.ts` |
+| 위치정보 이용·제공사실 확인자료 (좌표 아님, 이용한 "사실"의 기록) | 구현됨 — 아래 4장 | `backend/src/location-logs/` |
 | 카카오맵 WebView 렌더링 (카카오 SDK에 위치 미전달, 지도 렌더용) | 구현됨 | `frontend/src/components/map/KakaoMapView.tsx` |
 | 백그라운드 위치 추적 | **미구현** (설계 단계) | `frontend/docs/architecture.md` |
 | 사진 촬영/인증 (카메라) | **미구현**, 패키지 미설치 | — |
@@ -57,7 +58,34 @@
 | UGC(채팅) 신고/차단 기능 | **필수** (1.2) — 구현됨, `docs/community-policy.md` | 권장 — 구현됨 |
 | 소셜 로그인 병행 시 Apple 로그인 필수 여부 | Google 로그인 제공 시 Apple 로그인 필수 (가이드라인 4.8) | 해당 없음 |
 
-## 4. 미결 사항 (법률 자문 필요)
+## 4. 위치정보 이용·제공사실 확인자료 (법 제16조 2항)
+
+위치정보법 제16조 2항은 이용자의 위치정보를 **전송받을 때마다** 그 사실을 위치정보시스템에 자동으로 기록하고 6개월 이상 보존하도록 요구한다. 좌표 자체를 저장하라는 요구가 아니라 "이용한 사실"의 기록이므로, 좌표를 저장하지 않는 현재 구조에서도 별도로 이행해야 한다.
+
+구현: `backend/src/location-logs/`, 테이블 `location_usage_logs`.
+
+| 신고서 양식 요구 항목 | 컬럼 | 값 |
+|---|---|---|
+| 대상 | `subjectId` | 이용자 UUID |
+| 취득경로 | `acquisitionPath` | `DEVICE_GPS` — 이용자 단말 GPS/네트워크 측위로 직접 수집. 외부 위치정보사업자 경유 없음 |
+| 제공서비스 | `service` | `SVC-01` 관광지 방문 인증(점령) / `SVC-02` 실시간 이용자 매칭(결투) |
+| 제공받는자 | `recipient` | 항상 NULL — 개인위치정보의 제3자 제공 없는 서비스 |
+| 이용일시 | `usedAt` | `timestamptz` (초 이상 정밀도) |
+
+기록 지점은 좌표를 전송받는 두 경로다.
+
+- `claims.service.ts` `visit()` — 페널티·거리 미달 등으로 인증이 **실패해도** 기록한다. 좌표를 전송받은 사실은 이미 발생했기 때문이며, 그래서 모든 검증보다 먼저 호출한다.
+- `realtime.gateway.ts` `location:update` — 결투 매칭용 실시간 좌표 수신 시점.
+
+`score_events`(점수 원장)로 이 요건을 갈음할 수 없다. 점수 원장은 점령이 성공했을 때만 행이 생겨 실패한 인증 시도와 실시간 좌표 수신이 통째로 누락된다.
+
+운영 특성:
+
+- 기록은 Bull 큐(`location-log`)를 통해 비동기 적재한다. 실시간 좌표는 이용자당 수 초 간격으로 들어오므로 핫패스에서 INSERT를 기다리지 않는다. 잡은 5회 재시도되며, 큐 적재 자체가 실패하면 에러 로그로 남긴다(법정 기록이라 조용히 삼키지 않는다).
+- 보존기간 만료분은 매일 04:00 KST `purge` 잡이 삭제한다. 보존기간(`RETENTION_INTERVAL`)은 법정 최소치인 6개월.
+- `users`에 FK를 걸지 않는다 — 이용자가 탈퇴해도 기록 당시의 식별값이 남아야 하는 법정 자료다.
+
+## 5. 미결 사항 (법률 자문 필요)
 
 - [ ] 위치기반서비스사업자 신고 실제 필요 여부 및 절차 확인
 - [ ] 가입 최소 연령 확정

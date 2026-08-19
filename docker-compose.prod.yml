@@ -101,6 +101,25 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # 마이그레이션 전용 일회성 서비스. backend와 같은 이미지를 쓰되 앱을 띄우지 않고
+  # migration:run만 실행한다.
+  #
+  # backend를 `run`으로 재사용하지 않는 이유: backend에는 고정 container_name이 있는데
+  # compose 버전에 따라 일회성 `run` 컨테이너에도 그 이름을 적용해, 이미 돌고 있는
+  # backend와 이름이 충돌한다("container name already in use"). 그러면 아무것도 떠 있지
+  # 않은 최초 배포만 성공하고 이후 재배포가 매번 실패한다. 위 seed 서비스가 같은 이유로
+  # container_name을 두지 않는다.
+  #
+  # 실행: docker compose --env-file backend/.env -f docker-compose.prod.yml --profile migrate run --rm migrate
+  migrate:
+    <<: *backend-base
+    profiles: ['migrate']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ['npm', 'run', 'migration:run']
+    restart: 'no'
+
   # 관광지 CSV 일회성 시딩 전용 서비스. profiles로 묶여 있어 `up`으로는 뜨지 않고
   # `--profile seed run`으로 명시 실행할 때만 동작한다 — 상시 backend에 data 마운트를
   # 붙이지 않기 위해 분리했다(앱 런타임은 data/ 불필요). backend와 동일 이미지를 쓴다.
