@@ -3,6 +3,7 @@ import { ChatGateway } from './chat.gateway';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
+import { ModerationService } from '../moderation/moderation.service';
 import { WsExceptionsFilter } from '../common/filters/ws-exception.filter';
 import { ErrorCode } from '../common/errors/error-code';
 
@@ -13,18 +14,23 @@ interface MockSocket {
   join: jest.Mock;
   disconnect: jest.Mock;
   to: jest.Mock;
+  except: jest.Mock;
   roomEmit: jest.Mock;
 }
 
 function mockSocket(token?: string): MockSocket {
   const roomEmit = jest.fn();
+  // socket.io의 to()는 BroadcastOperator를 돌려주고 except()가 다시 체이닝된다.
+  // except에 넘어온 값을 확인할 수 있도록 캡처해 둔다.
+  const except = jest.fn(() => ({ emit: roomEmit }));
   return {
     id: 'sock-1',
     handshake: { auth: { token } },
     data: {},
     join: jest.fn(),
     disconnect: jest.fn(),
-    to: jest.fn(() => ({ emit: roomEmit })),
+    to: jest.fn(() => ({ emit: roomEmit, except })),
+    except,
     roomEmit,
   };
 }
@@ -34,15 +40,19 @@ describe('ChatGateway', () => {
   let firebase: { verifyIdToken: jest.Mock };
   let users: { findByFirebaseUid: jest.Mock };
   let redis: { consumeRateLimit: jest.Mock };
+  let moderation: { getBlockedBy: jest.Mock };
 
   beforeEach(() => {
     firebase = { verifyIdToken: jest.fn() };
     users = { findByFirebaseUid: jest.fn() };
     redis = { consumeRateLimit: jest.fn().mockResolvedValue(true) };
+    // 기본값: 아무도 발신자를 차단하지 않음 → 룸 브로드캐스트 그대로.
+    moderation = { getBlockedBy: jest.fn().mockResolvedValue([]) };
     gateway = new ChatGateway(
       firebase as unknown as FirebaseService,
       users as unknown as UsersService,
       redis as unknown as RedisService,
+      moderation as unknown as ModerationService,
     );
   });
 
@@ -235,5 +245,71 @@ describe('ChatGateway', () => {
       (Reflect.getMetadata('__exceptionFilters__', ChatGateway) as unknown[]) ??
       [];
     expect(filters).toContain(WsExceptionsFilter);
+  });
+
+  describe('차단 필터링', () => {
+    /** 팀 룸에 소켓 두 개가 붙어 있는 네임스페이스를 심는다. */
+    const attachNamespace = () => {
+      gateway.server = {
+        sockets: new Map<string, { data: { user?: { id: string } } }>([
+          ['sock-blocker', { data: { user: { id: 'blocker-1' } } }],
+          ['sock-other', { data: { user: { id: 'other-1' } } }],
+        ]),
+      } as never;
+    };
+
+    const authedSocket = () => {
+      const client = mockSocket('valid-token');
+      client.data.user = { id: 'sender-1', team: 'A', nickname: '발신자' };
+      return client;
+    };
+
+    it('아무도 차단하지 않았으면 제외 목록이 비어 룸 전체로 나간다', async () => {
+      attachNamespace();
+      const client = authedSocket();
+
+      await gateway.handleChatMessage(client as never, { text: '안녕' });
+
+      expect(client.to).toHaveBeenCalledWith('team:A');
+      expect(client.except).toHaveBeenCalledWith([]);
+      expect(client.roomEmit).toHaveBeenCalled();
+    });
+
+    // 클라이언트 필터링에만 맡기면 차단한 상대의 메시지가 기기까지는 도달한다.
+    // 서버에서 끊어야 실제로 전달되지 않는다.
+    it('발신자를 차단한 팀원의 소켓을 릴레이에서 제외한다', async () => {
+      attachNamespace();
+      moderation.getBlockedBy.mockResolvedValue(['blocker-1']);
+      const client = authedSocket();
+
+      await gateway.handleChatMessage(client as never, { text: '안녕' });
+
+      expect(moderation.getBlockedBy).toHaveBeenCalledWith('sender-1');
+      expect(client.except).toHaveBeenCalledWith(['sock-blocker']);
+    });
+
+    // 차단한 상대가 지도에 계속 뜨면 차단이 무의미하다.
+    it('위치 공유에도 같은 차단 규칙이 적용된다', async () => {
+      attachNamespace();
+      moderation.getBlockedBy.mockResolvedValue(['blocker-1']);
+      const client = authedSocket();
+
+      await gateway.handleTeamLocation(client as never, {
+        lat: 35.1,
+        lng: 129.0,
+      });
+
+      expect(client.except).toHaveBeenCalledWith(['sock-blocker']);
+    });
+
+    it('접속하지 않은 차단자는 제외 목록에 들어가지 않는다', async () => {
+      attachNamespace();
+      moderation.getBlockedBy.mockResolvedValue(['offline-blocker']);
+      const client = authedSocket();
+
+      await gateway.handleChatMessage(client as never, { text: '안녕' });
+
+      expect(client.except).toHaveBeenCalledWith([]);
+    });
   });
 });

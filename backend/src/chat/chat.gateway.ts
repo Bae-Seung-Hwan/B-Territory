@@ -21,6 +21,7 @@ import {
 } from '../common/ws/ws-auth';
 import { ChatMessageDto } from './dto/chat-message.dto';
 import { TeamLocationDto } from './dto/team-location.dto';
+import { ModerationService } from '../moderation/moderation.service';
 
 // 릴레이 도배 방지 레이트리밋(고정 윈도우). 위치는 GPS 갱신이라 좀 더 여유롭게.
 const MSG_LIMIT = 5;
@@ -53,7 +54,30 @@ export class ChatGateway implements OnGatewayInit {
     private readonly firebaseService: FirebaseService,
     private readonly usersService: UsersService,
     private readonly redis: RedisService,
+    private readonly moderation: ModerationService,
   ) {}
+
+  /**
+   * 발신자를 차단한 팀원의 소켓 id 목록. 릴레이에서 `.except()`로 제외한다.
+   *
+   * 차단을 클라이언트 필터링에만 맡기지 않는 이유는, 그 경우 차단한 상대의 메시지가
+   * 여전히 기기까지 도달하기 때문이다. 서버에서 끊으면 실제로 전달되지 않는다.
+   *
+   * 아무도 차단하지 않은 경우(대부분)는 빈 배열이라 룸 브로드캐스트 그대로 나간다 —
+   * 핫패스에 추가 비용이 사실상 없다.
+   */
+  private async blockerSocketIds(senderId: string): Promise<string[]> {
+    const blockerIds = await this.moderation.getBlockedBy(senderId);
+    if (blockerIds.length === 0) return [];
+
+    const blocked = new Set(blockerIds);
+    const socketIds: string[] = [];
+    for (const [socketId, socket] of this.server.sockets) {
+      const user = (socket.data as { user?: { id: string } }).user;
+      if (user && blocked.has(user.id)) socketIds.push(socketId);
+    }
+    return socketIds;
+  }
 
   private roomOf(team: string): string {
     return `team:${team}`;
@@ -109,7 +133,9 @@ export class ChatGateway implements OnGatewayInit {
     const user = getSocketUser(client);
     await this.assertRate('msg', user.id, MSG_LIMIT, MSG_WINDOW_SEC);
     // 발신자를 제외한 같은 팀에게만 릴레이 (발신자는 낙관적 UI로 자기 메시지를 이미 표시).
-    client.to(this.roomOf(user.team)).emit('chat:message', {
+    // 발신자를 차단한 팀원도 제외한다 — 차단은 서버에서 끊어야 실제로 전달되지 않는다.
+    const excluded = await this.blockerSocketIds(user.id);
+    client.to(this.roomOf(user.team)).except(excluded).emit('chat:message', {
       userId: user.id,
       nickname: user.nickname,
       team: user.team,
@@ -126,13 +152,18 @@ export class ChatGateway implements OnGatewayInit {
   ) {
     const user = getSocketUser(client);
     await this.assertRate('loc', user.id, LOC_LIMIT, LOC_WINDOW_SEC);
-    client.to(this.roomOf(user.team)).emit('team:location', {
-      userId: user.id,
-      nickname: user.nickname,
-      lat: dto.lat,
-      lng: dto.lng,
-      at: new Date().toISOString(),
-    });
+    // 위치 공유도 같은 차단 규칙을 따른다 — 차단한 상대가 지도에 계속 뜨면 차단이 무의미하다.
+    const excludedLoc = await this.blockerSocketIds(user.id);
+    client
+      .to(this.roomOf(user.team))
+      .except(excludedLoc)
+      .emit('team:location', {
+        userId: user.id,
+        nickname: user.nickname,
+        lat: dto.lat,
+        lng: dto.lng,
+        at: new Date().toISOString(),
+      });
     return { status: 'ok' };
   }
 }
