@@ -25,8 +25,11 @@
    > 서버에만 두어야 하는 파일은 반드시 gitignore 대상이어야 한다.
 2. 현재 이미지를 `b-territory-prod-backend:rollback`으로 태깅 — 실패 시 재빌드 없이 되돌리기 위함.
 3. `docker compose ... build` — 백엔드 이미지 빌드.
-4. `docker compose ... run --rm backend npm run migration:run` — **앱 기동 전에** 마이그레이션.
+4. `docker compose ... --profile migrate run --rm migrate` — **앱 기동 전에** 마이그레이션.
    일회성 컨테이너라 최초 배포(빈 DB)에서도 앱 부팅 시딩에 걸리지 않고 테이블을 먼저 만든다.
+   > 상시 `backend` 서비스를 `run`으로 재사용하지 않는다 — 그 서비스에는 `container_name`이
+   > 고정돼 있어 이미 떠 있는 컨테이너와 이름이 충돌한다. `migrate`는 `seed`와 마찬가지로
+   > 이름 없는 전용 서비스이며 `profiles`로 묶여 있어 일반 `up`으로는 뜨지 않는다.
 5. `docker compose ... up -d --remove-orphans --wait --wait-timeout 120` — backend + caddy 기동.
    `--wait`로 healthcheck가 healthy가 될 때까지 기다리고, 제한시간 내 못 되면 스텝을 실패시킨다.
 6. 실패 시: 서비스 상태·백엔드 로그 덤프 → **직전 커밋·직전 이미지로 자동 롤백**.

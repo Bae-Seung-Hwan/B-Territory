@@ -40,13 +40,25 @@ docker compose --env-file backend/.env -f docker-compose.prod.yml up -d --build
 
 ## 마이그레이션 (스키마 생성/변경)
 
-`NODE_ENV=production`에서는 TypeORM `synchronize`가 꺼지므로 스키마가 자동 생성되지 않는다. 배포 후 마이그레이션을 실행해야 테이블이 만들어진다:
+`NODE_ENV=production`에서는 TypeORM `synchronize`가 꺼지므로 스키마가 자동 생성되지 않는다. 배포 후 마이그레이션을 실행해야 테이블이 만들어진다.
+
+**자동 배포(`deploy.yml`)가 이미 이 단계를 수행하므로 평소에는 수동 실행이 필요 없다.** 워크플로는 이미지 빌드 직후, `up` 이전에 아래와 동일한 명령을 돌린다. 아래는 배포 실패 복구나 수동 점검 등으로 직접 돌려야 할 때의 방법이다.
+
+시딩과 마찬가지로 **일회성 `migrate` 서비스**로 실행한다(`--profile migrate`로만 뜨고, 끝나면 `--rm`으로 정리):
+
+```bash
+docker compose --env-file backend/.env -f docker-compose.prod.yml --profile migrate run --rm migrate
+```
+
+> `migrate`는 상시 `backend`와 같은 이미지·환경을 쓰지만 `container_name`이 없다. 상시 `backend`에는 `container_name: b-territory-prod-backend`가 고정돼 있어서, 일회성 실행(`run`)에 그 서비스를 쓰면 이미 떠 있는 컨테이너와 이름이 충돌한다(`Conflict. The container name ... is already in use`). 그래서 `seed`와 동일하게 이름 없는 전용 서비스를 둔다 — 일회성 실행에는 `container_name`을 붙이지 않는다는 규칙이다.
+
+`backend` 컨테이너가 이미 떠 있는 상태라면 그 안에서 바로 실행해도 된다:
 
 ```bash
 docker compose --env-file backend/.env -f docker-compose.prod.yml exec backend npm run migration:run
 ```
 
-> 마이그레이션 인프라(`feature/Bae/migration-setup`, PR #20)가 develop에 merge된 뒤에만 위 명령이 동작한다. #20 이전에는 스키마가 없어 `/api/spots` 등이 500(`relation "spots" does not exist`)이 된다 — **#20 선행 merge가 이 배포의 실사용 전제 조건이다.**
+> 다만 `exec`는 backend가 실행 중일 때만 동작한다. 최초 배포처럼 스키마가 없는 상태에서는 `up` 이전에 마이그레이션을 돌려야 하므로 위의 `migrate` 서비스를 쓴다.
 
 ## 관광지 데이터 시딩
 
@@ -56,7 +68,7 @@ docker compose --env-file backend/.env -f docker-compose.prod.yml exec backend n
 docker compose --env-file backend/.env -f docker-compose.prod.yml --profile seed run --rm seed
 ```
 
-> CSV는 이미지에 포함되지 않고(빌드 컨텍스트가 `backend/`라 레포 루트의 `data/`를 담지 못함), `seed` 서비스가 호스트 레포의 `data/`를 컨테이너 `/data`로 읽기전용 마운트해 제공한다. 따라서 **레포를 clone한 디렉터리에서(즉 `data/`가 존재하는 상태로) 컴포즈를 실행**해야 시딩이 동작한다. 마이그레이션(`migration:run`)을 먼저 실행해 테이블이 존재해야 한다. `seed`는 `profiles`로 묶여 있어 일반 `up`으로는 뜨지 않으므로, 상시 `backend` 컨테이너에는 `data/` 마운트가 붙지 않는다.
+> CSV는 이미지에 포함되지 않고(빌드 컨텍스트가 `backend/`라 레포 루트의 `data/`를 담지 못함), `seed` 서비스가 호스트 레포의 `data/`를 컨테이너 `/data`로 읽기전용 마운트해 제공한다. 따라서 **레포를 clone한 디렉터리에서(즉 `data/`가 존재하는 상태로) 컴포즈를 실행**해야 시딩이 동작한다. 마이그레이션(위 `migrate` 서비스)을 먼저 실행해 테이블이 존재해야 한다. `seed`는 `profiles`로 묶여 있어 일반 `up`으로는 뜨지 않으므로, 상시 `backend` 컨테이너에는 `data/` 마운트가 붙지 않는다.
 
 ## 알려진 제약 / 참고
 
