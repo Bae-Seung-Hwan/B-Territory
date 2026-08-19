@@ -35,9 +35,10 @@ export enum ReportStatus {
  * 신고자·피신고자 FK는 SET NULL이다. 한쪽이 탈퇴해도 접수 기록과 스냅샷은 남아야
  * "적시 대응"의 근거가 된다(원장과 같은 성격).
  */
+// 인덱스·FK 이름을 명시하는 이유는 user-block.entity.ts 주석 참고.
 @Entity('reports')
-@Index(['targetUserId', 'createdAt']) // 특정 유저에 대한 신고 누적 조회
-@Index(['status', 'createdAt']) // 미처리 신고 큐
+@Index('IDX_reports_target_createdAt', ['targetUserId', 'createdAt']) // 유저별 신고 누적
+@Index('IDX_reports_status_createdAt', ['status', 'createdAt']) // 미처리 신고 큐
 export class Report {
   @PrimaryGeneratedColumn()
   id: number;
@@ -46,18 +47,26 @@ export class Report {
   reporterId: string | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'reporterId' })
+  @JoinColumn({
+    name: 'reporterId',
+    foreignKeyConstraintName: 'FK_reports_reporter',
+  })
   reporter: User | null;
 
   @Column({ type: 'uuid', nullable: true })
   targetUserId: string | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'targetUserId' })
+  @JoinColumn({
+    name: 'targetUserId',
+    foreignKeyConstraintName: 'FK_reports_target',
+  })
   targetUser: User | null;
 
   // FK가 끊겨도 누구를 신고한 건지 남도록 닉네임을 비정규화해 둔다.
-  @Column({ length: 50, nullable: true })
+  // type을 명시해야 한다 — `string | null`은 emit되는 design:type이 Object라
+  // TypeORM이 컬럼 타입을 추론하지 못하고 DataTypeNotSupportedError로 죽는다.
+  @Column({ type: 'varchar', length: 50, nullable: true })
   targetNickname: string | null;
 
   @Column({ type: 'enum', enum: ReportReason })

@@ -19,9 +19,11 @@ import { User } from '../../users/entities/user.entity';
  * 탈퇴 대응: 양쪽 FK 모두 CASCADE다. 차단 관계는 두 계정이 모두 존재할 때만 의미가 있는
  * 파생 데이터라, 한쪽이 사라지면 관계 자체가 사라지는 게 맞다(원장처럼 보존할 근거가 없다).
  */
+// 인덱스·제약 이름을 명시한다 — 이름을 생략하면 TypeORM이 해시 이름을 생성해
+// 손으로 쓴 마이그레이션과 어긋나고, CI의 마이그레이션 정합성 검사가 드리프트로 잡는다.
 @Entity('user_blocks')
-@Unique(['blockerId', 'blockedId'])
-@Index(['blockedId']) // "나를 차단한 사람" 역조회 — 릴레이 필터가 쓴다
+@Unique('UQ_user_blocks_pair', ['blockerId', 'blockedId'])
+@Index('IDX_user_blocks_blockedId', ['blockedId']) // "나를 차단한 사람" 역조회 — 릴레이 필터가 쓴다
 export class UserBlock {
   @PrimaryGeneratedColumn()
   id: number;
@@ -30,14 +32,20 @@ export class UserBlock {
   blockerId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'blockerId' })
+  @JoinColumn({
+    name: 'blockerId',
+    foreignKeyConstraintName: 'FK_user_blocks_blocker',
+  })
   blocker: User;
 
   @Column({ type: 'uuid' })
   blockedId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'blockedId' })
+  @JoinColumn({
+    name: 'blockedId',
+    foreignKeyConstraintName: 'FK_user_blocks_blocked',
+  })
   blocked: User;
 
   @CreateDateColumn({ type: 'timestamptz' })
