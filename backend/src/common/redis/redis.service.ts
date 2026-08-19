@@ -353,6 +353,30 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(`penalty:${userId}`);
   }
 
+  /**
+   * 탈퇴 시 해당 유저의 Redis 흔적을 모두 지운다.
+   *
+   * 전부 TTL이 걸려 있어 언젠가는 사라지지만, 탈퇴는 "지금 지운다"가 요구사항이라
+   * 명시적으로 정리한다. 특히 geo:users에 좌표가 남아 있으면 탈퇴한 유저가 다른
+   * 이용자의 결투 탐지 결과에 계속 잡힌다.
+   *
+   * 실패해도 탈퇴 자체를 되돌리지 않는다 — DB에서 계정이 사라진 뒤라 남은 키는
+   * 참조할 대상이 없고, 전부 TTL로 소멸한다. 호출측이 로그만 남긴다.
+   */
+  async purgeUserKeys(userId: string): Promise<void> {
+    await this.geoRemove(userId);
+    await this.client
+      .pipeline()
+      .del(`penalty:${userId}`)
+      .del(this.notifyKey(userId))
+      .exec();
+    // 일일 점령 키는 스팟별로 흩어져 있어 패턴으로 지운다.
+    // NOTE: 미션 API(#33)가 머지되면 visit:*·mission:daily:* 도 여기에 추가해야 한다.
+    await this.deleteByPattern(`claim:daily:${userId}:*`);
+    // 조우 쿨다운은 두 유저 id를 정렬해 만든 쌍 키라 어느 자리에 오는지 알 수 없다.
+    await this.deleteByPattern(`encounter:cooldown:*${userId}*`);
+  }
+
   async hasPenalty(userId: string): Promise<boolean> {
     const value = await this.client.get(`penalty:${userId}`);
     return value !== null;
