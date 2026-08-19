@@ -20,14 +20,11 @@ import {
   wsValidationPipe,
 } from '../common/ws/ws-auth';
 import { ChatMessageDto } from './dto/chat-message.dto';
-import { TeamLocationDto } from './dto/team-location.dto';
 import { ModerationService } from '../moderation/moderation.service';
 
-// 릴레이 도배 방지 레이트리밋(고정 윈도우). 위치는 GPS 갱신이라 좀 더 여유롭게.
+// 릴레이 도배 방지 레이트리밋(고정 윈도우).
 const MSG_LIMIT = 5;
 const MSG_WINDOW_SEC = 5;
-const LOC_LIMIT = 10;
-const LOC_WINDOW_SEC = 10;
 
 /**
  * 팀(국가) 채팅·위치 공유 게이트웨이. 핸드셰이크에서 인증하며 팀 룸에 join하고, 메시지/
@@ -36,8 +33,12 @@ const LOC_WINDOW_SEC = 10;
  *
  * NOTE(스케일아웃): 룸 릴레이가 인스턴스 로컬이므로 다중 인스턴스 배포 시에는
  * socket.io Redis 어댑터가 필요하다(realtime 게이트웨이와 동일한 단일 인스턴스 전제).
- * NOTE(위치): team:location은 결투 탐지용 realtime의 location:update와 목적·수신자가
- * 달라 별도 채널로 둔다. 프론트는 두 채널에 위치를 중복 전송하지 않도록 조율한다.
+ * NOTE(위치): 팀원 간 위치 공유(team:location)는 v1에서 제외했다. 좌표를 다른 이용자에게
+ * 릴레이하는 것은 위치정보법상 개인위치정보의 제3자 제공에 해당해, 사업자 신고서
+ * (docs/lbs-service-description.md 6장 "제3자 제공하지 않습니다")와 충돌하고 제19조의
+ * 사전 동의·매회 통보 의무가 따라붙는다. 결투 매칭용 좌표(realtime의 location:update)는
+ * 서버가 매칭에만 쓰고 남에게 넘기지 않아 해당되지 않는다. 재도입 시 신고서 변경과
+ * 동의 절차 설계가 선행되어야 한다.
  */
 @WebSocketGateway({ namespace: '/chat', cors: { origin: '*' } })
 // realtime 게이트웨이와 같은 필터를 건다. 없으면 NestJS 기본 필터가 예외를
@@ -57,26 +58,25 @@ export class ChatGateway implements OnGatewayInit {
     private readonly moderation: ModerationService,
   ) {}
 
+  /** 유저 전용 룸 — 차단 필터가 소켓을 찾지 않고 룸 이름만으로 제외할 수 있게 한다. */
+  private userRoomOf(userId: string): string {
+    return `user:${userId}`;
+  }
+
   /**
-   * 발신자를 차단한 팀원의 소켓 id 목록. 릴레이에서 `.except()`로 제외한다.
+   * 발신자를 차단한 팀원의 **룸 이름** 목록. 릴레이에서 `.except()`로 제외한다.
    *
    * 차단을 클라이언트 필터링에만 맡기지 않는 이유는, 그 경우 차단한 상대의 메시지가
    * 여전히 기기까지 도달하기 때문이다. 서버에서 끊으면 실제로 전달되지 않는다.
    *
-   * 아무도 차단하지 않은 경우(대부분)는 빈 배열이라 룸 브로드캐스트 그대로 나간다 —
-   * 핫패스에 추가 비용이 사실상 없다.
+   * 소켓 Map을 순회하지 않는다 — 순회하면 차단자가 한 명이라도 있는 순간 매 메시지마다
+   * 네임스페이스 전체를 훑게 되어(O(접속자수 × 메시지수)), 하필 괴롭힘을 당해 차단을
+   * 걸어둔 이용자에게서 가장 느려진다. 핸드셰이크에서 각 소켓을 user:<id> 룸에 넣어두고
+   * 그 이름을 그대로 넘겨 socket.io가 처리하게 한다(O(차단자수)).
    */
-  private async blockerSocketIds(senderId: string): Promise<string[]> {
+  private async blockerRooms(senderId: string): Promise<string[]> {
     const blockerIds = await this.moderation.getBlockedBy(senderId);
-    if (blockerIds.length === 0) return [];
-
-    const blocked = new Set(blockerIds);
-    const socketIds: string[] = [];
-    for (const [socketId, socket] of this.server.sockets) {
-      const user = (socket.data as { user?: { id: string } }).user;
-      if (user && blocked.has(user.id)) socketIds.push(socketId);
-    }
-    return socketIds;
+    return blockerIds.map((id) => this.userRoomOf(id));
   }
 
   private roomOf(team: string): string {
@@ -95,11 +95,21 @@ export class ChatGateway implements OnGatewayInit {
     limit: number,
     windowSec: number,
   ): Promise<void> {
-    const allowed = await this.redis.consumeRateLimit(
-      `chat:rate:${kind}:${userId}`,
-      limit,
-      windowSec,
-    );
+    // Redis 장애는 통과시킨다(fail-open). 레이트리밋은 도배 방지용 편의 장치인데,
+    // 여기서 예외가 새면 Redis가 죽어 있는 동안 모든 메시지가 실패해 채팅이 통째로
+    // 멈춘다 — 도배보다 서비스 중단이 훨씬 나쁘다.
+    let allowed = true;
+    try {
+      allowed = await this.redis.consumeRateLimit(
+        `chat:rate:${kind}:${userId}`,
+        limit,
+        windowSec,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `레이트리밋 확인 실패, 통과시킴: ${(err as Error).message}`,
+      );
+    }
     if (!allowed) {
       throw new WsException(
         errBody(
@@ -121,7 +131,13 @@ export class ChatGateway implements OnGatewayInit {
       this.firebaseService,
       this.usersService,
       this.logger,
-      (socket, user) => socket.join(this.roomOf(user.team)),
+      // await한다 — join이 핸드셰이크 안에서 끝나야 connect 직후 도착한 메시지를 놓치지 않고,
+      // 차단 제외도 첫 메시지부터 적용된다.
+      async (socket, user) => {
+        await socket.join(this.roomOf(user.team));
+        // 차단 필터가 이 룸 이름으로 수신자를 제외한다(blockerRooms 참고).
+        await socket.join(this.userRoomOf(user.id));
+      },
     );
   }
 
@@ -134,7 +150,7 @@ export class ChatGateway implements OnGatewayInit {
     await this.assertRate('msg', user.id, MSG_LIMIT, MSG_WINDOW_SEC);
     // 발신자를 제외한 같은 팀에게만 릴레이 (발신자는 낙관적 UI로 자기 메시지를 이미 표시).
     // 발신자를 차단한 팀원도 제외한다 — 차단은 서버에서 끊어야 실제로 전달되지 않는다.
-    const excluded = await this.blockerSocketIds(user.id);
+    const excluded = await this.blockerRooms(user.id);
     client.to(this.roomOf(user.team)).except(excluded).emit('chat:message', {
       userId: user.id,
       nickname: user.nickname,
@@ -142,28 +158,6 @@ export class ChatGateway implements OnGatewayInit {
       text: dto.text,
       at: new Date().toISOString(),
     });
-    return { status: 'ok' };
-  }
-
-  @SubscribeMessage('team:location')
-  async handleTeamLocation(
-    @ConnectedSocket() client: Socket,
-    @MessageBody(wsValidationPipe) dto: TeamLocationDto,
-  ) {
-    const user = getSocketUser(client);
-    await this.assertRate('loc', user.id, LOC_LIMIT, LOC_WINDOW_SEC);
-    // 위치 공유도 같은 차단 규칙을 따른다 — 차단한 상대가 지도에 계속 뜨면 차단이 무의미하다.
-    const excludedLoc = await this.blockerSocketIds(user.id);
-    client
-      .to(this.roomOf(user.team))
-      .except(excludedLoc)
-      .emit('team:location', {
-        userId: user.id,
-        nickname: user.nickname,
-        lat: dto.lat,
-        lng: dto.lng,
-        at: new Date().toISOString(),
-      });
     return { status: 'ok' };
   }
 }

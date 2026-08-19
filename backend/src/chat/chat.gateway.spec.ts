@@ -186,22 +186,6 @@ describe('ChatGateway', () => {
       );
     });
 
-    it('team:location을 같은 팀 룸으로 릴레이한다', async () => {
-      const client = mockSocket('t');
-      client.data.user = { id: 'u1', team: 'B', nickname: '유저B' };
-
-      await gateway.handleTeamLocation(client as never, {
-        lat: 35.1,
-        lng: 129.0,
-      });
-
-      expect(client.to).toHaveBeenCalledWith('team:B');
-      expect(client.roomEmit).toHaveBeenCalledWith(
-        'team:location',
-        expect.objectContaining({ userId: 'u1', lat: 35.1, lng: 129.0 }),
-      );
-    });
-
     it('레이트리밋 초과 시 릴레이하지 않고 예외', async () => {
       redis.consumeRateLimit.mockResolvedValue(false);
       const client = mockSocket('t');
@@ -277,7 +261,7 @@ describe('ChatGateway', () => {
 
     // 클라이언트 필터링에만 맡기면 차단한 상대의 메시지가 기기까지는 도달한다.
     // 서버에서 끊어야 실제로 전달되지 않는다.
-    it('발신자를 차단한 팀원의 소켓을 릴레이에서 제외한다', async () => {
+    it('발신자를 차단한 팀원을 릴레이에서 제외한다', async () => {
       attachNamespace();
       moderation.getBlockedBy.mockResolvedValue(['blocker-1']);
       const client = authedSocket();
@@ -285,31 +269,20 @@ describe('ChatGateway', () => {
       await gateway.handleChatMessage(client as never, { text: '안녕' });
 
       expect(moderation.getBlockedBy).toHaveBeenCalledWith('sender-1');
-      expect(client.except).toHaveBeenCalledWith(['sock-blocker']);
+      // 소켓을 찾아 순회하지 않고 유저 룸 이름을 그대로 넘긴다(O(차단자수)).
+      expect(client.except).toHaveBeenCalledWith(['user:blocker-1']);
     });
 
-    // 차단한 상대가 지도에 계속 뜨면 차단이 무의미하다.
-    it('위치 공유에도 같은 차단 규칙이 적용된다', async () => {
+    // 미접속 차단자의 룸은 비어 있어 socket.io가 알아서 아무도 제외하지 않는다.
+    // 접속 여부를 서버가 미리 확인할 필요가 없다는 점이 룸 방식의 이점이다.
+    it('차단자 수만큼만 룸 이름을 만든다', async () => {
       attachNamespace();
-      moderation.getBlockedBy.mockResolvedValue(['blocker-1']);
-      const client = authedSocket();
-
-      await gateway.handleTeamLocation(client as never, {
-        lat: 35.1,
-        lng: 129.0,
-      });
-
-      expect(client.except).toHaveBeenCalledWith(['sock-blocker']);
-    });
-
-    it('접속하지 않은 차단자는 제외 목록에 들어가지 않는다', async () => {
-      attachNamespace();
-      moderation.getBlockedBy.mockResolvedValue(['offline-blocker']);
+      moderation.getBlockedBy.mockResolvedValue(['b1', 'b2']);
       const client = authedSocket();
 
       await gateway.handleChatMessage(client as never, { text: '안녕' });
 
-      expect(client.except).toHaveBeenCalledWith([]);
+      expect(client.except).toHaveBeenCalledWith(['user:b1', 'user:b2']);
     });
   });
 });

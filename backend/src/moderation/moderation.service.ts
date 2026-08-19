@@ -38,6 +38,20 @@ export class ModerationService {
     return `chat:blockedby:${userId}`;
   }
 
+  /**
+   * 차단 목록의 버전. block/unblock마다 올라간다.
+   *
+   * 캐시 무효화(DEL)만으로는 부족하다 — DB를 읽고 있는 요청과 차단이 겹치면
+   * (1) 읽기가 캐시 미스로 DB를 조회해 "차단자 없음"을 얻고
+   * (2) 그 사이 block()이 커밋 + DEL(아직 키가 없어 no-op)
+   * (3) 읽기가 낡은 결과를 TTL만큼 캐시
+   * 순서가 되어 **차단이 최대 TTL 동안 무시된다.** 읽기 전후의 버전이 같을 때만
+   * 캐시에 쓰는 방식으로 이 창을 막는다.
+   */
+  private blockedByVersionKey(userId: string): string {
+    return `chat:blockedbyver:${userId}`;
+  }
+
   /** 차단 목록(내가 차단한 사람) — 클라이언트가 로컬 필터링에 쓴다. */
   async listBlocks(
     blockerId: string,
@@ -92,9 +106,13 @@ export class ModerationService {
    */
   async getBlockedBy(targetId: string): Promise<string[]> {
     const key = this.blockedByKey(targetId);
+    const verKey = this.blockedByVersionKey(targetId);
+
+    let versionBefore: string | null = null;
     try {
       const cached = await this.redis.get(key);
       if (cached !== null) return cached === '' ? [] : cached.split(',');
+      versionBefore = await this.redis.get(verKey);
     } catch (err) {
       this.logger.warn(`차단 캐시 조회 실패: ${(err as Error).message}`);
     }
@@ -106,7 +124,12 @@ export class ModerationService {
     const ids = rows.map((r) => r.blockerId);
 
     try {
-      await this.redis.set(key, ids.join(','), BLOCKED_BY_TTL_SEC);
+      // DB를 읽는 동안 차단/해제가 끼어들었으면(버전이 바뀌었으면) 캐시에 쓰지 않는다.
+      // 다음 요청이 다시 DB에서 읽어 올바른 값을 캐시한다.
+      const versionAfter = await this.redis.get(verKey);
+      if (versionAfter === versionBefore) {
+        await this.redis.set(key, ids.join(','), BLOCKED_BY_TTL_SEC);
+      }
     } catch (err) {
       this.logger.warn(`차단 캐시 저장 실패: ${(err as Error).message}`);
     }
@@ -115,6 +138,9 @@ export class ModerationService {
 
   private async invalidateBlockedBy(targetId: string): Promise<void> {
     try {
+      // 버전을 먼저 올린다 — 진행 중인 읽기가 낡은 결과를 캐시하지 못하게 하는 것이
+      // 목적이라, DEL보다 앞서야 한다.
+      await this.redis.incr(this.blockedByVersionKey(targetId));
       await this.redis.del(this.blockedByKey(targetId));
     } catch (err) {
       this.logger.warn(`차단 캐시 무효화 실패: ${(err as Error).message}`);
@@ -140,11 +166,20 @@ export class ModerationService {
         errBody(ErrorCode.USER_NOT_FOUND, '유저를 찾을 수 없습니다.'),
       );
 
-    const allowed = await this.redis.consumeRateLimit(
-      `report:rate:${reporterId}`,
-      REPORT_LIMIT,
-      REPORT_WINDOW_SEC,
-    );
+    // 신고 접수는 Apple 가이드라인 1.2가 요구하는 필수 경로다. Redis 장애로 접수 자체가
+    // 막히면 안 되므로 레이트리밋 확인 실패는 통과시킨다(fail-open).
+    let allowed = true;
+    try {
+      allowed = await this.redis.consumeRateLimit(
+        `report:rate:${reporterId}`,
+        REPORT_LIMIT,
+        REPORT_WINDOW_SEC,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `신고 레이트리밋 확인 실패, 통과시킴: ${(err as Error).message}`,
+      );
+    }
     if (!allowed)
       throw new BadRequestException(
         errBody(

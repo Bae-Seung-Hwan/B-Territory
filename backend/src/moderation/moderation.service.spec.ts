@@ -32,6 +32,7 @@ describe('ModerationService', () => {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue(undefined),
       del: jest.fn().mockResolvedValue(undefined),
+      incr: jest.fn().mockResolvedValue(1),
       consumeRateLimit: jest.fn().mockResolvedValue(true),
     };
     const service = new ModerationService(
@@ -79,6 +80,7 @@ describe('ModerationService', () => {
     it('차단 시 대상의 blockedBy 캐시를 즉시 무효화한다', async () => {
       const { service, redis } = make();
       await service.block('u1', 'target-1');
+      expect(redis.incr).toHaveBeenCalledWith('chat:blockedbyver:target-1');
       expect(redis.del).toHaveBeenCalledWith('chat:blockedby:target-1');
     });
 
@@ -105,6 +107,32 @@ describe('ModerationService', () => {
 
       await expect(service.getBlockedBy('t1')).resolves.toEqual([]);
       expect(blockRepo.find).not.toHaveBeenCalled();
+    });
+
+    // 회귀 가드: DB를 읽는 동안 차단이 끼어들면, 낡은 결과를 캐시하면 안 된다.
+    // 캐시하면 그 차단이 TTL(5분)만큼 무시된다.
+    it('읽는 도중 버전이 바뀌면 낡은 결과를 캐시하지 않는다', async () => {
+      const { service, blockRepo, redis } = make();
+      redis.get
+        .mockResolvedValueOnce(null) // 캐시 미스
+        .mockResolvedValueOnce('1') // 읽기 전 버전
+        .mockResolvedValueOnce('2'); // 읽기 후 버전 — 그 사이 차단이 발생
+      blockRepo.find.mockResolvedValue([]);
+
+      await expect(service.getBlockedBy('t1')).resolves.toEqual([]);
+      expect(redis.set).not.toHaveBeenCalled();
+    });
+
+    it('버전이 그대로면 결과를 캐시한다', async () => {
+      const { service, blockRepo, redis } = make();
+      redis.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce('1')
+        .mockResolvedValueOnce('1');
+      blockRepo.find.mockResolvedValue([{ blockerId: 'a' }]);
+
+      await expect(service.getBlockedBy('t1')).resolves.toEqual(['a']);
+      expect(redis.set).toHaveBeenCalledWith('chat:blockedby:t1', 'a', 300);
     });
 
     // 캐시는 가속 장치일 뿐 — 여기서 throw하면 Redis 장애 시 채팅이 통째로 멈춘다.

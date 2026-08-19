@@ -67,6 +67,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /** 카운터 증가 후 새 값 반환. 캐시 무효화 버전 키에 쓴다(키가 없으면 0에서 시작). */
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
   private dailyClaimKey(userId: string, spotId: number): string {
     return `claim:daily:${userId}:${spotId}`;
   }
