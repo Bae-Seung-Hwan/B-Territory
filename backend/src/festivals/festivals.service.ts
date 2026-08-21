@@ -18,6 +18,11 @@ interface FestivalItem {
   eventenddate?: string; // 'YYYYMMDD'
   areacode?: string;
   sigungucode?: string;
+  // KorService2가 새로 내려주는 법정동 코드. 신규 레코드는 areacode/sigungucode가 빈 문자열로
+  // 오고 지역 정보가 이 필드에만 담긴다. lDongSignguCd는 3자리('350')로, 시도코드를 붙인
+  // 5자리('26350')가 아니다 — 5자리로 조회하면 0건이 나온다.
+  lDongRegnCd?: string;
+  lDongSignguCd?: string;
 }
 
 interface FestivalApiResponse {
@@ -31,7 +36,40 @@ interface FestivalApiResponse {
 }
 
 const BASE_URL = 'https://apis.data.go.kr/B551011/KorService2';
-const AREA_CODE = '6'; // 부산
+// 부산 필터. 예전에는 TourAPI 자체 지역코드(areaCode=6)로 걸렀지만, KorService2가 신규 축제
+// 레코드의 areacode/sigungucode를 빈 문자열로 내려주기 시작해 그 필터에 아무것도 걸리지 않는다
+// (2026-08-21 실측: 전국 236건 중 235건이 areacode='' — areaCode를 6/1/4/31/39 무엇으로 줘도
+// 0건이고, areaCode 없이 조회해야 236건이 나온다). 부산 축제는 종료일 20260222 건을 마지막으로
+// 더 잡히지 않아 그 뒤 모든 동기화가 조용히 0건이었다.
+// 응답에 새로 들어온 법정동 시도코드로 필터를 옮긴다(26 = 부산광역시. 실측 14건, 오탐 0건).
+const LDONG_REGN_CD = '26';
+// 저장용 지역코드. 위 필터가 부산만 통과시키므로 상수이며, 시더(seed-festivals-csv)가 쓰는
+// 값과 같은 KTO 체계다. 응답의 areacode는 이제 비어 오므로 그대로 쓰면 컬럼이 비어버린다.
+const AREA_CODE = '6';
+/**
+ * 법정동 시군구코드(26xxx의 뒤 3자리) → KTO 시군구코드(부산 1~16).
+ * festivals.sigungucode는 시더가 seed-spots-csv의 BUSAN_SIGUNGU_CODE_BY_NAME으로 채우는
+ * 컬럼이라 반드시 같은 체계를 써야 한다. 법정동 코드를 그대로 넣으면 upsert의 COALESCE가
+ * 시더 값을 덮어써(EXCLUDED가 non-null) 마지막에 실행한 쪽 값이 남고, 구 단위 노출이 깨진다.
+ */
+const KTO_SIGUNGU_BY_LDONG: Record<string, string> = {
+  '110': '15', // 중구
+  '140': '11', // 서구
+  '170': '5', // 동구
+  '200': '14', // 영도구
+  '230': '7', // 부산진구
+  '260': '6', // 동래구
+  '290': '4', // 남구
+  '320': '8', // 북구
+  '350': '16', // 해운대구
+  '380': '10', // 사하구
+  '410': '2', // 금정구
+  '440': '1', // 강서구
+  '470': '13', // 연제구
+  '500': '12', // 수영구
+  '530': '9', // 사상구
+  '710': '3', // 기장군
+};
 const NUM_OF_ROWS = 100;
 // searchFestival2의 eventStartDate는 "시작일이 이 날짜 이후"가 아니라 "이 날짜 이후까지
 // 진행되는 축제"로 동작한다(2026-02-09 조회에 시작일 2025-12-05인 트리축제가 잡히는 것으로
@@ -159,10 +197,20 @@ export class FestivalsService {
     );
     const totalPages = Math.max(1, Math.ceil(total / NUM_OF_ROWS));
     this.logger.log(`축제 총 ${total}건 / ${totalPages}페이지`);
+    // 0건은 정상 상태가 아니다 — 부산은 상시 진행 중이거나 예정된 축제가 있다. 지역 필터가
+    // upstream 스키마 변경으로 무력화되면 HTTP도 resultCode도 정상이라 예외 없이 조용히
+    // 0건이 되고(위 areaCode 사례), 아래 정리 로직도 스킵돼 겉보기엔 아무 일도 없다.
+    // 다음 회귀를 로그에서 바로 잡을 수 있도록 경고로 남긴다.
+    if (total === 0) {
+      this.logger.warn(
+        '축제 API가 0건 반환 — 지역 필터 파라미터/응답 스키마 변경 여부 확인 필요',
+      );
+    }
 
     // upsert의 ON CONFLICT UPDATE에 실려 재동기화 시각을 갱신한다(엔티티 주석 참고).
     const syncedAt = new Date();
     const syncedContentIds: string[] = [];
+    let skipped = 0;
     for (let page = 1; page <= totalPages; page++) {
       const items =
         page === 1
@@ -176,6 +224,21 @@ export class FestivalsService {
         // not-null 위반으로 죽고, 빈 문자열이면 서로를 덮어쓴다.
         const contentId = item.contentid?.trim();
         if (!contentId) continue;
+        // 0건 경고는 "필터가 아무것도 못 잡는" 방향만 막는다. 반대로 upstream이
+        // lDongRegnCd를 모르는 파라미터로 취급해 무시하면(data.go.kr은 오류 대신 무시하는
+        // 편이다) 전국 축제가 통째로 내려오는데, total > 0이라 경고에도 안 걸리고 부산 전용
+        // 테이블이 오염된 채 그대로 API로 나간다. 부산이 아니라는 **근거가 있는** 행만
+        // 버린다 — 근거가 없으면(두 필드 모두 빈 값) 통과시켜 필드 누락으로 축제를 잃지 않는다.
+        const regnCd = nullIfBlank(item.lDongRegnCd);
+        const addr1 = nullIfBlank(item.addr1);
+        if (
+          regnCd
+            ? regnCd !== LDONG_REGN_CD
+            : !!addr1 && !addr1.startsWith('부산')
+        ) {
+          skipped++;
+          continue;
+        }
         // 날짜가 없으면 진행 상태 판정이 불가능하므로 제외 (NOT NULL 컬럼)
         const eventStartDate = parseYmd(item.eventstartdate);
         const eventEndDate = parseYmd(item.eventenddate);
@@ -184,15 +247,20 @@ export class FestivalsService {
         rows.push({
           contentId,
           title: item.title.trim(),
-          addr1: nullIfBlank(item.addr1),
+          addr1,
           mapX: parseCoord(item.mapx),
           mapY: parseCoord(item.mapy),
           firstimage: nullIfBlank(item.firstimage),
           tel: nullIfBlank(item.tel),
           eventStartDate,
           eventEndDate,
-          areacode: nullIfBlank(item.areacode),
-          sigungucode: nullIfBlank(item.sigungucode),
+          areacode: AREA_CODE,
+          // 신규 레코드는 sigungucode가 비어 있어 법정동 코드에서 KTO 코드로 환산한다.
+          // 환산표에 없으면 null — 법정동 코드를 그대로 넣어 체계를 섞느니 비워 둔다.
+          sigungucode:
+            nullIfBlank(item.sigungucode) ??
+            KTO_SIGUNGU_BY_LDONG[nullIfBlank(item.lDongSignguCd) ?? ''] ??
+            null,
           updatedAt: syncedAt,
         });
         syncedContentIds.push(contentId);
@@ -202,6 +270,12 @@ export class FestivalsService {
 
       this.logger.log(`[${page}/${totalPages}] ${rows.length}건 upsert`);
       if (page < totalPages) await new Promise((r) => setTimeout(r, 300));
+    }
+
+    if (skipped > 0) {
+      this.logger.warn(
+        `부산이 아닌 축제 ${skipped}건 제외 — 지역 필터가 무시됐는지 확인 필요`,
+      );
     }
 
     // API가 더 이상 주지 않고 이미 종료된 축제만 정리해 테이블 무한 증가를 막는다.
@@ -286,7 +360,7 @@ export class FestivalsService {
       MobileApp: 'BTerritory',
       _type: 'json',
       arrange: 'A',
-      areaCode: AREA_CODE,
+      lDongRegnCd: LDONG_REGN_CD,
       eventStartDate,
     });
     const url = `${BASE_URL}/searchFestival2?${params}`;
