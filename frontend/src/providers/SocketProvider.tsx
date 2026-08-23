@@ -5,13 +5,14 @@ import { API_BASE_URL } from '@/lib/api-client';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
 import { useOverlayStore, isDuelBusy } from '@/store/useOverlayStore';
+import { useBattleStore } from '@/store/useBattleStore';
 // 훅(useTranslation)이 아니라 i18n 인스턴스를 직접 쓴다 — 훅이 반환하는 t는 매 렌더
 // 새로 bind된 함수라 effect 의존성에 넣으면 소켓 리스너 전체가 렌더마다 재등록된다.
 // 아래 핸들러들은 이벤트 발생 시점에 호출되므로 i18n.t가 그때의 locale을 그대로 읽는다.
 import { i18n } from '@/i18n';
-import { ENCOUNTER_RADIUS_M } from '@/constants/game';
+import { ENCOUNTER_RADIUS_M, BATTLE_SWEEP_INTERVAL_MS } from '@/constants/game';
 
-interface EncounterDetected {
+export interface EncounterDetected {
   userId: string;
   nickname: string | null;
   team: string;
@@ -90,27 +91,28 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     };
   }, [isAuthenticated, socket]);
 
-  // encounter:detected는 Provider 레벨에서 한 번만 배선한다 — 어느 탭에 있든 적 탐지
-  // 알림이 떠야 하기 때문(PR #17 리뷰 권고, docs/integrations.md 참고).
+  // encounter:detected는 Provider 레벨에서 한 번만 배선한다 — 어느 탭에 있든 배틀 탭의
+  // 근처 상대 리스트가 갱신돼야 하기 때문(PR #17 리뷰 권고, docs/integrations.md 참고).
+  // 결투 진행 여부와 무관하게 항상 갱신한다 — 목록은 "지금 근처에 있는 상대"를 보여줄
+  // 뿐이라 isDuelBusy 가드가 필요 없다(팝업 시절엔 enemyInfo 덮어쓰기 방지가 필요했지만,
+  // 이제 enemyInfo는 실제 결투 신청 시점에만 별도로 세팅된다 — BattleEnemyRow 참고).
   useEffect(() => {
     const handleEncounter = (payload: EncounterDetected) => {
-      // 이미 결투 흐름이 진행 중이면(응답 대기·수락 왕복 포함) 새 조우 알림으로
-      // enemyInfo를 덮어쓰지 않는다 — 덮어쓰면 엉뚱한 제3자를 승자로 신고하게 된다.
-      if (isDuelBusy(useOverlayStore.getState())) return;
-
-      useOverlayStore.getState().setEnemyInfo({
-        userId: payload.userId,
-        nationality: payload.team,
-        // encounter:detected엔 정확한 거리가 실려오지 않는다 — 탐지 자체가 이 반경
-        // 안에서만 일어나므로 근사값으로 표시한다.
-        distance: ENCOUNTER_RADIUS_M,
-      });
-      useOverlayStore.getState().setShowEnemyAlert(true);
+      useBattleStore.getState().upsertEnemy(payload);
     };
 
     socket.on('encounter:detected', handleEncounter);
+
+    // 서버는 같은 쌍에 대해 60초간 encounter:detected를 재발송하지 않으므로, 상대가
+    // 실제로 멀어졌는지는 클라이언트가 주기적으로 갱신 시각을 확인해 판단해야 한다.
+    const sweep = setInterval(
+      () => useBattleStore.getState().pruneStale(Date.now()),
+      BATTLE_SWEEP_INTERVAL_MS,
+    );
+
     return () => {
       socket.off('encounter:detected', handleEncounter);
+      clearInterval(sweep);
     };
   }, [socket]);
 

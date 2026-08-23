@@ -6,11 +6,11 @@ import { BrandColors } from '@/constants/theme';
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const TABS: {
-  name: 'spots' | 'chat' | 'map' | 'ranking' | 'profile';
+  name: 'battle' | 'chat' | 'map' | 'ranking' | 'profile';
   icon: IoniconName;
   iconFocused: IoniconName;
 }[] = [
-  { name: 'spots', icon: 'list-outline', iconFocused: 'list' },
+  { name: 'battle', icon: 'flash-outline', iconFocused: 'flash' },
   { name: 'chat', icon: 'chatbubbles-outline', iconFocused: 'chatbubbles' },
   { name: 'map', icon: 'map-outline', iconFocused: 'map' },
   { name: 'ranking', icon: 'trophy-outline', iconFocused: 'trophy' },

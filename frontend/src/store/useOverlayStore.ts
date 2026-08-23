@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-// 이 체인(EnemyDetectionAlert → DuelRequest/DuelPending → MiniGame)은 SocketProvider의
+// 이 체인(배틀 탭 리스트 행 → DuelRequest/DuelPending → MiniGame)은 SocketProvider의
 // 소켓 리스너(encounter:detected, duel:requested/accepted/rejected/expired/completed/voided)가
 // 트리거한다 — providers/SocketProvider.tsx 참고.
 
@@ -15,7 +15,6 @@ interface EnemyInfo {
 }
 
 interface OverlayStore {
-  showEnemyAlert: boolean;
   // 수신자(상대의 결투 신청을 받은 쪽)용 수락/거부 시트
   showDuelRequest: boolean;
   // 신청자(내가 결투를 건 쪽)용 응답 대기 화면
@@ -34,7 +33,6 @@ interface OverlayStore {
   // (duel:completed 등)으로 오버레이가 닫힐 때 초기화될 기회가 없어 다음 결투에
   // 이전 결과 화면이 그대로 뜬다 — resetDuel이 함께 비우도록 스토어에 둔다.
   miniGameResult: MiniGameResult | null;
-  setShowEnemyAlert: (v: boolean) => void;
   setShowDuelRequest: (v: boolean) => void;
   setShowDuelPending: (v: boolean) => void;
   setShowMiniGame: (v: boolean) => void;
@@ -48,7 +46,7 @@ interface OverlayStore {
 }
 
 /**
- * 결투 흐름이 진행 중이라 새 조우 알림·결투 신청을 받으면 안 되는 상태인지.
+ * 결투 흐름이 진행 중이라 새 결투 신청(duel:requested)을 받으면 안 되는 상태인지.
  *
  * `duelId != null`을 포함하는 게 핵심이다 — 수락을 emit하고 서버의 duel:accepted를
  * 기다리는 왕복 구간처럼 "화면에 아무 오버레이도 없지만 결투는 살아있는" 순간이 있는데,
@@ -57,7 +55,6 @@ interface OverlayStore {
  */
 export function isDuelBusy(s: OverlayStore): boolean {
   return (
-    s.showEnemyAlert ||
     s.showDuelRequest ||
     s.showDuelPending ||
     s.showMiniGame ||
@@ -66,7 +63,6 @@ export function isDuelBusy(s: OverlayStore): boolean {
 }
 
 export const useOverlayStore = create<OverlayStore>((set) => ({
-  showEnemyAlert: false,
   showDuelRequest: false,
   showDuelPending: false,
   showMiniGame: false,
@@ -75,7 +71,6 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
   duelRole: null,
   challengerNickname: null,
   miniGameResult: null,
-  setShowEnemyAlert: (v) => set({ showEnemyAlert: v }),
   setShowDuelRequest: (v) => set({ showDuelRequest: v }),
   setShowDuelPending: (v) => set({ showDuelPending: v }),
   setShowMiniGame: (v) => set({ showMiniGame: v }),
@@ -86,7 +81,6 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
   setMiniGameResult: (miniGameResult) => set({ miniGameResult }),
   resetDuel: () =>
     set({
-      showEnemyAlert: false,
       showDuelRequest: false,
       showDuelPending: false,
       showMiniGame: false,

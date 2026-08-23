@@ -90,15 +90,16 @@ export const ko = {
     },
   },
   tabs: {
-    spots: '관광지',
+    battle: '배틀',
     chat: '채팅',
     map: '지도',
     ranking: '랭킹',
     profile: '내정보',
   },
-  spots: {
-    title: '관광지',
-    placeholder: '지도에 표시되는 관광지 목록이 표시됩니다',
+  battle: {
+    title: '배틀',
+    emptyState: '근처에 감지된 적팀이 없습니다',
+    duel: '결투 신청',
   },
   chat: {
     title: '채팅',
@@ -254,12 +255,6 @@ export const ko = {
     },
   },
   overlay: {
-    enemyAlert: {
-      title: '적 탐지',
-      body: '{{team}} 팀이 {{distance}}m 이내에 있습니다',
-      ignore: '무시',
-      duel: '결투 신청',
-    },
     duelRequest: {
       title: '결투 신청',
       body: '{{nickname}}님이 결투를 신청했습니다',
