@@ -10,16 +10,16 @@ describe('i18n', () => {
 
   it('translates a simple key in the current locale', () => {
     i18n.locale = 'ko';
-    expect(i18n.t('tabs.spots')).toBe('관광지');
+    expect(i18n.t('tabs.battle')).toBe('배틀');
 
     i18n.locale = 'en';
-    expect(i18n.t('tabs.spots')).toBe('Spots');
+    expect(i18n.t('tabs.battle')).toBe('Battle');
   });
 
   it('interpolates placeholders', () => {
     i18n.locale = 'en';
-    expect(i18n.t('overlay.enemyAlert.body', { team: 'KR', distance: 42 })).toBe(
-      'Team KR is within 42m',
+    expect(i18n.t('overlay.duelPending.body', { team: 'KR' })).toBe(
+      'You challenged Team KR to a duel',
     );
   });
 
@@ -33,7 +33,7 @@ describe('i18n', () => {
 
   it('falls back to defaultLocale for unsupported locales', () => {
     i18n.locale = 'fr';
-    expect(i18n.t('tabs.spots')).toBe('Spots'); // defaultLocale is 'en'
+    expect(i18n.t('tabs.battle')).toBe('Battle'); // defaultLocale is 'en'
   });
 
   it('useTranslation re-renders components when the locale changes', async () => {
