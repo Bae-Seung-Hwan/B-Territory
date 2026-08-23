@@ -5,12 +5,7 @@ import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
 import { CHAT_ENABLED } from '@/config/feature-flags';
 import { useChatStore } from '@/store/useChatStore';
-import type {
-  ChatMessageIncoming,
-  ChatMessageOutgoing,
-  TeamLocationIncoming,
-  TeamLocationOutgoing,
-} from '@/types/chat-events';
+import type { ChatMessageIncoming, ChatMessageOutgoing } from '@/types/chat-events';
 
 function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -77,10 +72,7 @@ export function useChatSocket() {
     });
 
     socket.on('chat:message', (payload: ChatMessageIncoming) => {
-      addMessage({ kind: 'message', id: makeId(), mine: false, ...payload });
-    });
-    socket.on('team:location', (payload: TeamLocationIncoming) => {
-      addMessage({ kind: 'location', id: makeId(), mine: false, ...payload });
+      addMessage({ id: makeId(), mine: false, ...payload });
     });
 
     socket.connect();
@@ -108,7 +100,6 @@ export function useChatSocket() {
       socketRef.current?.emit('chat:message', payload);
       // 서버가 발신자를 제외하고 릴레이하므로(PR #34), 내 메시지는 낙관적으로 직접 추가한다.
       addMessage({
-        kind: 'message',
         id: makeId(),
         mine: true,
         userId: profile.id,
@@ -121,24 +112,5 @@ export function useChatSocket() {
     [addMessage, profile],
   );
 
-  const shareLocation = useCallback(
-    (lat: number, lng: number) => {
-      if (!profile) return;
-      const payload: TeamLocationOutgoing = { lat, lng };
-      socketRef.current?.emit('team:location', payload);
-      addMessage({
-        kind: 'location',
-        id: makeId(),
-        mine: true,
-        userId: profile.id,
-        nickname: profile.nickname,
-        lat,
-        lng,
-        at: new Date().toISOString(),
-      });
-    },
-    [addMessage, profile],
-  );
-
-  return { sendMessage, shareLocation, chatError };
+  return { sendMessage, chatError };
 }

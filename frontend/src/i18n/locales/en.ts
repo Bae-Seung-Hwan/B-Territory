@@ -112,10 +112,6 @@ export const en: Translations = {
     emptyState: 'No messages yet',
     inputPlaceholder: 'Type a message',
     send: 'Send',
-    shareLocation: "I'm here",
-    locationShared: '{{nickname}} is at {{spot}}',
-    locationSharedUnknown: '{{nickname}} shared their location',
-    you: 'Me',
     errors: {
       connection: 'Chat connection failed. Retrying…',
       rateLimit: 'You sent messages too quickly. Please try again shortly',
