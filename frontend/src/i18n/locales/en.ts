@@ -110,10 +110,6 @@ export const en: Translations = {
   },
   ranking: {
     title: 'Ranking',
-    tabs: {
-      season: 'Season Ranking',
-      hallOfFame: 'Hall of Fame',
-    },
     scope: {
       teams: 'By Country',
       users: 'By Player',
@@ -132,21 +128,6 @@ export const en: Translations = {
         ongoing: 'Ongoing',
         ended: 'Ended',
       },
-    },
-    hallOfFame: {
-      disabledBanner: 'Hall of Fame server integration coming soon',
-      teamSection: 'Country Records',
-      userSection: 'Individual Records',
-      longestOccupation: 'Longest Occupation',
-      mostDuelWins: 'Most Duel Wins',
-      mostVisits: 'Most Visits',
-      mostMissions: 'Most Missions',
-      duelWinRate: 'Duel Win Rate',
-      winsLabel: '{{wins}} wins',
-      winLossLabel: '{{wins}}W {{losses}}L',
-      durationDays: '{{days}}d {{hours}}h',
-      durationHoursOnly: '{{hours}}h',
-      empty: 'No records yet',
     },
   },
   profile: {
