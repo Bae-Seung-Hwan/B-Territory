@@ -51,7 +51,6 @@ describe('DuelsService', () => {
       | 'geoPosMany'
       | 'geoSearch'
       | 'getUserMeta'
-      | 'submitDuelResult'
     >
   >;
   let usersService: jest.Mocked<
@@ -102,7 +101,6 @@ describe('DuelsService', () => {
       getUserMeta: jest
         .fn()
         .mockResolvedValue({ team: 'JP', socketId: 'socket-1' }),
-      submitDuelResult: jest.fn(),
     };
 
     usersService = {
@@ -258,7 +256,7 @@ describe('DuelsService', () => {
     });
   });
 
-  describe('submitResult / 아군 보너스', () => {
+  describe('finishByGame / voidByGame / 아군 보너스', () => {
     const buildAcceptedDuel = (): Duel =>
       ({
         id: 1,
@@ -267,52 +265,44 @@ describe('DuelsService', () => {
         status: DuelStatus.ACCEPTED,
       }) as Duel;
 
-    it('신고가 하나뿐이면 waiting 상태를 반환한다', async () => {
+    it('승자가 참가자가 아니면 거부한다 (조작된 판정 차단)', async () => {
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({ status: 'waiting' });
 
-      const outcome = await service.submitResult(
-        1,
-        challenger.id,
-        challenger.id,
+      await expect(service.finishByGame(1, 'user-c')).rejects.toThrow(
+        BadRequestException,
       );
-
-      expect(outcome.status).toBe('waiting');
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
     });
 
-    it('신고가 엇갈리면 VOID 처리하고 락을 해제한다', async () => {
-      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({ status: 'conflict' });
+    it('수락 상태가 아닌 결투는 미니게임 결과를 받지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue({
+        ...buildAcceptedDuel(),
+        status: DuelStatus.VOID,
+      });
 
-      const outcome = await service.submitResult(
-        1,
-        challenger.id,
-        challenger.id,
+      await expect(service.finishByGame(1, challenger.id)).rejects.toThrow(
+        ConflictException,
       );
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+    });
 
-      expect(outcome.status).toBe('conflict');
-      if (outcome.status === 'conflict') {
-        expect(outcome.duel.status).toBe(DuelStatus.VOID);
-      }
+    it('voidByGame은 VOID로 전이하고 락을 해제한다 — 점수 변동은 없다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+
+      const voided = await service.voidByGame(1);
+
+      expect(voided?.status).toBe(DuelStatus.VOID);
       expect(redis.releaseLock).toHaveBeenCalledWith(expect.any(String), '1');
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(redis.setPenalty).not.toHaveBeenCalled();
     });
 
-    it('합의된 승자에게 기본 점수를 적용하고 패자에게 30분 페널티를 건다', async () => {
+    it('미니게임 승자에게 기본 점수를 적용하고 패자에게 30분 페널티를 건다', async () => {
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       // 아군 보너스 조건 미충족: 주변에 같은 팀 후보가 없음
       redis.geoSearch.mockResolvedValue([]);
 
-      const outcome = await service.submitResult(
-        1,
-        challenger.id,
-        challenger.id,
-      );
+      const outcome = await service.finishByGame(1, challenger.id);
 
       expect(outcome.status).toBe('confirmed');
       if (outcome.status === 'confirmed') {
@@ -343,13 +333,9 @@ describe('DuelsService', () => {
       // 개인 랭킹은 users.score가 아니라 SUM(score_events.personalPoints)로 산출되므로,
       // 원장에 남지 않으면 결투 점수가 /users/me와 명예의 전당에서 서로 다른 값이 된다.
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       redis.geoSearch.mockResolvedValue([]);
 
-      await service.submitResult(1, challenger.id, challenger.id);
+      await service.finishByGame(1, challenger.id);
 
       expect(scoresService.record).toHaveBeenCalledWith(txManager, {
         userId: challenger.id,
@@ -372,16 +358,12 @@ describe('DuelsService', () => {
     it('탈퇴로 유저 row가 사라진 참가자는 원장 행을 남기지 않는다', async () => {
       // applyScoreDelta도 대상 row가 없어 no-op이므로, 원장에만 유령 행이 남는 일이 없어야 한다.
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       redis.geoSearch.mockResolvedValue([]);
       usersService.findByIds.mockResolvedValue([
         { id: challenger.id, team: challenger.team },
       ] as never);
 
-      await service.submitResult(1, challenger.id, challenger.id);
+      await service.finishByGame(1, challenger.id);
 
       expect(scoresService.record).toHaveBeenCalledTimes(1);
       expect(scoresService.record).toHaveBeenCalledWith(
@@ -395,10 +377,6 @@ describe('DuelsService', () => {
       // 사라진 uuid로 insert를 시도한다(FK 위반). Postgres는 실패한 문이 트랜잭션 전체를
       // abort시키므로, SAVEPOINT로 되돌리지 않으면 결투 확정까지 함께 날아간다.
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       redis.geoSearch.mockResolvedValue([]);
 
       const fkError = new QueryFailedError('INSERT ...', [], {
@@ -415,7 +393,7 @@ describe('DuelsService', () => {
       );
 
       await expect(
-        service.submitResult(1, challenger.id, challenger.id),
+        service.finishByGame(1, challenger.id),
       ).resolves.toMatchObject({ status: 'confirmed' });
 
       expect(scoresService.record).toHaveBeenCalledTimes(2);
@@ -430,26 +408,18 @@ describe('DuelsService', () => {
     it('FK 위반이 아닌 원장 insert 실패는 삼키지 않는다', async () => {
       // 23503만 "참가자가 사라짐"으로 읽는다. 그 외 오류까지 흡수하면 진짜 장애가 조용히 묻힌다.
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       redis.geoSearch.mockResolvedValue([]);
       scoresService.record.mockRejectedValue(new Error('connection lost'));
 
-      await expect(
-        service.submitResult(1, challenger.id, challenger.id),
-      ).rejects.toThrow('connection lost');
+      await expect(service.finishByGame(1, challenger.id)).rejects.toThrow(
+        'connection lost',
+      );
       // 트랜잭션이 깨졌으므로 미리 걸어둔 페널티는 되돌려야 한다.
       expect(redis.clearPenalty).toHaveBeenCalledWith(opponentId);
     });
 
     it('승자 주변에 아군이 2명 이상이면 1.5배 점수를 적용한다', async () => {
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
 
       // 승자(challenger) 팀 = KR, 주변 후보 2명 모두 같은 팀
       redis.getUserMeta.mockImplementation((id: string) =>
@@ -471,11 +441,7 @@ describe('DuelsService', () => {
         { id: 'ally-2', within: true },
       ]);
 
-      const outcome = await service.submitResult(
-        1,
-        challenger.id,
-        challenger.id,
-      );
+      const outcome = await service.finishByGame(1, challenger.id);
 
       const expectedDelta = Math.round(BASE_DUEL_SCORE * ALLY_BONUS_MULTIPLIER);
       expect(outcome.status).toBe('confirmed');
@@ -508,23 +474,15 @@ describe('DuelsService', () => {
       } as Duel;
 
       duelRepo.findOne
-        .mockResolvedValueOnce(buildAcceptedDuel()) // submitResult의 초기 조회
+        .mockResolvedValueOnce(buildAcceptedDuel()) // finishByGame의 초기 조회
         .mockResolvedValueOnce(alreadyCompleted); // resolveDuel CAS 실패 후 재조회
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
-      // 신고 스탬프는 성공(duelRepo QB 기본값), 다른 요청이 이미
+      // 다른 요청이 이미
       // ACCEPTED -> COMPLETED 전환을 선점해 트랜잭션 내 CAS가 실패 (affected=0)
       txManager.createQueryBuilder.mockReturnValueOnce(
         createQueryBuilderMock(0),
       );
 
-      const outcome = await service.submitResult(
-        1,
-        challenger.id,
-        challenger.id,
-      );
+      const outcome = await service.finishByGame(1, challenger.id);
 
       expect(outcome.status).toBe('confirmed');
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
@@ -532,7 +490,7 @@ describe('DuelsService', () => {
       expect(redis.clearPenalty).not.toHaveBeenCalled();
     });
 
-    it('정리 잡이 먼저 VOID 처리한 결투는 confirmed 대신 conflict로 반환한다', async () => {
+    it('정리 잡이 먼저 VOID 처리한 결투는 confirmed 대신 void로 반환한다', async () => {
       const sweptVoid = {
         id: 1,
         challengerId: challenger.id,
@@ -542,57 +500,43 @@ describe('DuelsService', () => {
       } as Duel;
 
       duelRepo.findOne
-        .mockResolvedValueOnce(buildAcceptedDuel()) // submitResult의 초기 조회
+        .mockResolvedValueOnce(buildAcceptedDuel()) // finishByGame의 초기 조회
         .mockResolvedValueOnce(sweptVoid); // resolveDuel CAS 실패 후 재조회
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
-      // 신고 스탬프는 성공(duelRepo QB 기본값), 스윕이 이미
+      // 스윕이 이미
       // ACCEPTED -> VOID 전환을 선점해 트랜잭션 내 CAS가 실패 (affected=0)
       txManager.createQueryBuilder.mockReturnValueOnce(
         createQueryBuilderMock(0),
       );
 
-      const outcome = await service.submitResult(
-        1,
-        challenger.id,
-        challenger.id,
-      );
+      const outcome = await service.finishByGame(1, challenger.id);
 
-      expect(outcome.status).toBe('conflict');
+      expect(outcome.status).toBe('void');
       expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
       // VOID로 끝났으니 승패 미확정 — 이번 호출이 새로 만든 페널티는 되돌린다
       expect(redis.clearPenalty).toHaveBeenCalledWith(opponentId);
     });
 
-    it('신고 접수 스탬프(CAS)가 실패하면(스윕이 이미 VOID 커밋) Redis에 신고를 기록하지 않고 거부한다', async () => {
-      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      // findOne 이후 스윕이 ACCEPTED -> VOID를 커밋해 스탬프 UPDATE가 affected=0
+    it('markResultInProgress는 스윕이 이미 VOID를 커밋했으면 거부한다', async () => {
+      // 스윕이 ACCEPTED -> VOID를 커밋해 스탬프 UPDATE가 affected=0
       (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
         createQueryBuilderMock(0),
       );
 
-      await expect(
-        service.submitResult(1, challenger.id, challenger.id),
-      ).rejects.toThrow(ConflictException);
-      expect(redis.submitDuelResult).not.toHaveBeenCalled();
+      await expect(service.markResultInProgress(1)).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('점수 반영이 실패하면 상태 확정도 함께 롤백되고, 새로 만든 페널티를 되돌린다', async () => {
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       redis.geoSearch.mockResolvedValue([]);
       usersService.applyScoreDelta.mockRejectedValue(
         new Error('DB connection lost'),
       );
 
-      await expect(
-        service.submitResult(1, challenger.id, challenger.id),
-      ).rejects.toThrow('DB connection lost');
+      await expect(service.finishByGame(1, challenger.id)).rejects.toThrow(
+        'DB connection lost',
+      );
 
       // CAS와 점수 반영이 같은 트랜잭션이므로 에러 전파 = 전체 롤백(결투는 ACCEPTED 유지,
       // 신고 스탬프가 신선해 스윕도 유예됨) — 재시도가 가능한 상태로 남아야 한다
@@ -602,33 +546,25 @@ describe('DuelsService', () => {
 
     it('트랜잭션 실패 시 기존에 있던 페널티(created=false)는 건드리지 않는다', async () => {
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       redis.geoSearch.mockResolvedValue([]);
       redis.setPenalty.mockResolvedValue({ created: false });
       usersService.applyScoreDelta.mockRejectedValue(
         new Error('DB connection lost'),
       );
 
-      await expect(
-        service.submitResult(1, challenger.id, challenger.id),
-      ).rejects.toThrow('DB connection lost');
+      await expect(service.finishByGame(1, challenger.id)).rejects.toThrow(
+        'DB connection lost',
+      );
       expect(redis.clearPenalty).not.toHaveBeenCalled();
     });
 
     it('아군 보너스 판정(Redis)이 실패하면 상태 커밋·페널티 전에 중단되어 재시도 가능하다', async () => {
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
-      redis.submitDuelResult.mockResolvedValue({
-        status: 'confirmed',
-        winnerId: challenger.id,
-      });
       redis.geoPos.mockRejectedValue(new Error('Redis down'));
 
-      await expect(
-        service.submitResult(1, challenger.id, challenger.id),
-      ).rejects.toThrow('Redis down');
+      await expect(service.finishByGame(1, challenger.id)).rejects.toThrow(
+        'Redis down',
+      );
 
       // 아직 아무것도 커밋되지 않았어야 한다 (결투는 ACCEPTED 유지 → 재시도로 복구)
       expect(dataSource.transaction).not.toHaveBeenCalled();

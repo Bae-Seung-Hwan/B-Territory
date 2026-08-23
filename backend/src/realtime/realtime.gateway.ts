@@ -19,7 +19,14 @@ import { DuelsService } from '../duels/duels.service';
 import { LocationUpdateDto } from '../duels/dto/location-update.dto';
 import { DuelRequestDto } from '../duels/dto/duel-request.dto';
 import { DuelRespondDto } from '../duels/dto/duel-respond.dto';
-import { DuelResultDto } from '../duels/dto/duel-result.dto';
+import { MinigameService } from '../duels/minigame/minigame.service';
+import type {
+  DuelParticipants,
+  GameStartPlan,
+  MiniGameOutcome,
+} from '../duels/minigame/minigame.service';
+import { GameSubmitDto } from '../duels/minigame/dto/game-submit.dto';
+import { GAME_ROUND_TIMEOUT } from '../duels/minigame/constants';
 import {
   DUEL_REQUEST_TTL,
   ENCOUNTER_COOLDOWN_TTL,
@@ -64,6 +71,7 @@ export class RealtimeGateway
     private readonly usersService: UsersService,
     private readonly redis: RedisService,
     private readonly duelsService: DuelsService,
+    private readonly minigameService: MinigameService,
     private readonly locationLogs: LocationLogsService,
   ) {
     // 정리 잡(duel-cleanup)이 스윕한 결투의 참가자에게 알림을 보낼 수 있도록 콜백 주입
@@ -236,7 +244,7 @@ export class RealtimeGateway
   }
 
   // 타이머 발화 시점의 소켓id를 재조회한다 (요청 시점에 캡처해두면 그 사이 재접속한 클라이언트에게
-  // 알림이 유실된다 — respondToDuel/handleDuelResult와 동일하게 항상 최신 socketId를 조회한다).
+  // 알림이 유실된다 — respondToDuel/notifyUser와 동일하게 항상 최신 socketId를 조회한다).
   private async expireAndNotify(
     duelId: number,
     challengerId: string,
@@ -280,42 +288,161 @@ export class RealtimeGateway
     client.emit(event, payload);
     await this.notifyUser(duel.challengerId, event, payload);
 
+    // 수락된 결투는 곧바로 미니게임으로 이어진다. 게임 종류·퀴즈 문제는 서버가 정해
+    // 양쪽에 똑같이 내려보내야 두 기기가 같은 화면을 본다.
+    if (accept) {
+      const plan = await this.minigameService.start(duel.id);
+      await this.startGameRound(duel, plan);
+    }
+
     return { status: 'ok' };
   }
 
-  @SubscribeMessage('duel:result')
-  async handleDuelResult(
+  /** game:start를 양쪽에 보내고, 이 라운드의 출발 신호와 제출 마감 타이머를 건다. */
+  private async startGameRound(
+    participants: DuelParticipants,
+    plan: GameStartPlan,
+  ): Promise<void> {
+    const { payload, goDelayMs } = plan;
+
+    // 타이머를 emit보다 먼저 건다 — emit이 실패하면(Redis 큐잉 실패 등) 세션은 이미
+    // 만들어진 채 마감이 걸리지 않아, 결투가 45초 마감 대신 결투 스윕(300초)까지 매달린다.
+    //
+    // 인메모리 타이머라 서버 재시작 시에는 유실되지만, 그때도 sweepStaleDuels가
+    // ACCEPTED를 VOID로 정리한다 (duels.service.ts#sweepStaleDuels).
+    setTimeout(() => {
+      void this.expireRoundAndNotify(participants, payload.round);
+    }, GAME_ROUND_TIMEOUT * 1000);
+
+    // 반응속도 게임의 출발 신호는 서버가 쏜다 — 클라이언트가 스스로 신호를 만들면
+    // 자기 반응 시간을 아무 값이나 주장할 수 있다. 대기 시간은 payload에 넣지 않으므로
+    // 클라이언트는 언제 켜질지 알 수 없다.
+    if (goDelayMs !== null) {
+      setTimeout(() => {
+        void this.fireGoSignal(participants, payload.round);
+      }, goDelayMs);
+    }
+
+    await this.emitToBoth(participants, 'game:start', payload);
+  }
+
+  /**
+   * 반응속도 게임의 출발 신호.
+   *
+   * markGo가 서버 시계로 발사 시각을 먼저 기록하고, 그 다음에 emit한다 — 순서가 뒤집히면
+   * 신호를 받자마자 누른 정상 제출이 부정출발로 처리된다.
+   */
+  private async fireGoSignal(
+    participants: DuelParticipants,
+    round: number,
+  ): Promise<void> {
+    try {
+      const fired = await this.minigameService.markGo(participants.id, round);
+      if (!fired) return; // 라운드가 이미 끝났거나 세션이 바뀜
+      await this.emitToBoth(participants, 'game:go', {
+        duelId: participants.id,
+        round,
+      });
+    } catch (err) {
+      this.logger.error(
+        `미니게임 출발 신호 발사 실패 duelId=${participants.id} round=${round}`,
+        err,
+      );
+    }
+  }
+
+  private async expireRoundAndNotify(
+    participants: DuelParticipants,
+    round: number,
+  ): Promise<void> {
+    try {
+      const outcome = await this.minigameService.expireRound(
+        participants.id,
+        round,
+      );
+      if (outcome) await this.broadcastGameOutcome(outcome);
+    } catch (err) {
+      this.logger.error(
+        `미니게임 라운드 마감 처리 실패 duelId=${participants.id} round=${round}`,
+        err,
+      );
+    }
+  }
+
+  @SubscribeMessage('game:submit')
+  async handleGameSubmit(
     @ConnectedSocket() client: Socket,
-    @MessageBody(wsValidationPipe) dto: DuelResultDto,
+    @MessageBody(wsValidationPipe) dto: GameSubmitDto,
   ) {
     const user = this.getUser(client);
-    const outcome = await this.duelsService.submitResult(
-      dto.duelId,
-      user.id,
-      dto.winnerId,
-    );
+    const outcome = await this.minigameService.submit(dto.duelId, user.id, dto);
 
-    if (outcome.status === 'waiting') return { status: 'waiting' };
+    // 양쪽 다 냈지만 마감 타이머가 정산을 선점한 경우 — 그쪽이 결과를 보내므로 여기선 조용히 끝낸다.
+    if (outcome.status === 'settling') return { status: 'settling' };
 
-    const { duel } = outcome;
-    const event =
-      outcome.status === 'confirmed' ? 'duel:completed' : 'duel:voided';
-    const payload =
-      outcome.status === 'confirmed'
-        ? {
-            duelId: duel.id,
-            winnerId: duel.winnerId,
-            loserId: duel.loserId,
-            scoreDelta: duel.scoreDelta,
-            allyBonusApplied: duel.allyBonusApplied,
-          }
-        : { duelId: duel.id };
+    if (outcome.status === 'waiting') {
+      // 상대에겐 "제출했다"는 사실만 알린다 — 점수를 흘리면 나중에 내는 쪽이 맞춰서 조작한다.
+      const { challengerId, opponentId } = outcome.participants;
+      const waitingFor = user.id === challengerId ? opponentId : challengerId;
+      await this.notifyUser(waitingFor, 'game:opponent:submitted', {
+        duelId: dto.duelId,
+        round: dto.round,
+      });
+      return { status: 'waiting' };
+    }
 
-    await Promise.all([
-      this.notifyUser(duel.challengerId, event, payload),
-      this.notifyUser(duel.opponentId, event, payload),
-    ]);
-
+    await this.broadcastGameOutcome(outcome);
     return { status: outcome.status };
+  }
+
+  /**
+   * 라운드 정산 결과를 두 참가자에게 알린다.
+   *
+   * 결투가 끝나는 경우는 기존 duel:completed / duel:voided를 그대로 쓴다 — 자가신고
+   * 시절 프론트가 이미 구독하고 있는 이벤트라 결과 화면을 새로 만들 필요가 없다.
+   */
+  private async broadcastGameOutcome(outcome: MiniGameOutcome): Promise<void> {
+    const { participants } = outcome;
+    if (outcome.status === 'waiting' || outcome.status === 'settling') return;
+
+    if (outcome.status === 'rematch') {
+      await this.emitToBoth(participants, 'game:round:result', {
+        duelId: participants.id,
+        round: outcome.plan.payload.round - 1,
+        winnerId: null,
+        scores: outcome.scores,
+      });
+      await this.startGameRound(participants, outcome.plan);
+      return;
+    }
+
+    if (outcome.status === 'completed') {
+      const { duel } = outcome;
+      await this.emitToBoth(participants, 'duel:completed', {
+        duelId: duel.id,
+        winnerId: duel.winnerId,
+        loserId: duel.loserId,
+        scoreDelta: duel.scoreDelta,
+        allyBonusApplied: duel.allyBonusApplied,
+        scores: outcome.scores,
+      });
+      return;
+    }
+
+    await this.emitToBoth(participants, 'duel:voided', {
+      duelId: participants.id,
+      scores: outcome.scores,
+    });
+  }
+
+  private async emitToBoth(
+    participants: DuelParticipants,
+    event: string,
+    payload: unknown,
+  ): Promise<void> {
+    await Promise.all([
+      this.notifyUser(participants.challengerId, event, payload),
+      this.notifyUser(participants.opponentId, event, payload),
+    ]);
   }
 }
