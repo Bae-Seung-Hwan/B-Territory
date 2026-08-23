@@ -35,6 +35,11 @@ module.exports = {
     },
     android: {
       package: 'com.bterritory.app',
+      // 기본값(resize)이 Bottom Tab 내비게이터와 함께 쓰이면 키보드가 뜰 때 탭바가
+      // 키보드 위로 밀려 올라가면서 그 사이의 입력창을 가린다(Expo 공식 keyboard-handling
+      // 가이드에 명시된 현상). pan으로 바꾸면 화면 리사이즈 대신 포커스된 입력이 보이도록
+      // 전체 레이아웃을 밀어올려서 이 문제가 없다.
+      softwareKeyboardLayoutMode: 'pan',
       adaptiveIcon: {
         backgroundColor: '#E6F4FE',
         foregroundImage: './assets/images/android-icon-foreground.png',
