@@ -1,0 +1,19 @@
+﻿mission_id,title,address,map_x,map_y,image_url,content_type_id,content_type_name,sigungu_code,description,homepage,source,source_id,is_outdoor
+MISSION_0001,라메르호텔,부산광역시 동구 조방로34번길 9,129.062319709,35.1405246178,http://tong.visitkorea.or.kr/cms/resource/71/3592171_image2_1.jpg,32,숙박,5,,,kto_area_based,142861,0
+MISSION_0011,비치모텔,부산광역시 영도구 하리해안길 10-9 비치모텔,129.0813283358,35.0692440569,http://tong.visitkorea.or.kr/cms/resource/64/2686464_image2_1.jpg,32,숙박,14,,,kto_area_based,2595879,0
+MISSION_0056,아난티 앳 부산 코브,부산광역시 기장군 기장읍 기장해안로 268-32,129.2283259162,35.1979934802,http://tong.visitkorea.or.kr/cms/resource/21/3512521_image2_1.jpg,32,숙박,3,,,kto_area_based,2503780,1
+MISSION_0061,블루스토리 호텔,부산광역시 해운대구 해운대해변로237번길 11 (우동),129.1575108976,35.1599464255,http://tong.visitkorea.or.kr/cms/resource/24/3016424_image2_1.jpg,32,숙박,16,,,kto_area_based,3016434,0
+MISSION_0062,엘시티 레지던스,"부산광역시 해운대구 달맞이길 30 (중동, 엘시티)",129.1683126815,35.1619491796,http://tong.visitkorea.or.kr/cms/resource/57/2928957_image2_1.jpg,32,숙박,16,,,kto_area_based,2925797,0
+MISSION_0063,호텔 프렌치코드,부산광역시 금정구 중앙대로1805번길 16 (구서동),129.0923197882,35.2449384744,http://tong.visitkorea.or.kr/cms/resource/32/2698332_image2_1.jpg,32,숙박,2,,,kto_area_based,2701011,0
+MISSION_0064,코모도 호텔 부산,부산광역시 중구 중구로 151 (영주동),129.03530348,35.108816558,http://tong.visitkorea.or.kr/cms/resource/49/2722649_image2_1.JPG,32,숙박,15,,,kto_area_based,142852,1
+MISSION_0065,브라운도트호텔 서면범천점,부산광역시 부산진구 황령대로7번길 20-11 (범천동),129.0606113054,35.1485125805,http://tong.visitkorea.or.kr/cms/resource/19/3084219_image2_1.jpg,32,숙박,7,,,kto_area_based,3083398,0
+MISSION_0066,브라운도트호텔 송정점,부산광역시 해운대구 송정광어골로 30 (송정동),129.19734025,35.1787978313,http://tong.visitkorea.or.kr/cms/resource/07/3083407_image2_1.jpg,32,숙박,16,,,kto_area_based,3083414,0
+MISSION_0067,크라운 하버 호텔 부산,부산광역시 중구 중앙대로 114 (중앙동4가),129.0368450457,35.1076056112,http://tong.visitkorea.or.kr/cms/resource/30/3054130_image2_1.jpg,32,숙박,15,,,kto_area_based,3044634,1
+MISSION_0068,마티에 오시리아,부산광역시 기장군 기장읍 동부산관광7로 17,129.2145134896,35.1884970648,http://tong.visitkorea.or.kr/cms/resource/44/3075344_image2_1.JPG,32,숙박,3,,,kto_area_based,3075356,0
+MISSION_0069,제이비디자인호텔,부산광역시 해운대구 구남로12번길 31 (우동),129.1580746892,35.1617295697,http://tong.visitkorea.or.kr/cms/resource/18/3083418_image2_1.jpg,32,숙박,16,,,kto_area_based,3083428,0
+MISSION_0070,토요코인호텔 부산서면,부산광역시 부산진구 서전로 39 (전포동),129.0640801887,35.1580060259,http://tong.visitkorea.or.kr/cms/resource/49/3476749_image2_1.jpg,32,숙박,7,,,kto_area_based,1162526,1
+MISSION_0071,브라운도트호텔 정관점,부산광역시 기장군 정관읍 산단1로 98-31,129.1817794758,35.3161515953,http://tong.visitkorea.or.kr/cms/resource/82/3028482_image2_1.JPG,32,숙박,3,,,kto_area_based,3028497,0
+MISSION_0091,더펫텔프리미엄스위트,부산광역시 해운대구 해운대해변로197번길 12,129.1531418525,35.1592408683,http://tong.visitkorea.or.kr/cms/resource/16/2754616_image2_1.jpg,32,숙박,16,,,kto_area_based,2754601,0
+MISSION_0103,팝콘 호스텔 해운대점,부산광역시 해운대구 해운대해변로 321,129.165307371,35.1625407241,,32,숙박,16,,,kto_keyword_search,2613988,0
+MISSION_0109,해운대 영무파라드호텔,부산광역시 해운대구 해운대해변로298번길 25 (중동),129.1665100882,35.1609381479,http://tong.visitkorea.or.kr/cms/resource/20/2705420_image2_1.jpg,32,숙박,16,,,kto_keyword_search,2705418,0
+MISSION_0112,해운대센텀호텔,부산광역시 해운대구 센텀3로 20 (우동),129.1328433813,35.1678506389,http://tong.visitkorea.or.kr/cms/resource/14/2719514_image2_1.jpg,32,숙박,16,,,kto_keyword_search,2663379,0
