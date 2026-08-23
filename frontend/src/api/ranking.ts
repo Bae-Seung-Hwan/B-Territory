@@ -26,46 +26,6 @@ export interface RankingResult<T> {
   ranking: T[];
 }
 
-export interface TeamOccupationRecord {
-  team: string;
-  sigungucode: string;
-  startedAt: string;
-  endedAt: string;
-  durationSeconds: number;
-}
-
-export interface TeamDuelWinRecord {
-  team: string;
-  wins: number;
-}
-
-export interface TeamRecords {
-  longestOccupation: TeamOccupationRecord[];
-  mostDuelWins: TeamDuelWinRecord[];
-}
-
-export interface UserCountRecord {
-  userId: string;
-  nickname: string;
-  team: string;
-  count: number;
-}
-
-export interface UserWinRateRecord {
-  userId: string;
-  nickname: string;
-  team: string;
-  wins: number;
-  losses: number;
-  winRate: number;
-}
-
-export interface UserRecords {
-  mostVisits: UserCountRecord[];
-  mostMissions: UserCountRecord[];
-  duelWinRate: UserWinRateRecord[];
-}
-
 /** GET /api/hall-of-fame/teams — 시즌 팀 랭킹 (season 생략 시 현재 시즌). */
 export async function fetchTeamRanking(
   season?: number,
@@ -85,17 +45,5 @@ export async function fetchUserRanking(
     '/api/hall-of-fame/users',
     { params: season !== undefined ? { season } : undefined },
   );
-  return data;
-}
-
-/** GET /api/hall-of-fame/records/teams — 국가(팀) 역대 기록. 시즌 무관. */
-export async function fetchTeamRecords(): Promise<TeamRecords> {
-  const { data } = await apiClient.get<TeamRecords>('/api/hall-of-fame/records/teams');
-  return data;
-}
-
-/** GET /api/hall-of-fame/records/users — 개인 역대 기록. 시즌 무관. */
-export async function fetchUserRecords(): Promise<UserRecords> {
-  const { data } = await apiClient.get<UserRecords>('/api/hall-of-fame/records/users');
   return data;
 }
