@@ -17,18 +17,3 @@ export interface ChatMessageIncoming {
   text: string;
   at: string;
 }
-
-/** team:location emit 시 보내는 페이로드. */
-export interface TeamLocationOutgoing {
-  lat: number;
-  lng: number;
-}
-
-/** team:location 수신 페이로드. spotId는 서버 스키마에 없어 좌표로 직접 최근접 관광지를 계산한다. */
-export interface TeamLocationIncoming {
-  userId: string;
-  nickname: string;
-  lat: number;
-  lng: number;
-  at: string;
-}
