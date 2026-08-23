@@ -115,10 +115,6 @@ export const ko = {
   },
   ranking: {
     title: '랭킹',
-    tabs: {
-      season: '시즌 랭킹',
-      hallOfFame: '명예의 전당',
-    },
     scope: {
       teams: '국가별',
       users: '개인별',
@@ -137,21 +133,6 @@ export const ko = {
         ongoing: '진행 중',
         ended: '종료',
       },
-    },
-    hallOfFame: {
-      disabledBanner: '명예의 전당은 서버 연동 준비 중입니다',
-      teamSection: '국가 기록',
-      userSection: '개인 기록',
-      longestOccupation: '최장 연속 점령',
-      mostDuelWins: '최다 결투 승리',
-      mostVisits: '최다 방문',
-      mostMissions: '최다 미션',
-      duelWinRate: '결투 승률',
-      winsLabel: '{{wins}}승',
-      winLossLabel: '{{wins}}승 {{losses}}패',
-      durationDays: '{{days}}일 {{hours}}시간',
-      durationHoursOnly: '{{hours}}시간',
-      empty: '아직 기록이 없습니다',
     },
   },
   profile: {

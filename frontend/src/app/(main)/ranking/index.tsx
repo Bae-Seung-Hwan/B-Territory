@@ -1,46 +1,27 @@
 import { useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  ScrollView,
-  Pressable,
-  ActivityIndicator,
-  StyleSheet,
-} from 'react-native';
+import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import {
   fetchTeamRanking,
   fetchUserRanking,
-  fetchTeamRecords,
-  fetchUserRecords,
   type TeamRankEntry,
   type UserRankEntry,
-  type TeamOccupationRecord,
-  type TeamDuelWinRecord,
-  type UserCountRecord,
-  type UserWinRateRecord,
 } from '@/api/ranking';
 import { queryKeys } from '@/lib/query-keys';
 import { useTranslation } from '@/i18n';
 import { getCountryList } from '@/constants/countries';
-import { HALL_OF_FAME_RECORDS_ENABLED } from '@/config/feature-flags';
 import { Card } from '@/components/ui/Card';
 import { BrandColors, Spacing } from '@/constants/theme';
 
 // 시즌 랭킹 캐시 TTL(진행 중 60초, hall-of-fame.service.ts LIVE_TTL_SEC)에 맞춘 폴링 주기.
 // 이보다 짧게 돌려도 백엔드가 같은 캐시 값을 돌려주므로 의미가 없다.
 const SEASON_POLL_MS = 60_000;
-// 명예의 전당 표시 상한 — 백엔드는 최대 100건까지 주지만 목록이 길어지면 스크롤이 무거워진다.
-const RECORDS_DISPLAY_LIMIT = 10;
 
-type RankingView = 'season' | 'hallOfFame';
 type Scope = 'teams' | 'users';
 
 export default function RankingScreen() {
   const { t, locale } = useTranslation();
-  const [view, setView] = useState<RankingView>('season');
   const [scope, setScope] = useState<Scope>('teams');
 
   const countries = useMemo(() => getCountryList(locale), [locale]);
@@ -52,25 +33,7 @@ export default function RankingScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Text style={styles.title}>{t('ranking.title')}</Text>
-
-      <View style={styles.segmentRow}>
-        <Segment
-          label={t('ranking.tabs.season')}
-          active={view === 'season'}
-          onPress={() => setView('season')}
-        />
-        <Segment
-          label={t('ranking.tabs.hallOfFame')}
-          active={view === 'hallOfFame'}
-          onPress={() => setView('hallOfFame')}
-        />
-      </View>
-
-      {view === 'season' ? (
-        <SeasonRankingView scope={scope} onScopeChange={setScope} flagByTeam={flagByTeam} />
-      ) : (
-        <HallOfFameView flagByTeam={flagByTeam} />
-      )}
+      <SeasonRankingView scope={scope} onScopeChange={setScope} flagByTeam={flagByTeam} />
     </SafeAreaView>
   );
 }
@@ -245,173 +208,6 @@ function RankRow({ rank, label, score }: { rank: number; label: string; score: n
   );
 }
 
-/** 초 단위 지속시간을 "N일 M시간"/"N일" 형태로 표시 — 프로젝트에 날짜 라이브러리가 없어 직접 계산한다. */
-function formatDuration(t: (key: string, opts?: Record<string, unknown>) => string, seconds: number) {
-  const totalHours = Math.floor(seconds / 3600);
-  const days = Math.floor(totalHours / 24);
-  const hours = totalHours % 24;
-  if (days > 0) return t('ranking.hallOfFame.durationDays', { days, hours });
-  return t('ranking.hallOfFame.durationHoursOnly', { hours });
-}
-
-function HallOfFameView({ flagByTeam }: { flagByTeam: Map<string, string> }) {
-  const { t } = useTranslation();
-
-  const teamRecordsQuery = useQuery({
-    queryKey: queryKeys.ranking.teamRecords,
-    queryFn: fetchTeamRecords,
-    enabled: HALL_OF_FAME_RECORDS_ENABLED,
-  });
-  const userRecordsQuery = useQuery({
-    queryKey: queryKeys.ranking.userRecords,
-    queryFn: fetchUserRecords,
-    enabled: HALL_OF_FAME_RECORDS_ENABLED,
-  });
-
-  // 백엔드(records/teams·records/users)가 아직 없다 — 존재하지 않는 엔드포인트를
-  // 조회하는 대신 준비 중 안내만 보여준다. 플래그가 켜지면 이 분기가 자연히 없어진다.
-  if (!HALL_OF_FAME_RECORDS_ENABLED) {
-    return (
-      <View style={styles.errorBox}>
-        <Text style={styles.errorText}>{t('ranking.hallOfFame.disabledBanner')}</Text>
-      </View>
-    );
-  }
-
-  const isLoading = teamRecordsQuery.isLoading || userRecordsQuery.isLoading;
-  const isError = teamRecordsQuery.isError || userRecordsQuery.isError;
-
-  if (isLoading) {
-    return <ActivityIndicator style={styles.loading} color={BrandColors.accent} />;
-  }
-
-  if (isError) {
-    return (
-      <Pressable
-        style={styles.errorBox}
-        onPress={() => {
-          teamRecordsQuery.refetch();
-          userRecordsQuery.refetch();
-        }}
-      >
-        <Text style={styles.errorText}>{t('ranking.loadFailed')}</Text>
-        <Text style={styles.retryText}>{t('ranking.retry')}</Text>
-      </Pressable>
-    );
-  }
-
-  const longestOccupation = teamRecordsQuery.data?.longestOccupation ?? [];
-  const mostDuelWinsTeams = teamRecordsQuery.data?.mostDuelWins ?? [];
-  const mostVisits = userRecordsQuery.data?.mostVisits ?? [];
-  const mostMissions = userRecordsQuery.data?.mostMissions ?? [];
-  const duelWinRate = userRecordsQuery.data?.duelWinRate ?? [];
-
-  return (
-    <ScrollView contentContainerStyle={styles.list}>
-      <Text style={styles.sectionTitle}>{t('ranking.hallOfFame.teamSection')}</Text>
-      <RecordSection
-        title={t('ranking.hallOfFame.longestOccupation')}
-        data={longestOccupation}
-        emptyText={t('ranking.hallOfFame.empty')}
-        renderItem={(item: TeamOccupationRecord) => (
-          <Card key={`${item.team}-${item.sigungucode}`} style={styles.recordRow}>
-            <Text style={styles.rowLabel}>
-              {(flagByTeam.get(item.team) ?? '') + ' ' + item.team}
-            </Text>
-            <Text style={styles.rowScore}>{formatDuration(t, item.durationSeconds)}</Text>
-          </Card>
-        )}
-      />
-      <RecordSection
-        title={t('ranking.hallOfFame.mostDuelWins')}
-        data={mostDuelWinsTeams}
-        emptyText={t('ranking.hallOfFame.empty')}
-        renderItem={(item: TeamDuelWinRecord) => (
-          <Card key={item.team} style={styles.recordRow}>
-            <Text style={styles.rowLabel}>
-              {(flagByTeam.get(item.team) ?? '') + ' ' + item.team}
-            </Text>
-            <Text style={styles.rowScore}>
-              {t('ranking.hallOfFame.winsLabel', { wins: item.wins })}
-            </Text>
-          </Card>
-        )}
-      />
-
-      <Text style={styles.sectionTitle}>{t('ranking.hallOfFame.userSection')}</Text>
-      <RecordSection
-        title={t('ranking.hallOfFame.mostVisits')}
-        data={mostVisits}
-        emptyText={t('ranking.hallOfFame.empty')}
-        renderItem={(item: UserCountRecord) => (
-          <Card key={item.userId} style={styles.recordRow}>
-            <Text style={styles.rowLabel}>
-              {(flagByTeam.get(item.team) ?? '') + ' ' + item.nickname}
-            </Text>
-            <Text style={styles.rowScore}>{item.count}</Text>
-          </Card>
-        )}
-      />
-      <RecordSection
-        title={t('ranking.hallOfFame.mostMissions')}
-        data={mostMissions}
-        emptyText={t('ranking.hallOfFame.empty')}
-        renderItem={(item: UserCountRecord) => (
-          <Card key={item.userId} style={styles.recordRow}>
-            <Text style={styles.rowLabel}>
-              {(flagByTeam.get(item.team) ?? '') + ' ' + item.nickname}
-            </Text>
-            <Text style={styles.rowScore}>{item.count}</Text>
-          </Card>
-        )}
-      />
-      <RecordSection
-        title={t('ranking.hallOfFame.duelWinRate')}
-        data={duelWinRate}
-        emptyText={t('ranking.hallOfFame.empty')}
-        renderItem={(item: UserWinRateRecord) => (
-          <Card key={item.userId} style={styles.recordRow}>
-            <Text style={styles.rowLabel}>
-              {(flagByTeam.get(item.team) ?? '') + ' ' + item.nickname}
-            </Text>
-            <Text style={styles.rowScore}>
-              {t('ranking.hallOfFame.winLossLabel', {
-                wins: item.wins,
-                losses: item.losses,
-              })}
-              {` · ${Math.round(item.winRate * 100)}%`}
-            </Text>
-          </Card>
-        )}
-      />
-    </ScrollView>
-  );
-}
-
-function RecordSection<T>({
-  title,
-  data,
-  emptyText,
-  renderItem,
-}: {
-  title: string;
-  data: T[];
-  emptyText: string;
-  renderItem: (item: T) => React.ReactNode;
-}) {
-  const visible = data.slice(0, RECORDS_DISPLAY_LIMIT);
-  return (
-    <View style={styles.recordSection}>
-      <Text style={styles.recordSectionTitle}>{title}</Text>
-      {visible.length === 0 ? (
-        <Text style={styles.emptyText}>{emptyText}</Text>
-      ) : (
-        visible.map((item) => renderItem(item))
-      )}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BrandColors.background, paddingHorizontal: Spacing.three },
   title: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginTop: Spacing.two, marginBottom: Spacing.two },
@@ -464,14 +260,4 @@ const styles = StyleSheet.create({
   rank: { color: '#888', fontSize: 14, fontWeight: '700', width: 24 },
   rowLabel: { color: '#fff', fontSize: 15, fontWeight: '600', flexShrink: 1 },
   rowScore: { color: BrandColors.accent, fontSize: 15, fontWeight: '700' },
-  sectionTitle: { color: '#fff', fontSize: 16, fontWeight: '700', marginTop: Spacing.three, marginBottom: Spacing.two },
-  recordSection: { marginBottom: Spacing.three },
-  recordSectionTitle: { color: '#999', fontSize: 13, fontWeight: '600', marginBottom: Spacing.one },
-  recordRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: Spacing.one,
-    paddingVertical: Spacing.two,
-  },
 });
