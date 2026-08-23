@@ -4,7 +4,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { SocketProvider } from '@/providers/SocketProvider';
 import { AuthProvider } from '@/providers/AuthProvider';
-import { EnemyDetectionAlert } from '@/components/overlay/EnemyDetectionAlert';
 import { DuelRequest } from '@/components/overlay/DuelRequest';
 import { DuelPending } from '@/components/overlay/DuelPending';
 import { MiniGame } from '@/components/overlay/MiniGame';
@@ -21,7 +20,6 @@ export default function RootLayout() {
             <SocketProvider>
               <RootNavigator />
               <LocationBroadcaster />
-              <EnemyDetectionAlert />
               <DuelRequest />
               <DuelPending />
               <MiniGame />

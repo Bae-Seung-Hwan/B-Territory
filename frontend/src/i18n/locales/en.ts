@@ -95,15 +95,16 @@ export const en: Translations = {
     },
   },
   tabs: {
-    spots: 'Spots',
+    battle: 'Battle',
     chat: 'Chat',
     map: 'Map',
     ranking: 'Ranking',
     profile: 'Profile',
   },
-  spots: {
-    title: 'Spots',
-    placeholder: 'The list of spots shown on the map will appear here',
+  battle: {
+    title: 'Battle',
+    emptyState: 'No nearby opponents detected',
+    duel: 'Challenge',
   },
   chat: {
     title: 'Chat',
@@ -211,12 +212,6 @@ export const en: Translations = {
     },
   },
   overlay: {
-    enemyAlert: {
-      title: 'Enemy Detected',
-      body: 'Team {{team}} is within {{distance}}m',
-      ignore: 'Ignore',
-      duel: 'Challenge',
-    },
     duelRequest: {
       title: 'Duel Request',
       body: '{{nickname}} challenged you to a duel',
