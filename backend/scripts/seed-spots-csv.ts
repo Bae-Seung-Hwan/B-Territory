@@ -367,6 +367,13 @@ async function main() {
       );
     }
 
+    // 삭제해도 안전한 잔여 행의 조건 — dry-run 미리보기와 실제 DELETE가 갈리지 않도록
+    // 한 곳에서만 정의한다. 새로 spots를 참조하는 테이블이 생기면 여기에 추가해야 한다.
+    const NO_USER_RECORDS = `
+      NOT EXISTS (SELECT 1 FROM spot_claims sc WHERE sc."spotId" = s.id)
+      AND NOT EXISTS (SELECT 1 FROM mission_photos mp WHERE mp."spotId" = s.id)
+      AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r."spotId" = s.id)`;
+
     // 위 upsert는 이미 커밋(또는 dry-run 롤백)까지 끝난 상태라, 아래 후처리(잔여 행 정리·경고)가
     // 실패해도 시딩 자체가 실패한 것처럼 보이면 안 된다 — 별도로 잡아서 경고로만 남긴다.
     try {
@@ -374,8 +381,14 @@ async function main() {
       // CSV 행과 중복 노출될 뿐 아니라, legacy sigungucode 포맷(예: "6-2")이 신규 코드(예:
       // "16")와 물리적으로 같은 구를 가리켜 구 점령 집계(aggregateDistricts GROUP BY
       // sigungucode)가 쪼개지는, 이 PR이 애초에 고치려던 버그가 재발할 수 있다.
-      // spot_claims가 없는 잔여 행은 삭제해도 잃을 점령 기록이 없어 안전하므로 자동 삭제하고,
-      // 이미 점령된 행은 CASCADE 삭제로 점령 기록이 조용히 사라질 수 있어 수동 정리를 유도한다.
+      // 유저 기록이 없는 잔여 행은 삭제해도 잃을 게 없어 자동 삭제하고, 기록이 달린 행은
+      // CASCADE 삭제로 그 기록이 조용히 사라질 수 있어 수동 정리를 유도한다.
+      //
+      // spot_claims뿐 아니라 mission_photos/reviews도 확인해야 한다 — 세 테이블 모두 spot FK가
+      // CASCADE인데 점령 기록만 보고 지우면, "점령된 적은 없지만 사진·리뷰 미션 기록은 있는"
+      // 스팟에서 증빙이 통째로 사라진다. 그때 score_events는 spotId가 SET NULL이라 원장 행은
+      // 남으므로(원장은 append-only가 원칙), 지급 근거를 확인할 수 없는 점수만 남게 된다.
+      // mission_photos는 imageUrl까지 함께 사라져 S3 객체가 영구 고아가 된다.
       if (DRY_RUN) {
         const preview = await client.query<{
           id: number;
@@ -384,11 +397,11 @@ async function main() {
         }>(
           `SELECT s.id, s."contentId", s.title FROM spots s
            WHERE s."contentId" NOT LIKE 'MISSION%'
-             AND NOT EXISTS (SELECT 1 FROM spot_claims sc WHERE sc."spotId" = s.id)`,
+             AND ${NO_USER_RECORDS}`,
         );
         if ((preview.rowCount ?? 0) > 0) {
           console.log(
-            `[dry-run] 점령 기록이 없는 구 KTO 잔여 행 ${preview.rowCount}건이 삭제 대상입니다 (실제로 삭제하지 않음):`,
+            `[dry-run] 유저 기록(점령·사진·리뷰)이 없는 구 KTO 잔여 행 ${preview.rowCount}건이 삭제 대상입니다 (실제로 삭제하지 않음):`,
           );
           for (const row of preview.rows) {
             console.log(`  - ${row.contentId} ${row.title}`);
@@ -401,13 +414,13 @@ async function main() {
         }>(
           `DELETE FROM spots s
            WHERE s."contentId" NOT LIKE 'MISSION%'
-             AND NOT EXISTS (SELECT 1 FROM spot_claims sc WHERE sc."spotId" = s.id)
+             AND ${NO_USER_RECORDS}
            RETURNING s."contentId", s.title`,
         );
         if ((deletedStale.rowCount ?? 0) > 0) {
           // 무엇을 지웠는지 사후에 확인할 수 있도록 dry-run과 동일하게 목록을 남긴다.
           console.log(
-            `구 KTO 시딩 잔여 행 중 점령 기록이 없는 ${deletedStale.rowCount}건을 자동 삭제했습니다:`,
+            `구 KTO 시딩 잔여 행 중 유저 기록(점령·사진·리뷰)이 없는 ${deletedStale.rowCount}건을 자동 삭제했습니다:`,
           );
           for (const row of deletedStale.rows) {
             console.log(`  - ${row.contentId} ${row.title}`);
@@ -424,10 +437,11 @@ async function main() {
         const staleCount = Number(stale.rows[0].count);
         if (staleCount > 0) {
           console.warn(
-            `경고: 점령 기록이 있어 자동 삭제하지 못한 구 KTO 잔여 행 ${staleCount}건이 남아 있습니다. ` +
+            `경고: 유저 기록이 있어 자동 삭제하지 못한 구 KTO 잔여 행 ${staleCount}건이 남아 있습니다. ` +
               `같은 장소가 중복 노출되는 것뿐 아니라, legacy sigungucode가 신규 코드와 물리적으로 같은 구를 ` +
-              `가리켜 구 점령 집계(aggregateDistricts)가 쪼개지고 있을 수 있습니다. spot_claims를 이관/백업할 ` +
-              `방법을 검토한 뒤 정리하세요 (SpotClaim.spot FK는 CASCADE라 spots 행을 지우면 점령 기록도 함께 삭제됩니다).`,
+              `가리켜 구 점령 집계(aggregateDistricts)가 쪼개지고 있을 수 있습니다. spot_claims/mission_photos/reviews를 ` +
+              `이관/백업할 방법을 검토한 뒤 정리하세요 (세 테이블 모두 spot FK가 CASCADE라 spots 행을 지우면 ` +
+              `점령 기록과 미션 증빙이 함께 삭제되고, mission_photos는 S3 객체까지 고아가 됩니다).`,
           );
         }
       }

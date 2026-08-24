@@ -130,4 +130,51 @@ describe('RedisService', () => {
       expect(client.unlink).not.toHaveBeenCalled();
     });
   });
+
+  describe('drainNotifications', () => {
+    /** MULTI 체이닝을 흉내내 lrange 결과를 돌려주는 목을 심는다. */
+    const stubDrain = (entries: string[]) => {
+      const multi = {
+        lrange: jest.fn().mockReturnThis(),
+        del: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([
+          [null, entries],
+          [null, 1],
+        ]),
+      };
+      (
+        service as unknown as { client: { multi: () => typeof multi } }
+      ).client.multi = () => multi;
+    };
+
+    it('쌓인 알림을 순서대로 파싱해 돌려준다', async () => {
+      stubDrain([
+        JSON.stringify({ event: 'duel:requested', payload: { id: 'd1' } }),
+        JSON.stringify({ event: 'duel:completed', payload: { id: 'd1' } }),
+      ]);
+
+      await expect(service.drainNotifications('user-1')).resolves.toEqual([
+        { event: 'duel:requested', payload: { id: 'd1' } },
+        { event: 'duel:completed', payload: { id: 'd1' } },
+      ]);
+    });
+
+    // 회귀 가드: 읽기가 파괴적이라(lrange+del이 먼저 확정) 엔트리 하나 때문에 throw하면
+    // 이미 지워진 나머지 알림까지 영영 잃는다. 깨진 것만 버려야 한다.
+    it('손상된 엔트리 하나 때문에 나머지 알림을 잃지 않는다', async () => {
+      const warn = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation(() => undefined);
+      stubDrain([
+        '{"event":"duel:requested","payl',
+        JSON.stringify({ event: 'score:update', payload: { delta: 10 } }),
+      ]);
+
+      await expect(service.drainNotifications('user-1')).resolves.toEqual([
+        { event: 'score:update', payload: { delta: 10 } },
+      ]);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+  });
 });

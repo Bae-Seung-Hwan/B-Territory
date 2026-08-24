@@ -12,6 +12,7 @@ import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
 import { ScoresService } from '../scores/scores.service';
+import { ModerationService } from '../moderation/moderation.service';
 import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { sortedPairKey } from '../common/utils/pair-key.util';
 import {
@@ -62,6 +63,7 @@ export class DuelsService {
     private readonly redis: RedisService,
     private readonly usersService: UsersService,
     private readonly scoresService: ScoresService,
+    private readonly moderation: ModerationService,
   ) {}
 
   private lockKey(a: string, b: string): string {
@@ -205,6 +207,20 @@ export class DuelsService {
     if (await this.redis.hasPenalty(targetUserId)) {
       throw new ForbiddenException(
         errBody(ErrorCode.DUEL_TARGET_PENALTY, '상대가 결투 페널티 중입니다.'),
+      );
+    }
+
+    // 나를 차단한 상대에게는 결투를 걸 수 없다. 차단을 채팅에만 걸면, 차단당한 쪽이
+    // 물리적으로 따라다니며 duel:request를 반복해 duel:requested 알림으로 계속
+    // 접촉할 수 있어 "악성 사용자 차단"이 반쪽이 된다.
+    // 거부 사유는 차단 사실을 드러내지 않는다 — 알려주면 차단 여부를 탐지하는 수단이 된다.
+    const blockedBy = await this.moderation.getBlockedBy(challenger.id);
+    if (blockedBy.includes(targetUserId)) {
+      throw new ForbiddenException(
+        errBody(
+          ErrorCode.DUEL_TARGET_UNAVAILABLE,
+          '지금은 이 상대에게 결투를 신청할 수 없습니다.',
+        ),
       );
     }
 

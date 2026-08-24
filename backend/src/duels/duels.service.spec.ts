@@ -9,8 +9,10 @@ import {
 import { DuelsService } from './duels.service';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
+import { ErrorCode } from '../common/errors/error-code';
 import { UsersService } from '../users/users.service';
 import { ScoresService } from '../scores/scores.service';
+import { ModerationService } from '../moderation/moderation.service';
 import { ScoreEventType } from '../scores/entities/score-event.entity';
 import {
   BASE_DUEL_SCORE,
@@ -57,6 +59,7 @@ describe('DuelsService', () => {
     Pick<UsersService, 'findById' | 'findByIds' | 'applyScoreDelta'>
   >;
   let scoresService: jest.Mocked<Pick<ScoresService, 'record'>>;
+  let moderation: { getBlockedBy: jest.Mock };
 
   const challenger = { id: 'user-a', team: 'KR' };
   const opponentId = 'user-b';
@@ -114,6 +117,8 @@ describe('DuelsService', () => {
     };
 
     scoresService = { record: jest.fn().mockResolvedValue(undefined) };
+    // 기본값: 아무도 신청자를 차단하지 않음.
+    moderation = { getBlockedBy: jest.fn().mockResolvedValue([]) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -123,6 +128,7 @@ describe('DuelsService', () => {
         { provide: RedisService, useValue: redis },
         { provide: UsersService, useValue: usersService },
         { provide: ScoresService, useValue: scoresService },
+        { provide: ModerationService, useValue: moderation },
       ],
     }).compile();
 
@@ -139,6 +145,31 @@ describe('DuelsService', () => {
       await expect(service.requestDuel(challenger, opponentId)).rejects.toThrow(
         BadRequestException,
       );
+    });
+
+    // 차단을 채팅에만 걸면, 차단당한 쪽이 결투 신청을 반복해 duel:requested 알림으로
+    // 계속 접촉할 수 있어 "악성 사용자 차단"이 반쪽이 된다.
+    it('나를 차단한 상대에게는 결투를 신청할 수 없다', async () => {
+      moderation.getBlockedBy.mockResolvedValue([opponentId]);
+
+      const err = await service
+        .requestDuel(challenger, opponentId)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect(moderation.getBlockedBy).toHaveBeenCalledWith(challenger.id);
+      // 차단 사실을 드러내면 차단 여부를 탐지하는 수단이 된다.
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: ErrorCode.DUEL_TARGET_UNAVAILABLE,
+      });
+    });
+
+    it('다른 사람을 차단했더라도 대상이 아니면 신청할 수 있다', async () => {
+      moderation.getBlockedBy.mockResolvedValue(['someone-else']);
+
+      await expect(
+        service.requestDuel(challenger, opponentId),
+      ).resolves.toBeDefined();
     });
 
     it('페널티 중인 상대에게는 결투를 신청할 수 없다', async () => {

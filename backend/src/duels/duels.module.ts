@@ -9,6 +9,7 @@ import { GeoCleanupProcessor } from './geo-cleanup.processor';
 import { DuelCleanupProcessor } from './duel-cleanup.processor';
 import { UsersModule } from '../users/users.module';
 import { ScoresModule } from '../scores/scores.module';
+import { ModerationModule } from '../moderation/moderation.module';
 import { DUEL_SWEEP_INTERVAL_MS, GEO_PRUNE_INTERVAL_MS } from './constants';
 
 @Module({
@@ -19,6 +20,8 @@ import { DUEL_SWEEP_INTERVAL_MS, GEO_PRUNE_INTERVAL_MS } from './constants';
     UsersModule,
     // 결투 승패를 점수 원장(score_events)에 append하기 위함 — 개인 랭킹의 근거가 된다.
     ScoresModule,
+    // 나를 차단한 상대에게 결투를 걸지 못하게 하기 위함.
+    ModerationModule,
   ],
   providers: [
     DuelsService,
