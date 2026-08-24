@@ -101,12 +101,30 @@ describe('FestivalsService.syncFromApi', () => {
 
   it('환산표에 없는 법정동 코드는 섞어 넣지 않고 비워 둔다', async () => {
     const { service, query } = makeService([
-      { ...BUSAN_ITEM, lDongSignguCd: '999' },
+      { ...BUSAN_ITEM, lDongSignguCd: '999', addr1: '부산광역시' },
     ]);
 
     await service.syncFromApi();
 
+    // 법정동 코드 '999'를 그대로 넣으면 시더의 KTO 체계와 섞여 구 집계가 쪼개진다.
     expect(upsertParams(query)[P_SIGUNGUCODE]).toBeNull();
+  });
+
+  it('법정동 코드가 없어도 주소로 구를 알아낸다', async () => {
+    const { service, query } = makeService([
+      {
+        ...BUSAN_ITEM,
+        lDongRegnCd: '',
+        lDongSignguCd: '',
+        addr1: '부산광역시 해운대구 우동 1435',
+      },
+    ]);
+
+    const result = await service.syncFromApi();
+
+    // 주소가 부산임을 독립적으로 증명하므로 구까지 버릴 이유가 없다.
+    expect(result.synced).toBe(1);
+    expect(upsertParams(query)[P_SIGUNGUCODE]).toBe('16');
   });
 
   it('API가 sigungucode를 주면 그 값이 환산값보다 우선한다', async () => {
@@ -189,6 +207,75 @@ describe('FestivalsService.syncFromApi', () => {
 
     expect(result.synced).toBe(1);
     expect(upsertParams(query)[0]).toBe(BUSAN_ITEM.contentid);
+  });
+
+  /**
+   * upstream이 lDongRegnCd를 무시해 전국 데이터가 내려오는 방향의 오염이다. 근거가 없다며
+   * 구 환산은 포기하면서 areacode·sigungucode는 부산으로 찍으면 앞뒤가 맞지 않는다.
+   */
+  it('부산이라는 근거가 없으면 지역 컬럼을 비워 둔다', async () => {
+    const { service, query } = makeService([
+      { ...BUSAN_ITEM, areacode: '', addr1: '', lDongRegnCd: '' },
+    ]);
+
+    expect((await service.syncFromApi()).synced).toBe(1);
+    const params = upsertParams(query);
+    expect(params[P_AREACODE]).toBeNull();
+    expect(params[P_SIGUNGUCODE]).toBeNull();
+  });
+
+  it('구형 레코드의 areacode도 지역 근거로 본다', async () => {
+    const { service, query } = makeService([
+      // 서울 축제. lDong·주소가 비어도 areacode가 부산이 아님을 증명한다.
+      {
+        ...BUSAN_ITEM,
+        contentid: '9999999',
+        areacode: '1',
+        sigungucode: '1',
+        addr1: '',
+        lDongRegnCd: '',
+        lDongSignguCd: '',
+      },
+      BUSAN_ITEM,
+    ]);
+
+    const result = await service.syncFromApi();
+
+    // 통과시키면 areacode가 '6'으로 덮이고 서울 sigungucode '1'이 부산 강서구로 저장된다.
+    expect(result.synced).toBe(1);
+    expect(upsertParams(query)[0]).toBe(BUSAN_ITEM.contentid);
+  });
+
+  /**
+   * 0건 응답과 증상이 같은 형제 경로다 — 목록이 비고, 정리는 스킵되고, 로그에는 "총 N건"만
+   * 남아 정상으로 보인다. 이 PR의 목적이 그 무음을 드러내는 것이라 함께 막는다.
+   */
+  it('받아온 건 있는데 저장 대상이 0건이면 경고한다', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    // upstream이 areacode를 비웠던 것처럼 eventenddate를 비우면 전 행이 날짜 파싱에서 탈락한다.
+    const { service } = makeService([{ ...BUSAN_ITEM, eventenddate: '' }]);
+
+    const result = await service.syncFromApi();
+
+    expect(result.synced).toBe(0);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('저장 대상이 0건'),
+    );
+  });
+
+  it('totalCount를 숫자로 못 읽어도 1페이지는 처리하고 경고한다', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    // NaN이면 totalPages도 NaN이라 `page <= totalPages`가 false — 루프가 통째로 안 돌고
+    // total !== 0이라 0건 경고에도 안 걸려 완전 무음이 된다.
+    const { service, query } = makeService([BUSAN_ITEM], NaN);
+
+    const result = await service.syncFromApi();
+
+    expect(result.synced).toBe(1);
+    expect(upsertParams(query)[0]).toBe(BUSAN_ITEM.contentid);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('totalCount를 숫자로 읽지 못했다'),
+    );
   });
 
   it('0건 응답은 정상 종료가 아니라 경고로 남긴다', async () => {

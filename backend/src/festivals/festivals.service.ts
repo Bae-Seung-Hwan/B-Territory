@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { Festival } from './entities/festival.entity';
 import { FestivalStatus } from './dto/festival-query.dto';
 import { kstDateString, kstYyyymmdd } from '../common/utils/kst.util';
+import { ktoSigunguFromAddress } from '../common/geo/busan-district.util';
 
 /**
  * TourAPI 원본 필드. **문자열로 온다는 보장이 없다** — 같은 응답의 totalCount가 이미
@@ -157,6 +158,30 @@ function parseYmd(value?: ApiValue): string | null {
   return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
 }
 
+/**
+ * 응답이 주는 지역 근거로 이 축제가 부산인지 판정한다.
+ *
+ * 'other'만 버린다 — 부산이 **아니라는 근거가 있는** 행만 제외하고, 근거가 아예 없으면
+ * ('unknown') 통과시켜 필드 누락으로 멀쩡한 축제를 잃지 않는다. 대신 'unknown'인 행에는
+ * 지역 컬럼을 채우지 않는다. 근거가 없다면서 부산으로 라벨링하는 건 앞뒤가 안 맞고,
+ * upstream이 lDongRegnCd를 무시해 전국 데이터가 들어왔을 때 그 오염이 그대로 저장된다.
+ *
+ * 근거는 권위 순으로 **하나만** 채택한다. 여러 근거가 엇갈릴 때(경계 지역, 주최지와
+ * 주소가 다른 축제 등) 약한 근거로 멀쩡한 행을 버리지 않기 위함이다.
+ */
+type RegionVerdict = 'busan' | 'other' | 'unknown';
+
+function regionOf(
+  regnCd: string | null,
+  apiAreaCode: string | null,
+  addr1: string | null,
+): RegionVerdict {
+  if (regnCd) return regnCd === LDONG_REGN_CD ? 'busan' : 'other';
+  if (apiAreaCode) return apiAreaCode === AREA_CODE ? 'busan' : 'other';
+  if (addr1) return addr1.startsWith('부산') ? 'busan' : 'other';
+  return 'unknown';
+}
+
 @Injectable()
 export class FestivalsService {
   private readonly logger = new Logger(FestivalsService.name);
@@ -217,8 +242,19 @@ export class FestivalsService {
       1,
       eventStartDate,
     );
-    const totalPages = Math.max(1, Math.ceil(total / NUM_OF_ROWS));
+    // totalCount를 숫자로 못 읽으면 페이지 수가 NaN이 되고, `page <= NaN`이 false라 루프가
+    // 통째로 안 돈다 — 0건 경고에도 안 걸려(NaN !== 0) 완전 무음이 된다. 최소 1페이지는
+    // 처리하도록 폴백하고, 원인을 경고로 남긴다.
+    const pagesKnown = Number.isFinite(total);
+    const totalPages = pagesKnown
+      ? Math.max(1, Math.ceil(total / NUM_OF_ROWS))
+      : 1;
     this.logger.log(`축제 총 ${total}건 / ${totalPages}페이지`);
+    if (!pagesKnown) {
+      this.logger.warn(
+        `축제 API totalCount를 숫자로 읽지 못했다(${String(total)}) — 1페이지만 처리한다. 응답 스키마 변경 여부 확인 필요`,
+      );
+    }
     // 0건은 정상 상태가 아니다 — 부산은 상시 진행 중이거나 예정된 축제가 있다. 지역 필터가
     // upstream 스키마 변경으로 무력화되면 HTTP도 resultCode도 정상이라 예외 없이 조용히
     // 0건이 되고(위 areaCode 사례), 아래 정리 로직도 스킵돼 겉보기엔 아무 일도 없다.
@@ -252,15 +288,11 @@ export class FestivalsService {
         // 0건 경고는 "필터가 아무것도 못 잡는" 방향만 막는다. 반대로 upstream이
         // lDongRegnCd를 모르는 파라미터로 취급해 무시하면(data.go.kr은 오류 대신 무시하는
         // 편이다) 전국 축제가 통째로 내려오는데, total > 0이라 경고에도 안 걸리고 부산 전용
-        // 테이블이 오염된 채 그대로 API로 나간다. 부산이 아니라는 **근거가 있는** 행만
-        // 버린다 — 근거가 없으면(두 필드 모두 빈 값) 통과시켜 필드 누락으로 축제를 잃지 않는다.
+        // 테이블이 오염된 채 그대로 API로 나간다. 여기서 부산이 아닌 행을 버린다(regionOf 주석).
         const regnCd = nullIfBlank(item.lDongRegnCd);
         const addr1 = nullIfBlank(item.addr1);
-        if (
-          regnCd
-            ? regnCd !== LDONG_REGN_CD
-            : !!addr1 && !addr1.startsWith('부산')
-        ) {
+        const region = regionOf(regnCd, nullIfBlank(item.areacode), addr1);
+        if (region === 'other') {
           skipped++;
           continue;
         }
@@ -279,20 +311,23 @@ export class FestivalsService {
           tel: nullIfBlank(item.tel),
           eventStartDate,
           eventEndDate,
-          areacode: AREA_CODE,
-          // 신규 레코드는 sigungucode가 비어 있어 법정동 코드에서 KTO 코드로 환산한다.
-          // 환산표에 없으면 null — 법정동 코드를 그대로 넣어 체계를 섞느니 비워 둔다.
+          // 지역 컬럼은 부산으로 확인된 행에만 채운다. 근거 없는 행('unknown')을 부산으로
+          // 찍으면 upstream 필터가 무력화됐을 때 전국 데이터가 부산으로 둔갑해 저장된다.
+          // null이면 upsert의 COALESCE가 기존 값을 보존한다.
+          areacode: region === 'busan' ? AREA_CODE : null,
           //
-          // 환산은 **부산으로 확인된 행에서만** 한다. lDongSignguCd는 시도코드가 빠진 3자리라
-          // 전국에서 유일하지 않다('110'은 부산 중구이자 서울 종로구의 접미 코드다). 위 필터는
-          // 지역 근거가 아예 없는 행(두 필드 모두 빈 값)을 일부러 통과시키므로, 여기서 다시
-          // 확인하지 않으면 비-부산 축제가 그럴듯한 부산 구 코드로 잘못 라벨링된다.
+          // 구는 세 근거를 권위 순으로 본다.
+          // 1) API가 준 sigungucode — 구형 레코드가 쓰는 KTO 체계 그대로다.
+          // 2) 법정동 시군구코드 환산 — 3자리라 전국에서 유일하지 않지만('110'은 부산 중구이자
+          //    서울 종로구의 접미 코드다) 이미 부산으로 확인된 행에서만 쓰므로 안전하다.
+          //    환산표에 없으면 넘어간다 — 법정동 코드를 그대로 넣어 체계를 섞지 않는다.
+          // 3) 주소의 구 이름 — lDongSignguCd 없이 주소로만 통과한 행이 구를 잃지 않게 한다.
           sigungucode:
-            nullIfBlank(item.sigungucode) ??
-            (regnCd === LDONG_REGN_CD
-              ? (KTO_SIGUNGU_BY_LDONG[nullIfBlank(item.lDongSignguCd) ?? ''] ??
-                null)
-              : null),
+            region === 'busan'
+              ? (nullIfBlank(item.sigungucode) ??
+                KTO_SIGUNGU_BY_LDONG[nullIfBlank(item.lDongSignguCd) ?? ''] ??
+                (addr1 ? ktoSigunguFromAddress(addr1) : null))
+              : null,
           updatedAt: syncedAt,
         });
         syncedContentIds.push(contentId);
@@ -307,6 +342,16 @@ export class FestivalsService {
     if (skipped > 0) {
       this.logger.warn(
         `부산이 아닌 축제 ${skipped}건 제외 — 지역 필터가 무시됐는지 확인 필요`,
+      );
+    }
+
+    // 받아온 건 있는데 저장한 게 없는 경우도 0건 응답과 증상이 같다 — 목록이 비고, 정리
+    // 로직은 스킵되고, 로그에는 "총 N건"만 남아 정상으로 보인다. upstream이 areacode를
+    // 비웠던 것처럼 eventenddate를 비우거나 이름을 바꾸면 전 행이 parseYmd에서 탈락해
+    // 정확히 이 상태가 된다. 위 0건 경고와 같은 급으로 드러낸다.
+    if (syncedContentIds.length === 0 && total !== 0) {
+      this.logger.warn(
+        `축제 API가 ${total}건을 반환했지만 저장 대상이 0건 — 필수 필드(제목·날짜) 스키마 변경 여부 확인 필요`,
       );
     }
 

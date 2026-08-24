@@ -12,57 +12,29 @@ const REQUIRED_DB_VARS = [
   'DB_NAME',
 ] as const;
 
+import {
+  BUSAN_SIGUNGU_CODE_BY_NAME,
+  VALID_SIGUNGU_CODES,
+  districtNameFromAddress,
+} from '../src/common/geo/busan-district.util';
+
 const AREA_CODE = '6'; // 부산
 const CSV_PATH = path.join(__dirname, '../../data/mission_places_final.csv');
 
-// KTO 표준 부산(areaCode=6) 시군구 코드표 (가나다순 1~16).
-// CSV의 sigungu_code는 소스에 따라 숫자 코드(kto_area_based)와 한글 구 이름
-// (busan_attraction)이 혼재되어 있어(DATA_README "구 코드 또는 구 이름"),
-// 구 단위 점령 집계(GROUP BY sigungucode)가 쪼개지지 않도록 코드로 정규화한다.
-export const BUSAN_SIGUNGU_CODE_BY_NAME: Record<string, string> = {
-  강서구: '1',
-  금정구: '2',
-  기장군: '3',
-  남구: '4',
-  동구: '5',
-  동래구: '6',
-  부산진구: '7',
-  북구: '8',
-  사상구: '9',
-  사하구: '10',
-  서구: '11',
-  수영구: '12',
-  연제구: '13',
-  영도구: '14',
-  중구: '15',
-  해운대구: '16',
+// 부산 구/군 코드표와 주소 파서는 축제 동기화(festivals.service)도 같은 체계를 써야 해서
+// src/common/geo로 옮겼다. 이 모듈을 쓰던 곳이 있어 그대로 다시 내보낸다.
+export {
+  BUSAN_SIGUNGU_CODE_BY_NAME,
+  VALID_SIGUNGU_CODES,
+  districtNameFromAddress,
 };
-export const VALID_SIGUNGU_CODES = new Set(
-  Object.values(BUSAN_SIGUNGU_CODE_BY_NAME),
-);
+
 const BUSAN_SIGUNGU_NAME_BY_CODE: Record<string, string> = Object.fromEntries(
   Object.entries(BUSAN_SIGUNGU_CODE_BY_NAME).map(([name, code]) => [
     code,
     name,
   ]),
 );
-
-// 주소 문자열에서 부산 구/군 이름을 추출한다 (매핑 테이블에 있는 이름만 인식).
-// normalizeSigunguCode()는 "매핑 불가/빈 값"만 막고 "값이 틀린" 경우(MISSION_0031:
-// 주소는 수영구인데 코드는 16=해운대구)는 통과시키므로, 주소 기반으로 교차검증해
-// 어긋나면 경고를 남긴다 — 다음 CSV 갱신에서 같은 원본 오류가 들어와도 자동으로 드러난다.
-export function districtNameFromAddress(address: string): string | null {
-  for (const name of Object.keys(BUSAN_SIGUNGU_CODE_BY_NAME)) {
-    const idx = address.indexOf(name);
-    if (idx === -1) continue;
-    // 앞 글자가 한글 음절이면 더 긴 이름의 일부다(예: "강남구" 안의 "남구"). 이 경우는
-    // 부산 구/군이 아니므로 건너뛴다 — 구 이름은 "시/도/공백" 뒤에 토큰으로 나온다.
-    const prev = idx === 0 ? '' : address[idx - 1];
-    if (/[가-힣]/.test(prev)) continue;
-    return name;
-  }
-  return null;
-}
 
 // 알 수 없는 값이나 빈 값을 null로 조용히 넣으면 집계에서 해당 관광지가 증발하므로 시딩을 실패시킨다
 export function normalizeSigunguCode(value: string, missionId: string): string {
