@@ -6,23 +6,31 @@ import { Festival } from './entities/festival.entity';
 import { FestivalStatus } from './dto/festival-query.dto';
 import { kstDateString, kstYyyymmdd } from '../common/utils/kst.util';
 
+/**
+ * TourAPI 원본 필드. **문자열로 온다는 보장이 없다** — 같은 응답의 totalCount가 이미
+ * number|string으로 오는 데서 보듯 upstream이 타입을 일관되게 주지 않는다. 숫자로 온 필드에
+ * .trim()을 부르면 TypeError가 나고, syncFromApi 루프는 try/catch가 없어 배치 전체가 죽는다.
+ * 컴파일러가 그 가정을 못 하도록 넓게 선언하고, 읽을 때 nullIfBlank로 정규화한다.
+ */
+type ApiValue = string | number | null | undefined;
+
 interface FestivalItem {
-  contentid: string;
-  title: string;
-  addr1?: string;
-  mapx?: string;
-  mapy?: string;
-  firstimage?: string;
-  tel?: string;
-  eventstartdate?: string; // 'YYYYMMDD'
-  eventenddate?: string; // 'YYYYMMDD'
-  areacode?: string;
-  sigungucode?: string;
+  contentid?: ApiValue;
+  title?: ApiValue;
+  addr1?: ApiValue;
+  mapx?: ApiValue;
+  mapy?: ApiValue;
+  firstimage?: ApiValue;
+  tel?: ApiValue;
+  eventstartdate?: ApiValue; // 'YYYYMMDD'
+  eventenddate?: ApiValue; // 'YYYYMMDD'
+  areacode?: ApiValue;
+  sigungucode?: ApiValue;
   // KorService2가 새로 내려주는 법정동 코드. 신규 레코드는 areacode/sigungucode가 빈 문자열로
   // 오고 지역 정보가 이 필드에만 담긴다. lDongSignguCd는 3자리('350')로, 시도코드를 붙인
   // 5자리('26350')가 아니다 — 5자리로 조회하면 0건이 나온다.
-  lDongRegnCd?: string;
-  lDongSignguCd?: string;
+  lDongRegnCd?: ApiValue;
+  lDongSignguCd?: ApiValue;
 }
 
 interface FestivalApiResponse {
@@ -114,25 +122,39 @@ type FestivalRow = {
   updatedAt: Date;
 };
 
-function parseCoord(value?: string): number | null {
-  if (!value) return null;
-  const n = parseFloat(value);
-  return isFinite(n) ? n : null;
-}
-
 /**
- * 빈 문자열을 null로 정규화한다. TourAPI는 값이 없는 필드를 ''로 주는 일이 잦은데,
- * ''는 null이 아니라서 아래 COALESCE 보존 로직을 통과해 멀쩡한 기존 값을 ''로 덮어쓴다.
+ * 원본 필드를 문자열로 정규화하고 빈 값을 null로 만든다. **원본을 읽는 유일한 입구다.**
+ *
+ * 두 가지를 함께 처리한다.
+ * - 빈 문자열 → null: TourAPI는 값이 없는 필드를 ''로 주는 일이 잦은데, ''는 null이 아니라서
+ *   아래 COALESCE 보존 로직을 통과해 멀쩡한 기존 값을 ''로 덮어쓴다.
+ * - 숫자 → 문자열: 코드 필드가 '26'이 아니라 26으로 오면 .trim()이 TypeError를 던지고,
+ *   syncFromApi 루프에 try/catch가 없어 배치 전체가 죽는다. 지역 필터가 조용히 0건이 되는
+ *   것을 로그로 드러내려던 변경이 반대로 무음 크래시를 만드는 셈이라 여기서 흡수한다.
+ * - 그 외 타입(객체·불리언 등) → null: 억지로 문자열화하면 '[object Object]' 같은 값이
+ *   DB까지 흘러간다. 값이 없는 것으로 보는 편이 안전하다.
  */
-function nullIfBlank(value?: string): string | null {
-  const trimmed = value?.trim();
+function nullIfBlank(value?: ApiValue): string | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
 
+function parseCoord(value?: ApiValue): number | null {
+  const text = nullIfBlank(value);
+  if (!text) return null;
+  const n = parseFloat(text);
+  return isFinite(n) ? n : null;
+}
+
 /** 'YYYYMMDD' → 'YYYY-MM-DD'. 8자리 숫자가 아니면 null. */
-function parseYmd(value?: string): string | null {
-  if (!value || !/^\d{8}$/.test(value)) return null;
-  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+function parseYmd(value?: ApiValue): string | null {
+  const text = nullIfBlank(value);
+  if (!text || !/^\d{8}$/.test(text)) return null;
+  return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
 }
 
 @Injectable()
@@ -219,10 +241,13 @@ export class FestivalsService {
 
       const rows: FestivalRow[] = [];
       for (const item of items) {
-        if (!item.title?.trim()) continue;
+        // title·contentId도 nullIfBlank를 거친다 — 여기서 직접 .trim()을 부르면 숫자로 온
+        // 필드 하나에 배치 전체가 죽는다(nullIfBlank 주석 참고).
+        const title = nullIfBlank(item.title);
+        if (!title) continue;
         // contentId는 NOT NULL UNIQUE인 upsert 키다. 비면 배치 INSERT 전체가
         // not-null 위반으로 죽고, 빈 문자열이면 서로를 덮어쓴다.
-        const contentId = item.contentid?.trim();
+        const contentId = nullIfBlank(item.contentid);
         if (!contentId) continue;
         // 0건 경고는 "필터가 아무것도 못 잡는" 방향만 막는다. 반대로 upstream이
         // lDongRegnCd를 모르는 파라미터로 취급해 무시하면(data.go.kr은 오류 대신 무시하는
@@ -246,7 +271,7 @@ export class FestivalsService {
 
         rows.push({
           contentId,
-          title: item.title.trim(),
+          title,
           addr1,
           mapX: parseCoord(item.mapx),
           mapY: parseCoord(item.mapy),
@@ -257,10 +282,17 @@ export class FestivalsService {
           areacode: AREA_CODE,
           // 신규 레코드는 sigungucode가 비어 있어 법정동 코드에서 KTO 코드로 환산한다.
           // 환산표에 없으면 null — 법정동 코드를 그대로 넣어 체계를 섞느니 비워 둔다.
+          //
+          // 환산은 **부산으로 확인된 행에서만** 한다. lDongSignguCd는 시도코드가 빠진 3자리라
+          // 전국에서 유일하지 않다('110'은 부산 중구이자 서울 종로구의 접미 코드다). 위 필터는
+          // 지역 근거가 아예 없는 행(두 필드 모두 빈 값)을 일부러 통과시키므로, 여기서 다시
+          // 확인하지 않으면 비-부산 축제가 그럴듯한 부산 구 코드로 잘못 라벨링된다.
           sigungucode:
             nullIfBlank(item.sigungucode) ??
-            KTO_SIGUNGU_BY_LDONG[nullIfBlank(item.lDongSignguCd) ?? ''] ??
-            null,
+            (regnCd === LDONG_REGN_CD
+              ? (KTO_SIGUNGU_BY_LDONG[nullIfBlank(item.lDongSignguCd) ?? ''] ??
+                null)
+              : null),
           updatedAt: syncedAt,
         });
         syncedContentIds.push(contentId);

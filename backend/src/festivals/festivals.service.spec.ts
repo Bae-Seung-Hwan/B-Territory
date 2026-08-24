@@ -141,14 +141,54 @@ describe('FestivalsService.syncFromApi', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('부산이 아닌'));
   });
 
-  it('지역 근거가 없는 행은 버리지 않는다', async () => {
+  it('지역 근거가 없는 행은 버리지 않되, 부산 구로 라벨링하지도 않는다', async () => {
     const { service, query } = makeService([
       { ...BUSAN_ITEM, addr1: '', lDongRegnCd: '' },
     ]);
 
     // 필드 누락만으로 멀쩡한 축제를 잃으면 안 된다.
     expect((await service.syncFromApi()).synced).toBe(1);
-    expect(upsertParams(query)[P_SIGUNGUCODE]).toBe('2');
+    // 다만 lDongSignguCd는 시도코드가 빠진 3자리라 전국에서 유일하지 않다('410'은 부산
+    // 금정구지만 다른 시도의 구 접미 코드일 수도 있다). 부산이라는 근거가 없는 행에까지
+    // 환산표를 적용하면 비-부산 축제가 그럴듯한 부산 구 코드를 달고 저장된다.
+    expect(upsertParams(query)[P_SIGUNGUCODE]).toBeNull();
+  });
+
+  /**
+   * 같은 응답의 totalCount가 이미 number|string으로 오는 데서 보듯 upstream은 필드 타입을
+   * 일관되게 주지 않는다. 코드 필드가 숫자로 오면 .trim()이 TypeError를 던지는데, syncFromApi
+   * 루프에는 try/catch가 없어 배치 전체가 죽는다 — 조용한 0건을 조용한 크래시로 바꿀 뿐이다.
+   */
+  it('코드 필드가 문자열이 아니라 숫자로 와도 죽지 않고 그대로 처리한다', async () => {
+    const { service, query } = makeService([
+      {
+        ...BUSAN_ITEM,
+        contentid: 1275743,
+        lDongRegnCd: 26,
+        lDongSignguCd: 410,
+      },
+    ]);
+
+    const result = await service.syncFromApi();
+
+    expect(result.synced).toBe(1);
+    const params = upsertParams(query);
+    expect(params[0]).toBe('1275743');
+    // 숫자 26도 부산으로 인식돼야 한다 — 아니면 전량이 "부산 아님"으로 버려진다.
+    expect(params[P_SIGUNGUCODE]).toBe('2');
+  });
+
+  it('원본 필드가 예상 밖 타입이면 그 행만 건너뛴다', async () => {
+    const { service, query } = makeService([
+      // title이 객체로 오면 문자열화해도 '[object Object]'가 DB까지 흘러간다.
+      { ...BUSAN_ITEM, contentid: '9999999', title: { text: '축제' } },
+      BUSAN_ITEM,
+    ]);
+
+    const result = await service.syncFromApi();
+
+    expect(result.synced).toBe(1);
+    expect(upsertParams(query)[0]).toBe(BUSAN_ITEM.contentid);
   });
 
   it('0건 응답은 정상 종료가 아니라 경고로 남긴다', async () => {
