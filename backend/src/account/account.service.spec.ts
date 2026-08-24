@@ -3,6 +3,8 @@ import { User } from '../users/entities/user.entity';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { RedisService } from '../common/redis/redis.service';
 import { DuelsService } from '../duels/duels.service';
+import { HallOfFameService } from '../hall-of-fame/hall-of-fame.service';
+import { WsSessionsService } from '../common/ws/ws-sessions.service';
 
 /**
  * 계정 삭제(탈퇴) — 앱스토어·플레이스토어 필수 요건.
@@ -32,11 +34,17 @@ describe('AccountService.deleteAccount', () => {
       terminateActiveDuelsFor: jest.fn().mockResolvedValue([]),
       settleTerminatedDuels: jest.fn().mockResolvedValue(undefined),
     };
+    const hallOfFame = {
+      invalidateUserRanking: jest.fn().mockResolvedValue(undefined),
+    };
+    const sessions = { register: jest.fn(), disconnectUser: jest.fn() };
     const service = new AccountService(
       dataSource as never,
       firebaseService as unknown as FirebaseService,
       redis as unknown as RedisService,
       duelsService as unknown as DuelsService,
+      hallOfFame as unknown as HallOfFameService,
+      sessions as unknown as WsSessionsService,
     );
     return {
       service,
@@ -45,6 +53,8 @@ describe('AccountService.deleteAccount', () => {
       firebaseService,
       redis,
       duelsService,
+      hallOfFame,
+      sessions,
     };
   }
 
@@ -134,6 +144,61 @@ describe('AccountService.deleteAccount', () => {
       'user-1',
     );
   });
+
+  /**
+   * 인증은 핸드셰이크에서 한 번만 하고 client.data에 캐시된다. 끊지 않으면 탈퇴 후에도
+   * 그 소켓이 살아 있어, location:update 한 번이면 방금 지운 geo 키가 되살아나고
+   * 탈퇴자가 다시 결투 탐지에 잡힌다.
+   */
+  it('열려 있는 소켓 세션을 끊고, 그 뒤에 Redis를 정리한다', async () => {
+    const { service, redis, sessions } = make();
+    const order: string[] = [];
+    sessions.disconnectUser.mockImplementation(() => order.push('disconnect'));
+    redis.purgeUserKeys.mockImplementation(() => {
+      order.push('purge');
+      return Promise.resolve();
+    });
+
+    await service.deleteAccount(user);
+
+    expect(sessions.disconnectUser).toHaveBeenCalledWith('user-1');
+    // 순서가 뒤집히면 살아 있는 소켓이 정리된 키를 다시 만든다.
+    expect(order).toEqual(['disconnect', 'purge']);
+  });
+
+  /**
+   * 개인 랭킹 캐시에는 닉네임이 박혀 있고 끝난 시즌은 TTL이 24시간이다. 지우지 않으면
+   * "탈퇴 즉시 노출되지 않는다"는 API.md·compliance.md의 약속이 하루 동안 깨진다.
+   */
+  it('개인 랭킹 캐시를 무효화한다', async () => {
+    const { service, hallOfFame } = make();
+
+    await service.deleteAccount(user);
+
+    expect(hallOfFame.invalidateUserRanking).toHaveBeenCalled();
+  });
+
+  /**
+   * Firebase 삭제는 외부 HTTPS 왕복이라 수백 ms가 걸린다. 그 전에 geo·meta를 지워야
+   * 남은 유저에게 탈퇴자가 "접속 중"으로 보여 결투 신청이 들어오는 창이 닫힌다
+   * (그 신청은 이미 사라진 유저를 참조해 FK 위반으로 터진다).
+   */
+  it('Redis 정리를 Firebase 삭제보다 먼저 한다', async () => {
+    const { service, redis, firebaseService } = make();
+    const order: string[] = [];
+    redis.purgeUserKeys.mockImplementation(() => {
+      order.push('purge');
+      return Promise.resolve();
+    });
+    firebaseService.deleteUser.mockImplementation(() => {
+      order.push('firebase');
+      return Promise.resolve();
+    });
+
+    await service.deleteAccount(user);
+
+    expect(order).toEqual(['purge', 'firebase']);
+  });
 });
 
 /**
@@ -150,6 +215,8 @@ describe('AccountService.deleteOrphanedAuth', () => {
       firebaseService as unknown as FirebaseService,
       {} as unknown as RedisService,
       {} as unknown as DuelsService,
+      {} as unknown as HallOfFameService,
+      {} as unknown as WsSessionsService,
     );
 
     await expect(service.deleteOrphanedAuth('fuid-1')).resolves.toBeUndefined();

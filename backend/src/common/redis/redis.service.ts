@@ -478,7 +478,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         .pipeline()
         .del(`penalty:${userId}`)
         .del(this.notifyKey(userId))
+        .del(`report:rate:${userId}`)
+        // "나를 차단한 사람" 캐시와 그 버전 키(moderation.service).
+        .del(`chat:blockedby:${userId}`)
+        .del(`chat:blockedbyver:${userId}`)
         .exec(),
+      // 채팅 레이트리밋은 종류(message·location)별로 키가 갈린다.
+      this.deleteByPattern(`chat:rate:*:${userId}`),
       // 일일 점령·미션 게이트는 스팟별로 흩어져 있어 패턴으로 지운다.
       this.deleteByPattern(this.dailyClaimKey(userId, '*')),
       this.deleteByPattern(this.missionVisitKey(userId, '*')),

@@ -4,6 +4,8 @@ import { User } from '../users/entities/user.entity';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { RedisService } from '../common/redis/redis.service';
 import { DuelsService } from '../duels/duels.service';
+import { HallOfFameService } from '../hall-of-fame/hall-of-fame.service';
+import { WsSessionsService } from '../common/ws/ws-sessions.service';
 
 /**
  * 계정 삭제(탈퇴) — 앱스토어·플레이스토어가 계정 생성 앱에 요구하는 필수 기능이다.
@@ -23,6 +25,8 @@ export class AccountService {
     private readonly firebaseService: FirebaseService,
     private readonly redis: RedisService,
     private readonly duelsService: DuelsService,
+    private readonly hallOfFame: HallOfFameService,
+    private readonly sessions: WsSessionsService,
   ) {}
 
   /**
@@ -40,6 +44,12 @@ export class AccountService {
    * 순서가 중요하다. DB 삭제를 먼저 커밋한 뒤 Firebase를 지운다 — 반대로 하면 Firebase만
    * 지워지고 DB 삭제가 실패했을 때 로그인할 수 없는데 계정은 남은 상태가 된다. 이 순서의
    * 크래시 창(DB 커밋 직후 프로세스 사망)은 deleteOrphanedAuth가 받아낸다.
+   *
+   * 커밋 이후의 정리는 **소켓 종료 → Redis 정리 → Firebase** 순이다. Firebase 삭제는 외부
+   * HTTPS 왕복이라 수백 ms가 걸리는데, 그동안 geo·meta 키가 살아 있으면 남은 유저에게
+   * 탈퇴자가 계속 "접속 중"으로 보여 결투 신청이 들어오고, 그 신청은 이미 사라진 유저를
+   * 참조해 FK 위반으로 터진다. 소켓을 먼저 끊는 것도 같은 이유다 — 살아 있는 소켓이
+   * location:update 한 번이면 방금 지운 geo 키를 되살린다.
    */
   async deleteAccount(user: User): Promise<void> {
     // 진행 중인 결투 종료와 users 행 삭제를 한 트랜잭션에 묶는다. 종료 처리가
@@ -55,20 +65,28 @@ export class AccountService {
     });
 
     // 락 해제·알림은 커밋 뒤에 한다 — 롤백된 트랜잭션의 결투를 상대에게 종료됐다고
-    // 알리거나 아직 유효한 락을 풀어버리면 안 된다.
+    // 알리거나 아직 유효한 락을 풀어버리면 안 된다. (상대는 아직 접속 중이어야 하므로
+    // 소켓을 끊기 전에 보낸다. 탈퇴자 본인은 수신 대상에서 빠진다.)
     await this.duelsService.settleTerminatedDuels(terminated, user.id);
 
-    await this.firebaseService.deleteUser(user.firebaseUid);
+    // 인증은 핸드셰이크에서 한 번만 하므로, 끊지 않으면 이미 열린 소켓이 탈퇴 후에도
+    // 인증된 채로 남아 위치를 갱신하고 채팅을 계속 쓴다.
+    this.sessions.disconnectUser(user.id);
 
     // Redis 정리는 실패해도 탈퇴를 되돌리지 않는다 — 계정은 이미 사라졌고 남은 키는
     // 전부 TTL로 소멸한다. 다만 조용히 넘기지 않고 로그로 남긴다.
     try {
       await this.redis.purgeUserKeys(user.id);
+      // 개인 랭킹 캐시에는 닉네임이 박혀 있고 끝난 시즌은 TTL이 24시간이라, 지우지
+      // 않으면 "탈퇴 즉시 노출되지 않는다"는 약속이 하루 동안 깨진다.
+      await this.hallOfFame.invalidateUserRanking();
     } catch (err) {
       this.logger.warn(
         `탈퇴 후 Redis 정리 실패 (userId=${user.id}): ${(err as Error).message}`,
       );
     }
+
+    await this.firebaseService.deleteUser(user.firebaseUid);
   }
 
   /**

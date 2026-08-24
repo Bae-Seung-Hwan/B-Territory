@@ -136,8 +136,10 @@ describe('RedisService', () => {
    * 늘어나야 하는데, 놓쳐도 어디서도 실패하지 않아 조용히 남는다.
    */
   describe('purgeUserKeys', () => {
+    let chain: { zrem: jest.Mock; del: jest.Mock; exec: jest.Mock };
+
     beforeEach(() => {
-      const chain = {
+      chain = {
         zrem: jest.fn().mockReturnThis(),
         del: jest.fn().mockReturnThis(),
         exec: jest.fn().mockResolvedValue([]),
@@ -148,7 +150,7 @@ describe('RedisService', () => {
       client.scan.mockResolvedValue(['0', []]);
     });
 
-    it('유저 단위 키를 패턴까지 빠짐없이 지운다', async () => {
+    it('스팟·상대별로 흩어진 키를 패턴으로 빠짐없이 지운다', async () => {
       await service.purgeUserKeys('user-1');
 
       const patterns = client.scan.mock.calls.map(
@@ -160,9 +162,31 @@ describe('RedisService', () => {
           // 미션 API(#33)가 추가한 방문 창·일일 게이트. mission 자리는 photo·review로 갈린다.
           'mission:visit:user-1:*',
           'mission:*:daily:user-1:*',
+          // 채팅 레이트리밋은 종류(message·location)별로 키가 갈린다.
+          'chat:rate:*:user-1',
           // 쌍 키라 유저 id가 어느 자리에 오는지 알 수 없다.
           'encounter:cooldown:*user-1*',
           'duel:lock:*user-1*',
+        ].sort(),
+      );
+    });
+
+    it('키가 하나로 정해지는 것들은 파이프라인으로 지운다', async () => {
+      await service.purgeUserKeys('user-1');
+
+      const deleted = chain.del.mock.calls.map(
+        (call: unknown[]) => call[0] as string,
+      );
+      expect(deleted.sort()).toEqual(
+        [
+          'penalty:user-1',
+          'notify:user-1',
+          'report:rate:user-1',
+          // "나를 차단한 사람" 캐시와 그 버전 키.
+          'chat:blockedby:user-1',
+          'chat:blockedbyver:user-1',
+          // geoRemove가 지우는 위치 메타.
+          'user:meta:user-1',
         ].sort(),
       );
     });

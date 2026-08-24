@@ -46,10 +46,14 @@ export type DuelNotifier = (
 
 const ACTIVE_STATUSES = [DuelStatus.PENDING, DuelStatus.ACCEPTED];
 
+// 참가자 id는 DB가 nullable이다(탈퇴 시 SET NULL). 엔티티 쪽은 진행 중인 결투만 읽는다는
+// 전제로 string을 유지하지만, 여기 오는 행은 상태 전이 결과라 그 전제가 약하다 — null을
+// 그대로 lockKey/notifier에 넘기면 조용히 쓰레기 키를 만들고 null에게 알림을 보내므로
+// 타입으로 드러내 호출부가 걸러내게 한다.
 type SweptDuelRow = {
   id: number;
-  challengerId: string;
-  opponentId: string;
+  challengerId: string | null;
+  opponentId: string | null;
   // 탈퇴 종료 경로에서만 채운다 — EXPIRED/VOID를 한 배열로 넘기고 알림 때 다시 가른다.
   event?: string;
 };
@@ -706,19 +710,20 @@ export class DuelsService {
     if (rows.length === 0) return;
 
     // 락 토큰은 requestDuel과 같은 규칙(row id)이라, 소유자가 이 결투일 때만 CAS로 지운다.
+    // 참가자가 이미 NULL인 행은 페어 키를 복원할 수 없으니 건너뛴다 — 그런 락은
+    // purgeUserKeys의 `duel:lock:*` 정리나 TTL이 걷어간다.
     await Promise.all(
-      rows.map((row) =>
-        this.redis
-          .releaseLock(
-            this.lockKey(row.challengerId, row.opponentId),
-            String(row.id),
-          )
+      rows.map((row) => {
+        const { challengerId, opponentId } = row;
+        if (!challengerId || !opponentId) return Promise.resolve();
+        return this.redis
+          .releaseLock(this.lockKey(challengerId, opponentId), String(row.id))
           .catch((err: Error) => {
             this.logger.warn(
               `탈퇴 결투 락 해제 실패 duelId=${row.id}: ${err.message}`,
             );
-          }),
-      ),
+          });
+      }),
     );
 
     for (const event of ['duel:expired', 'duel:voided']) {
@@ -806,7 +811,8 @@ export class DuelsService {
     const results = await Promise.allSettled(
       rows.flatMap((row) =>
         [row.challengerId, row.opponentId]
-          .filter((id) => id !== excludeUserId)
+          // 이미 탈퇴한 참가자는 NULL로 들어온다 — 보낼 곳이 없다.
+          .filter((id): id is string => id !== null && id !== excludeUserId)
           .map((id) => this.notifier!(id, event, { duelId: row.id })),
       ),
     );

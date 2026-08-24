@@ -11,6 +11,7 @@ import { AccountModule } from './account/account.module';
 import { SpotsModule } from './spots/spots.module';
 import { FirebaseModule } from './common/firebase/firebase.module';
 import { RedisModule } from './common/redis/redis.module';
+import { WsModule } from './common/ws/ws.module';
 import { S3Module } from './common/s3/s3.module';
 import { ClaimsModule } from './claims/claims.module';
 import { MissionsModule } from './missions/missions.module';
@@ -75,6 +76,7 @@ import { HealthModule } from './health/health.module';
     }),
     FirebaseModule,
     RedisModule,
+    WsModule,
     S3Module,
     AuthModule,
     UsersModule,
