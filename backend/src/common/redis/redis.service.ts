@@ -67,6 +67,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /** 카운터 증가 후 새 값 반환. 캐시 무효화 버전 키에 쓴다(키가 없으면 0에서 시작). */
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
   /**
    * "하루 1회" 게이트의 공용 구현 (SET NX — 확인과 기록을 단일 원자 연산으로 처리해
    * 동시 요청도 하나만 통과). created=false면 그 키가 오늘 이미 소진된 것이다.
@@ -242,6 +247,30 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       defenseTeam: result[1] as string,
       remaining: Number(result[2]),
     };
+  }
+
+  /**
+   * 고정 윈도우 레이트리밋 — windowSeconds 동안 limit회까지 허용. 허용되면 true.
+   * INCR + (첫 요청에만) EXPIRE를 Lua로 원자 실행해, EXPIRE 누락으로 키가 영구히
+   * 남는 경합을 막는다. 채팅/위치 릴레이 도배 방지용.
+   */
+  async consumeRateLimit(
+    key: string,
+    limit: number,
+    windowSeconds: number,
+  ): Promise<boolean> {
+    const lua = `
+      local c = redis.call('INCR', KEYS[1])
+      if c == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])) end
+      return c
+    `;
+    const count = (await this.client.eval(
+      lua,
+      1,
+      key,
+      String(windowSeconds),
+    )) as number;
+    return count <= limit;
   }
 
   private static readonly GEO_KEY = 'geo:users';
@@ -509,7 +538,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       .exec();
   }
 
-  /** 큐에 쌓인 알림을 원자적으로(MULTI) 읽고 비운다 — 드레인 도중 새로 들어온 알림을 잃지 않는다 */
+  /**
+   * 큐에 쌓인 알림을 원자적으로(MULTI) 읽고 비운다 — 드레인 도중 새로 들어온 알림을 잃지 않는다.
+   *
+   * 파싱은 엔트리별로 격리한다. 이 읽기는 파괴적이라(lrange + del이 먼저 확정된다) 손상된
+   * 엔트리 하나에서 throw하면 이미 삭제된 나머지 정상 알림까지 통째로 날아가고, 큐가 비어
+   * 있으므로 재접속해도 복구할 방법이 없다. 깨진 것만 버리고 나머지는 살려서 내보낸다.
+   */
   async drainNotifications(
     userId: string,
   ): Promise<{ event: string; payload: unknown }[]> {
@@ -520,8 +555,15 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       .del(key)
       .exec();
     const entries = (results?.[0]?.[1] as string[] | undefined) ?? [];
-    return entries.map(
-      (raw) => JSON.parse(raw) as { event: string; payload: unknown },
-    );
+
+    const parsed: { event: string; payload: unknown }[] = [];
+    for (const raw of entries) {
+      try {
+        parsed.push(JSON.parse(raw) as { event: string; payload: unknown });
+      } catch {
+        this.logger.warn(`손상된 알림 엔트리 폐기 (userId=${userId})`);
+      }
+    }
+    return parsed;
   }
 }

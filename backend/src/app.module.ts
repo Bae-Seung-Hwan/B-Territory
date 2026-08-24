@@ -15,6 +15,8 @@ import { ClaimsModule } from './claims/claims.module';
 import { MissionsModule } from './missions/missions.module';
 import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { ChatModule } from './chat/chat.module';
+import { ModerationModule } from './moderation/moderation.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
 import { FestivalsModule } from './festivals/festivals.module';
@@ -80,6 +82,8 @@ import { HealthModule } from './health/health.module';
     MissionsModule,
     DuelsModule,
     RealtimeModule,
+    ChatModule,
+    ModerationModule,
     ScoresModule,
     DistrictsModule,
     FestivalsModule,
