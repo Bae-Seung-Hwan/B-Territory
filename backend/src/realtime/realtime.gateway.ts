@@ -32,7 +32,13 @@ import type {
   MiniGameOutcome,
 } from '../duels/minigame/minigame.service';
 import { GameSubmitDto } from '../duels/minigame/dto/game-submit.dto';
-import { GAME_ROUND_TIMEOUT } from '../duels/minigame/constants';
+import { ErrorCode, errBody } from '../common/errors/error-code';
+import {
+  GAME_EXPIRE_MAX_ATTEMPTS,
+  GAME_EXPIRE_RETRY_MS,
+  GAME_ROUND_TIMEOUT,
+  GAME_SETTLE_GRACE_MS,
+} from '../duels/minigame/constants';
 import {
   DUEL_REQUEST_TTL,
   ENCOUNTER_COOLDOWN_TTL,
@@ -281,12 +287,53 @@ export class RealtimeGateway
 
     // 수락된 결투는 곧바로 미니게임으로 이어진다. 게임 종류·퀴즈 문제는 서버가 정해
     // 양쪽에 똑같이 내려보내야 두 기기가 같은 화면을 본다.
+    //
+    // 반드시 감싼다 — 여기서 예외가 새면 duel:accept의 ack 콜백이 아예 호출되지 않는다.
+    // 양쪽은 이미 duel:accepted를 받았는데 game:start는 영영 오지 않고, 마감 타이머도
+    // 걸리지 않아 결투가 스윕(약 360초)까지 매달린다. 다른 타이머 경로(fireGoSignal·
+    // expireRoundAndNotify)가 같은 이유로 몸통을 감싸고 있다.
     if (accept) {
-      const plan = await this.minigameService.start(duel.id);
-      await this.startGameRound(duel, plan);
+      try {
+        const plan = await this.minigameService.start(duel);
+        await this.startGameRound(duel, plan);
+      } catch (err) {
+        this.logger.error(`미니게임 시작 실패 duelId=${duel.id}`, err);
+        await this.voidAfterGameStartFailure(duel);
+        return {
+          status: 'error',
+          ...errBody(
+            ErrorCode.MINIGAME_START_FAILED,
+            '미니게임을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.',
+          ),
+        };
+      }
     }
 
     return { status: 'ok' };
+  }
+
+  /**
+   * 미니게임을 시작하지 못한 결투를 즉시 정리한다.
+   *
+   * 세션도 마감 타이머도 없이 ACCEPTED로 남겨두면 스윕이 걷어갈 때까지 두 사람 모두
+   * 새 결투를 걸 수 없다(hasActiveDuel에 잡힌다). 무효 처리 자체가 또 실패할 수 있으므로
+   * (같은 장애가 원인일 가능성이 높다) 여기서도 예외를 삼키고 로그만 남긴다 — 그 경우엔
+   * 스윕이 최종 안전망이다.
+   */
+  private async voidAfterGameStartFailure(
+    participants: DuelParticipants,
+  ): Promise<void> {
+    try {
+      await this.duelsService.voidByGame(participants.id);
+      await this.emitToBoth(participants, 'duel:voided', {
+        duelId: participants.id,
+      });
+    } catch (err) {
+      this.logger.error(
+        `미니게임 시작 실패 후 무효 처리도 실패 duelId=${participants.id} — 스윕에 맡긴다`,
+        err,
+      );
+    }
   }
 
   /** game:start를 양쪽에 보내고, 이 라운드의 출발 신호와 제출 마감 타이머를 건다. */
@@ -301,9 +348,12 @@ export class RealtimeGateway
     //
     // 인메모리 타이머라 서버 재시작 시에는 유실되지만, 그때도 sweepStaleDuels가
     // ACCEPTED를 VOID로 정리한다 (duels.service.ts#sweepStaleDuels).
-    setTimeout(() => {
-      void this.expireRoundAndNotify(participants, payload.round);
-    }, GAME_ROUND_TIMEOUT * 1000);
+    setTimeout(
+      () => {
+        void this.expireRoundAndNotify(participants, payload.round);
+      },
+      GAME_ROUND_TIMEOUT * 1000 + GAME_SETTLE_GRACE_MS,
+    );
 
     // 반응속도 게임의 출발 신호는 서버가 쏜다 — 클라이언트가 스스로 신호를 만들면
     // 자기 반응 시간을 아무 값이나 주장할 수 있다. 대기 시간은 payload에 넣지 않으므로
@@ -342,9 +392,18 @@ export class RealtimeGateway
     }
   }
 
+  /**
+   * 마감 처리는 실패하면 스스로 재시도해야 한다.
+   *
+   * settle()은 정산이 실패하면 정산 권리를 반납해 "마감 타이머가 다시 시도할 수 있게"
+   * 해두지만, 타이머는 일회성 setTimeout이라 스스로는 다시 발화하지 않는다. 미제출 쪽은
+   * 이미 자리를 떠 재시도를 트리거할 사람도 없어, 재시도가 없으면 권리 반납이 무의미하고
+   * 결투가 스윕까지 매달린다.
+   */
   private async expireRoundAndNotify(
     participants: DuelParticipants,
     round: number,
+    attempt = 1,
   ): Promise<void> {
     try {
       const outcome = await this.minigameService.expireRound(
@@ -354,9 +413,18 @@ export class RealtimeGateway
       if (outcome) await this.broadcastGameOutcome(outcome);
     } catch (err) {
       this.logger.error(
-        `미니게임 라운드 마감 처리 실패 duelId=${participants.id} round=${round}`,
+        `미니게임 라운드 마감 처리 실패 duelId=${participants.id} round=${round} (${attempt}/${GAME_EXPIRE_MAX_ATTEMPTS})`,
         err,
       );
+      if (attempt >= GAME_EXPIRE_MAX_ATTEMPTS) {
+        this.logger.error(
+          `미니게임 라운드 마감 재시도 소진 duelId=${participants.id} round=${round} — 결투 스윕에 맡긴다`,
+        );
+        return;
+      }
+      setTimeout(() => {
+        void this.expireRoundAndNotify(participants, round, attempt + 1);
+      }, GAME_EXPIRE_RETRY_MS);
     }
   }
 

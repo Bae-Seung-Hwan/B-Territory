@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { Duel } from '../entities/duel.entity';
 import { DuelsService } from '../duels.service';
@@ -38,6 +39,14 @@ import {
 interface GameSession {
   type: MiniGameType;
   round: number;
+  /**
+   * 참가자. duels 테이블에도 있지만 여기 복사해 둔다 — submit()이 참가자 확인을 위해
+   * DB를 다녀오면 도착 시각과 실제 기록 사이에 수십 ms가 끼고, 그 사이 마감 타이머가
+   * 먼저 정산하면 제때 낸 제출이 스냅샷에서 빠져 기권패가 된다(submit 주석 참고).
+   * 라운드 진행 중에는 참가자가 바뀔 수 없으므로 복사본이 어긋날 일이 없다.
+   */
+  challengerId: string;
+  opponentId: string;
   /** 서버 시계 기준 라운드 시작 시각 (epoch ms) */
   startedAt: number;
   /** 셔플 후 선택지 배열 기준의 정답 위치 (QUIZ 전용) */
@@ -157,11 +166,21 @@ export class MinigameService {
    * 게임 종류를 서버가 정하는 이유: 퀴즈 정답을 서버만 알아야 하고, 클라이언트가 종류를
    * 스스로 고르면 두 기기가 서로 다른 게임을 띄울 여지가 생긴다.
    */
-  async start(duelId: number, round = 1): Promise<GameStartPlan> {
+  async start(
+    participants: DuelParticipants,
+    round = 1,
+  ): Promise<GameStartPlan> {
+    const duelId = participants.id;
     const type =
       MINI_GAME_TYPES[Math.floor(Math.random() * MINI_GAME_TYPES.length)];
     const startedAt = Date.now();
-    const session: GameSession = { type, round, startedAt };
+    const session: GameSession = {
+      type,
+      round,
+      startedAt,
+      challengerId: participants.challengerId,
+      opponentId: participants.opponentId,
+    };
     const payload: GameStartPayload = {
       duelId,
       gameType: type,
@@ -252,11 +271,22 @@ export class MinigameService {
     userId: string,
     dto: GameSubmitDto,
   ): Promise<MiniGameOutcome> {
-    // 도착 시각을 가장 먼저 찍는다 — 뒤이은 DB/Redis 왕복이 측정에 섞이지 않도록.
+    // 도착 시각을 가장 먼저 찍는다 — 뒤이은 왕복이 측정에 섞이지 않도록.
     const arrivedAt = Date.now();
 
-    const duel = await this.duelsService.getAcceptedDuel(duelId);
-    if (![duel.challengerId, duel.opponentId].includes(userId)) {
+    // 여기부터 submitGameScore까지는 **Redis 왕복만** 둔다. 참가자 확인을 위해 DB를
+    // 다녀오면 그 수십 ms 동안 마감 타이머가 먼저 정산할 수 있고, 그러면 제때 낸 제출이
+    // 스냅샷에서 빠져 기권패 + 30분 페널티가 된다. 게다가 반환값은 에러가 아니라
+    // 'settling'이라 진 쪽은 이유조차 알 수 없다. 그래서 참가자를 세션에 복사해 둔다.
+    const session = await this.loadSession(duelId);
+    const participants: DuelParticipants = {
+      id: duelId,
+      challengerId: session.challengerId,
+      opponentId: session.opponentId,
+    };
+    if (
+      ![participants.challengerId, participants.opponentId].includes(userId)
+    ) {
       throw new ForbiddenException(
         errBody(
           ErrorCode.DUEL_NOT_PARTICIPANT,
@@ -264,8 +294,6 @@ export class MinigameService {
         ),
       );
     }
-
-    const session = await this.loadSession(duelId);
     if (session.round !== dto.round) {
       throw new ConflictException(
         errBody(
@@ -276,9 +304,6 @@ export class MinigameService {
     }
 
     const score = this.evaluate(session, dto, arrivedAt);
-
-    // 스윕이 이 결투를 이미 VOID로 넘겼다면 여기서 거부된다 — 제출이 Redis에만 남는 것을 막는다.
-    await this.duelsService.markResultInProgress(duelId);
 
     const stored = await this.redis.submitGameScore(
       duelId,
@@ -295,10 +320,15 @@ export class MinigameService {
         ),
       );
     }
-    if (stored.status === 'waiting')
-      return { status: 'waiting', participants: duel };
 
-    return this.settle(duel, session);
+    // 스윕이 이 결투를 이미 VOID로 넘겼다면 여기서 거부된다. **기록 뒤에** 확인하는 것이
+    // 중요하다 — 앞에 두면 위 경합이 되살아난다. VOID된 결투에 남은 Redis 항목은 정산될
+    // 일이 없고 TTL로 사라지므로, 순서를 바꿔 잃는 것은 없다.
+    await this.duelsService.markResultInProgress(duelId);
+
+    if (stored.status === 'waiting') return { status: 'waiting', participants };
+
+    return this.settle(participants, session);
   }
 
   /**
@@ -311,13 +341,28 @@ export class MinigameService {
     duelId: number,
     round: number,
   ): Promise<MiniGameOutcome | null> {
-    // 결투가 이미 끝났거나(정상 정산) 세션이 만료됐으면 마감할 것이 없다.
+    // "이미 끝난 결투"(정상)와 "DB/Redis 순간 장애"(비정상)를 구분한다. 뭉뚱그려 삼키면
+    // 나중에 "결투가 이유 없이 멈췄다"는 리포트가 왔을 때 추적할 근거가 남지 않고, 재시도
+    // 대상인지도 알 수 없다. 정상 종료만 null로 접고 장애는 그대로 올려 호출측이 재시도한다.
     const duel = await this.duelsService
       .getAcceptedDuel(duelId)
-      .catch(() => null);
+      .catch((err: unknown) => {
+        // 결투가 사라졌거나(NotFound) 이미 ACCEPTED가 아니면(Conflict) 마감할 것이 없다.
+        if (
+          err instanceof NotFoundException ||
+          err instanceof ConflictException
+        ) {
+          return null;
+        }
+        throw err;
+      });
     if (!duel) return null;
 
-    const session = await this.loadSession(duelId).catch(() => null);
+    const session = await this.loadSession(duelId).catch((err: unknown) => {
+      // 세션 키 만료 = 이미 정산이 끝났다는 뜻이라 정상이다.
+      if (err instanceof ConflictException) return null;
+      throw err;
+    });
     if (!session || session.round !== round) return null;
 
     return this.settle(duel, session);
@@ -331,7 +376,7 @@ export class MinigameService {
    * finishByGame이 두 번 호출된다(두 번째는 CAS에 걸리지만 알림은 두 번 나간다).
    */
   private async settle(
-    duel: Duel,
+    duel: DuelParticipants,
     session: GameSession,
   ): Promise<MiniGameOutcome> {
     const claim = await this.redis.claimRoundSettlement(
@@ -355,7 +400,7 @@ export class MinigameService {
 
   /** 정산 권리를 확보한 뒤의 실제 판정 — 스냅샷은 락과 같은 원자 연산에서 읽은 값이다. */
   private async decide(
-    duel: Duel,
+    duel: DuelParticipants,
     session: GameSession,
     entries: Map<string, string>,
   ): Promise<MiniGameOutcome> {
@@ -395,7 +440,7 @@ export class MinigameService {
     // (양쪽 부정출발처럼 둘 다 "냈지만 최하점"인 경우는 재경기를 준다)
     const bothAbsent = parsed.every((p) => !p.submitted);
     if (!bothAbsent && session.round < MAX_ROUNDS) {
-      const plan = await this.start(duel.id, session.round + 1);
+      const plan = await this.start(duel, session.round + 1);
       return { status: 'rematch', plan, scores, participants: duel };
     }
 

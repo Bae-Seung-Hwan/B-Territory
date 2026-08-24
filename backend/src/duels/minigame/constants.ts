@@ -19,6 +19,24 @@ export const MINI_GAME_TYPES = Object.values(MiniGameType);
  */
 export const GAME_ROUND_TIMEOUT = 45;
 
+/**
+ * 마감 타이머가 실제로 정산에 들어가기까지 두는 여유 (ms).
+ *
+ * 클라이언트에는 deadlineAt = startedAt + GAME_ROUND_TIMEOUT을 알려준다. 마감 직전에 낸
+ * 제출은 네트워크·이벤트 큐 지연 때문에 그 시각을 조금 넘겨 서버에 닿는데, 타이머가 정확히
+ * deadlineAt에 정산하면 클라이언트 입장에서 제시간에 낸 제출이 기권패(+30분 페널티)가 된다.
+ * 양쪽에 똑같이 적용되는 여유라 유불리가 갈리지 않는다.
+ */
+export const GAME_SETTLE_GRACE_MS = 500;
+
+/**
+ * 마감 처리가 실패했을 때의 재시도. setTimeout은 한 번만 발화하므로 재시도를 걸어두지
+ * 않으면, 미제출 쪽은 이미 자리를 떠 아무도 정산을 다시 트리거하지 못한다 — settle()이
+ * 정산 권리를 반납해도 소용이 없고 결투가 스윕(약 360초)까지 매달린다.
+ */
+export const GAME_EXPIRE_MAX_ATTEMPTS = 3;
+export const GAME_EXPIRE_RETRY_MS = 2000;
+
 /** 최초 1판 + 동점 시 재경기 1판. 재경기도 동점이면 결투를 VOID 처리한다. */
 export const MAX_ROUNDS = 2;
 

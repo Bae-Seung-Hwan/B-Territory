@@ -3,6 +3,10 @@ import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
 import { DuelsService } from '../duels/duels.service';
+import {
+  GAME_EXPIRE_MAX_ATTEMPTS,
+  GAME_EXPIRE_RETRY_MS,
+} from '../duels/minigame/constants';
 
 interface MockSocket {
   id: string;
@@ -123,5 +127,118 @@ describe('RealtimeGateway 라이프사이클 훅', () => {
 
       expect(warn).toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * 미니게임을 시작하는 경로와 마감하는 경로는 실패해도 결투를 매달리게 두면 안 된다.
+ * 세션·마감 타이머 없이 ACCEPTED로 남으면 두 사람 모두 스윕(약 360초)까지 새 결투를
+ * 걸 수 없다.
+ */
+describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
+  const duel = { id: 7, challengerId: 'user-1', opponentId: 'user-2' };
+
+  function make() {
+    const duelsService = {
+      setNotifier: jest.fn(),
+      respondDuel: jest.fn().mockResolvedValue(duel),
+      voidByGame: jest.fn().mockResolvedValue(duel),
+    };
+    const minigameService = {
+      start: jest.fn(),
+      expireRound: jest.fn(),
+    };
+    const gateway = new RealtimeGateway(
+      {} as unknown as FirebaseService,
+      {} as unknown as UsersService,
+      {
+        getUserMeta: jest.fn().mockResolvedValue(null),
+        queueNotification: jest.fn().mockResolvedValue(undefined),
+      } as unknown as RedisService,
+      duelsService as unknown as DuelsService,
+      minigameService as never,
+      { record: jest.fn() } as never,
+    );
+    const error = jest
+      .spyOn(gateway['logger'], 'error')
+      .mockImplementation(() => undefined);
+    return { gateway, duelsService, minigameService, error };
+  }
+
+  /**
+   * 예외가 핸들러 밖으로 새면 duel:accept의 ack 콜백이 아예 호출되지 않는다. 양쪽은 이미
+   * duel:accepted를 받았는데 game:start는 영영 오지 않아 결투가 그대로 매달린다.
+   */
+  it('미니게임 시작이 실패해도 ack를 돌려주고 결투를 무효 처리한다', async () => {
+    const { gateway, duelsService, minigameService } = make();
+    minigameService.start.mockRejectedValue(new Error('Redis 응답 없음'));
+    const client = mockSocket();
+
+    const ack = await gateway.handleDuelAccept(client as never, {
+      duelId: duel.id,
+    });
+
+    expect(ack).toMatchObject({
+      status: 'error',
+      code: 'MINIGAME_START_FAILED',
+    });
+    // ACCEPTED로 남기면 두 사람 모두 새 결투를 걸지 못한다.
+    expect(duelsService.voidByGame).toHaveBeenCalledWith(duel.id);
+  });
+
+  it('무효 처리까지 실패해도 ack는 돌려준다', async () => {
+    const { gateway, duelsService, minigameService } = make();
+    minigameService.start.mockRejectedValue(new Error('Redis 응답 없음'));
+    duelsService.voidByGame.mockRejectedValue(new Error('DB 응답 없음'));
+    const client = mockSocket();
+
+    const ack = await gateway.handleDuelAccept(client as never, {
+      duelId: duel.id,
+    });
+
+    expect(ack).toMatchObject({ status: 'error' });
+  });
+
+  /**
+   * settle()은 정산 실패 시 권리를 반납해 "마감 타이머가 다시 시도할 수 있게" 해두지만,
+   * setTimeout은 한 번만 발화한다. 재시도를 걸지 않으면 그 반납이 무의미하다.
+   */
+  it('마감 처리가 실패하면 재시도한다', async () => {
+    jest.useFakeTimers();
+    try {
+      const { gateway, minigameService } = make();
+      minigameService.expireRound
+        .mockRejectedValueOnce(new Error('Redis 응답 없음'))
+        .mockResolvedValueOnce(null);
+
+      await gateway['expireRoundAndNotify'](duel, 1);
+      expect(minigameService.expireRound).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(GAME_EXPIRE_RETRY_MS);
+      expect(minigameService.expireRound).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('재시도를 소진하면 더 시도하지 않는다', async () => {
+    jest.useFakeTimers();
+    try {
+      const { gateway, minigameService } = make();
+      minigameService.expireRound.mockRejectedValue(
+        new Error('Redis 응답 없음'),
+      );
+
+      await gateway['expireRoundAndNotify'](duel, 1);
+      await jest.advanceTimersByTimeAsync(
+        GAME_EXPIRE_RETRY_MS * (GAME_EXPIRE_MAX_ATTEMPTS + 2),
+      );
+
+      expect(minigameService.expireRound).toHaveBeenCalledTimes(
+        GAME_EXPIRE_MAX_ATTEMPTS,
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

@@ -52,9 +52,15 @@
 
 1. `duel:accept` 성공 → 서버가 게임 종류를 골라 양쪽에 `game:start`
    `{ duelId, gameType: 'TAP'|'REACTION'|'QUIZ', round, maxRounds, deadlineAt, tap?, quiz? }`
+   - **ack를 반드시 확인할 것.** 미니게임 시작에 실패하면(서버측 Redis 장애 등) ack가
+     `{ status: 'error', code: 'MINIGAME_START_FAILED', message }`로 온다. 이때 결투는
+     서버가 즉시 무효 처리하고 `duel:voided`도 보내므로, 게임 화면으로 넘어가지 말고
+     결투를 닫으면 된다. `duel:accepted`를 받았다고 해서 `game:start`가 보장되지는 않는다.
 2. 플레이 후 `game:submit` `{ duelId, round, value? }`
 3. 먼저 낸 쪽은 대기 — 상대에겐 `game:opponent:submitted`만 간다 (점수는 공개되지 않는다)
 4. 양쪽 제출 또는 마감(45초) → 서버 정산
+   - 서버는 `deadlineAt`을 조금 지나서 정산한다(네트워크 지연 여유). 마감 직전 제출도
+     받아들여지므로 클라이언트가 미리 잘라 보내지 않아도 된다
    - 승부가 나면 기존 `duel:completed` (`scores` 배열이 추가로 실린다)
    - 동점이면 `game:round:result` 후 `game:start`(round 2)로 재경기 1회
    - 재경기도 동점이거나 양쪽 다 미제출이면 `duel:voided`

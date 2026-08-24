@@ -73,6 +73,9 @@ describe('MinigameService', () => {
       type,
       round,
       quizAnswerIndex,
+      // 참가자는 세션에 담긴다 — submit()이 DB를 다녀오지 않고 확인하기 위해서다.
+      challengerId: CHALLENGER,
+      opponentId: OPPONENT,
       // 기본값은 넉넉히 과거로 — TAP의 최소 경과시간 검사를 자연스럽게 통과한다.
       startedAt: overrides.startedAt ?? Date.now() - 60_000,
       goAt: overrides.goAt,
@@ -84,6 +87,8 @@ describe('MinigameService', () => {
       type: MiniGameType;
       round: number;
       startedAt: number;
+      challengerId: string;
+      opponentId: string;
       quizAnswerIndex?: number;
       goAt?: number;
     };
@@ -182,7 +187,7 @@ describe('MinigameService', () => {
       jest.spyOn(Math, 'random').mockReturnValue(0); // 게임 종류 -> TAP
       arriveAt(T0);
 
-      const { payload, goDelayMs } = await service.start(DUEL_ID);
+      const { payload, goDelayMs } = await service.start(duel);
 
       expect(payload.gameType).toBe(MiniGameType.TAP);
       expect(payload.round).toBe(1);
@@ -195,7 +200,7 @@ describe('MinigameService', () => {
       jest.spyOn(Math, 'random').mockReturnValue(0.5); // 게임 종류 -> REACTION
       arriveAt(T0); // deadlineAt을 고정해 아래 문자열 검사가 흔들리지 않게 한다
 
-      const { payload, goDelayMs } = await service.start(DUEL_ID);
+      const { payload, goDelayMs } = await service.start(duel);
 
       expect(payload.gameType).toBe(MiniGameType.REACTION);
       expect(goDelayMs).toBeGreaterThanOrEqual(REACTION_GO_MIN_MS);
@@ -212,7 +217,7 @@ describe('MinigameService', () => {
         .mockReturnValueOnce(0) // 문제 -> QUIZ_BANK[0]
         .mockReturnValue(0); // 셔플: 항상 0번과 교환
 
-      const { payload } = await service.start(DUEL_ID);
+      const { payload } = await service.start(duel);
       const question = QUIZ_BANK[0];
 
       expect(payload.gameType).toBe(MiniGameType.QUIZ);
@@ -585,15 +590,86 @@ describe('MinigameService', () => {
     });
   });
 
+  describe('expireRound — 장애 구분', () => {
+    /**
+     * "이미 끝난 결투"(정상)와 "DB/Redis 순간 장애"(비정상)를 뭉뚱그려 삼키면, 나중에
+     * "결투가 이유 없이 멈췄다"는 리포트가 왔을 때 추적할 근거가 남지 않고 재시도 대상인지도
+     * 알 수 없다. 정상 종료만 조용히 접고 장애는 올려 호출측(게이트웨이)이 재시도한다.
+     */
+    it('이미 끝난 결투는 조용히 접는다', async () => {
+      setSession(MiniGameType.TAP);
+      duelsService.getAcceptedDuel.mockRejectedValue(new ConflictException());
+
+      await expect(service.expireRound(DUEL_ID, 1)).resolves.toBeNull();
+    });
+
+    it('세션이 만료됐으면 조용히 접는다', async () => {
+      sessionRaw = null; // loadSession이 MINIGAME_NOT_ACTIVE(Conflict)를 던진다
+
+      await expect(service.expireRound(DUEL_ID, 1)).resolves.toBeNull();
+    });
+
+    it('DB 장애는 삼키지 않고 올린다 (재시도 대상)', async () => {
+      setSession(MiniGameType.TAP);
+      duelsService.getAcceptedDuel.mockRejectedValue(new Error('DB 응답 없음'));
+
+      await expect(service.expireRound(DUEL_ID, 1)).rejects.toThrow(
+        'DB 응답 없음',
+      );
+    });
+
+    it('Redis 장애도 삼키지 않고 올린다', async () => {
+      (redis.get as jest.Mock).mockRejectedValue(new Error('Redis 응답 없음'));
+
+      await expect(service.expireRound(DUEL_ID, 1)).rejects.toThrow(
+        'Redis 응답 없음',
+      );
+    });
+  });
+
   describe('스윕과의 경합', () => {
-    it('스윕이 이미 VOID를 커밋했으면 제출을 Redis에 기록하지 않는다', async () => {
+    /**
+     * 확인이 기록보다 **뒤에** 온다. 앞에 두면 도착~기록 사이에 DB 왕복이 끼어, 그 수십 ms
+     * 동안 마감 타이머가 먼저 정산할 때 제때 낸 제출이 기권패가 된다(submit 주석 참고).
+     * VOID된 결투에 남은 Redis 항목은 정산될 일이 없고 TTL로 사라지므로 순서를 바꿔도
+     * 잃는 것이 없다 — 클라이언트가 거부당한다는 사실이 중요하고, 그건 그대로다.
+     */
+    it('스윕이 이미 VOID를 커밋했으면 기록 여부와 무관하게 제출을 거부한다', async () => {
       setSession(MiniGameType.TAP);
       duelsService.markResultInProgress.mockRejectedValue(
         new ConflictException(),
       );
 
       await expect(submit(CHALLENGER, 10)).rejects.toThrow(ConflictException);
-      expect(redis.submitGameScore).not.toHaveBeenCalled();
+      // 정산으로는 이어지지 않는다 — 남은 항목은 TTL로 사라진다.
+      expect(redis.claimRoundSettlement).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 이 PR이 없애려던 "부당한 패배"가 다른 형태로 돌아오는 경로다. 도착 시각을 먼저 찍어도,
+     * 실제 기록이 DB 왕복 뒤라면 그 사이 마감 타이머가 정산해 제출이 스냅샷에서 빠진다.
+     * 진 쪽은 기권패로 점수를 잃고 30분 페널티까지 받는데, 반환값은 에러가 아니라
+     * 'settling'이라 이유조차 알 수 없다.
+     */
+    it('제출을 기록하기 전에는 DB를 다녀오지 않는다', async () => {
+      setSession(MiniGameType.TAP);
+      const order: string[] = [];
+      duelsService.getAcceptedDuel.mockImplementation(() => {
+        order.push('db');
+        return Promise.resolve(duel);
+      });
+      duelsService.markResultInProgress.mockImplementation(() => {
+        order.push('db');
+        return Promise.resolve();
+      });
+      (redis.submitGameScore as jest.Mock).mockImplementation(() => {
+        order.push('record');
+        return Promise.resolve({ status: 'waiting' as const });
+      });
+
+      await submit(CHALLENGER, 10);
+
+      expect(order[0]).toBe('record');
     });
 
     it('확정 직전에 스윕이 VOID를 선점하면 completed 대신 void로 알린다', async () => {
