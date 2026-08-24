@@ -72,31 +72,43 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.client.incr(key);
   }
 
+  /**
+   * "하루 1회" 게이트의 공용 구현 (SET NX — 확인과 기록을 단일 원자 연산으로 처리해
+   * 동시 요청도 하나만 통과). created=false면 그 키가 오늘 이미 소진된 것이다.
+   *
+   * 이후 단계가 실패하면 호출측이 반환된 token으로 clearDailyGate를 호출해 이번
+   * 요청이 만든 키만 CAS 롤백한다 — 자정 근처 최소 TTL(1초) 구간에서 이 요청이
+   * 지연 실패하는 사이 자정을 넘겨 같은 키로 다음날 정상 사용이 이미 성사된
+   * 경우, 무조건 DEL이면 그 새 키를 지워버리므로 tryAcquireLock/releaseLock과
+   * 같은 토큰 기반 CAS로 막는다.
+   *
+   * 점령·미션이 같은 패턴을 각자 복제하고 있어(한쪽만 고쳐지는 사고 방지) 여기로 모았다.
+   * 키 문자열은 도메인별 래퍼가 만든다 — 기존 키 포맷을 그대로 유지해야 한다.
+   */
+  private async markDailyGate(
+    key: string,
+    ttlSeconds: number,
+  ): Promise<{ created: boolean; token: string }> {
+    const token = randomUUID();
+    const created = await this.tryAcquireLock(key, ttlSeconds, token);
+    return { created, token };
+  }
+
+  private async clearDailyGate(key: string, token: string): Promise<void> {
+    await this.releaseLock(key, token);
+  }
+
   private dailyClaimKey(userId: string, spotId: number): string {
     return `claim:daily:${userId}:${spotId}`;
   }
 
-  /**
-   * 유저별 관광지 일일 점령 마킹 (SET NX — 확인과 기록을 단일 원자 연산으로 처리해
-   * 동시 요청도 하나만 통과). created=false면 오늘(KST) 이미 점령한 관광지.
-   * 이후 단계가 실패하면 호출측이 반환된 token으로 clearDailyClaim을 호출해 이번
-   * 요청이 만든 키만 CAS 롤백한다 — 자정 근처 최소 TTL(1초) 구간에서 이 요청이
-   * 지연 실패하는 사이 자정을 넘겨 같은 키로 다음날 정상 재점령이 이미 성사된
-   * 경우, 무조건 DEL이면 그 새 키를 지워버리므로 tryAcquireLock/releaseLock과
-   * 같은 토큰 기반 CAS로 막는다.
-   */
+  /** 유저별 관광지 일일 점령 게이트. created=false면 오늘(KST) 이미 점령한 관광지. */
   async markDailyClaim(
     userId: string,
     spotId: number,
     ttlSeconds: number,
   ): Promise<{ created: boolean; token: string }> {
-    const token = randomUUID();
-    const created = await this.tryAcquireLock(
-      this.dailyClaimKey(userId, spotId),
-      ttlSeconds,
-      token,
-    );
-    return { created, token };
+    return this.markDailyGate(this.dailyClaimKey(userId, spotId), ttlSeconds);
   }
 
   async clearDailyClaim(
@@ -104,7 +116,71 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     spotId: number,
     token: string,
   ): Promise<void> {
-    await this.releaseLock(this.dailyClaimKey(userId, spotId), token);
+    await this.clearDailyGate(this.dailyClaimKey(userId, spotId), token);
+  }
+
+  private missionDailyKey(
+    mission: string,
+    userId: string,
+    spotId: number,
+  ): string {
+    return `mission:${mission}:daily:${userId}:${spotId}`;
+  }
+
+  /** 미션(사진·리뷰) 일일 게이트 — 관광지별 인당 하루 1회. */
+  async markMissionDaily(
+    mission: string,
+    userId: string,
+    spotId: number,
+    ttlSeconds: number,
+  ): Promise<{ created: boolean; token: string }> {
+    return this.markDailyGate(
+      this.missionDailyKey(mission, userId, spotId),
+      ttlSeconds,
+    );
+  }
+
+  async clearMissionDaily(
+    mission: string,
+    userId: string,
+    spotId: number,
+    token: string,
+  ): Promise<void> {
+    await this.clearDailyGate(
+      this.missionDailyKey(mission, userId, spotId),
+      token,
+    );
+  }
+
+  private missionVisitKey(userId: string, spotId: number): string {
+    return `mission:visit:${userId}:${spotId}`;
+  }
+
+  /**
+   * 방문 체크인 기록 — 현장 GPS(50m) 검증 통과 시 방문 창을 연다. 값에는 점수 가중치용
+   * sigungucode(없으면 빈 문자열)를 담아, 창 유효기간 안의 사진·리뷰 제출이 재검증 없이
+   * 재사용한다. 재체크인은 창을 새 TTL로 덮어써 갱신한다(단순 SET).
+   */
+  async markVisit(
+    userId: string,
+    spotId: number,
+    sigungucode: string | null,
+    ttlSeconds: number,
+  ): Promise<void> {
+    await this.set(
+      this.missionVisitKey(userId, spotId),
+      sigungucode ?? '',
+      ttlSeconds,
+    );
+  }
+
+  /**
+   * 방문 창 조회 — null이면 미방문(체크인 필요)이고, 문자열이면 창이 유효하다(값은
+   * 저장된 sigungucode, 빈 문자열은 좌표는 있으나 시군구코드 없음을 뜻함). 빈 문자열이
+   * falsy이므로 존재 여부는 반드시 `=== null` 비교로 판정해야 한다.
+   */
+  async getVisit(userId: string, spotId: number): Promise<string | null> {
+    return this.get(this.missionVisitKey(userId, spotId));
   }
 
   /**
