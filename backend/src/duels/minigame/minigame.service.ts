@@ -32,9 +32,10 @@ import {
 /**
  * Redis에 보관하는 세션 상태.
  *
- * 시간 관련 값(startedAt·goAt)이 여기 있는 것이 이 설계의 핵심이다 — 서버가 게임을 언제
- * 시작시켰고 신호를 언제 쐈는지 스스로 기억해야, 클라이언트가 보내온 "몇 ms 걸렸다"를
- * 믿지 않고 직접 계산할 수 있다. 퀴즈 정답도 여기에만 있고 클라이언트로 나가지 않는다.
+ * 서버가 게임을 언제 시작시켰는지(startedAt) 스스로 기억하는 것이 이 설계의 핵심이다 —
+ * 그래야 클라이언트가 보내온 "몇 ms 걸렸다"를 믿지 않고 직접 계산할 수 있다. 퀴즈 정답도
+ * 여기에만 있고 클라이언트로 나가지 않는다.
+ * (출발 신호 시각은 라운드 단위 별도 키에 있다 — goKey 주석 참고)
  */
 interface GameSession {
   type: MiniGameType;
@@ -51,8 +52,6 @@ interface GameSession {
   startedAt: number;
   /** 셔플 후 선택지 배열 기준의 정답 위치 (QUIZ 전용) */
   quizAnswerIndex?: number;
-  /** 서버가 game:go를 쏜 시각 (REACTION 전용). 아직 안 쐈으면 없다. */
-  goAt?: number;
 }
 
 /** game:start 페이로드 — 두 참가자에게 동일하게 나간다. */
@@ -149,6 +148,26 @@ export class MinigameService {
     return `duel:game:${duelId}`;
   }
 
+  /**
+   * 출발 신호 시각은 세션과 **다른 키**에 라운드 단위로 둔다.
+   *
+   * 세션에 넣고 markGo가 읽어서 다시 쓰면 read-modify-write가 되는데, 그 사이에 재경기
+   * 세션(start의 SET)이 끼면 방금 만든 라운드 세션이 낡은 사본으로 덮인다. 그러면 클라는
+   * round 2 화면인데 서버 세션은 round 1이라 모든 제출이 라운드 불일치로 튕기고, 어느
+   * 타이머도 정산하지 못해 결투가 스윕까지 매달린다. 별도 키 + SETNX면 그 창이 없다.
+   */
+  private goKey(duelId: number, round: number): string {
+    return `duel:game:go:${duelId}:${round}`;
+  }
+
+  /** 라운드가 끝난 뒤의 정리 — 전부 TTL이 걸려 있어 실패해도 잃는 것이 없다. */
+  private async cleanupSession(duelId: number, round: number): Promise<void> {
+    await Promise.all([
+      this.redis.del(this.sessionKey(duelId)),
+      this.redis.del(this.goKey(duelId, round)),
+    ]);
+  }
+
   private async saveSession(
     duelId: number,
     session: GameSession,
@@ -208,24 +227,37 @@ export class MinigameService {
   }
 
   /**
+   * 시작에 실패한 결투의 세션을 걷어낸다 (게이트웨이의 실패 처리 경로가 호출).
+   *
+   * 세션을 남기면 이미 걸린 go 타이머가 VOID된 결투에 대고 game:go를 쏘고, 키도 TTL이
+   * 다 될 때까지 남는다. 정리 자체가 실패해도 TTL이 최종 안전망이다.
+   */
+  async discardSession(duelId: number, round = 1): Promise<void> {
+    await this.cleanupSession(duelId, round).catch(() => undefined);
+  }
+
+  /**
    * 반응속도 게임의 출발 신호를 확정한다 (게이트웨이가 game:go를 emit하기 직전에 호출).
    *
    * 반드시 emit보다 **먼저** 호출해 goAt을 저장해야 한다 — 순서가 뒤집히면 신호를 받고
    * 즉시 누른 정상 제출이 "goAt이 아직 없음"으로 읽혀 부정출발 처리된다.
    */
   async markGo(duelId: number, round: number): Promise<boolean> {
+    // 세션은 읽기만 한다 — 쓰지 않으므로 재경기 세션을 덮어쓸 수 없다(goKey 주석 참고).
     const session = await this.loadSession(duelId).catch(() => null);
     if (
       !session ||
       session.round !== round ||
-      session.type !== MiniGameType.REACTION ||
-      session.goAt !== undefined
+      session.type !== MiniGameType.REACTION
     ) {
       return false;
     }
-    session.goAt = Date.now();
-    await this.saveSession(duelId, session);
-    return true;
+    // SETNX — 이미 쏜 라운드면 false. 두 번 쏴서 goAt이 밀리는 일이 없다.
+    return this.redis.tryAcquireLock(
+      this.goKey(duelId, round),
+      GAME_SESSION_TTL,
+      String(Date.now()),
+    );
   }
 
   /**
@@ -278,7 +310,12 @@ export class MinigameService {
     // 다녀오면 그 수십 ms 동안 마감 타이머가 먼저 정산할 수 있고, 그러면 제때 낸 제출이
     // 스냅샷에서 빠져 기권패 + 30분 페널티가 된다. 게다가 반환값은 에러가 아니라
     // 'settling'이라 진 쪽은 이유조차 알 수 없다. 그래서 참가자를 세션에 복사해 둔다.
-    const session = await this.loadSession(duelId);
+    // 세션과 출발 신호 시각을 한 번에 읽는다 — REACTION이 아니면 뒤 값은 그냥 null이다.
+    // 순차로 읽으면 기록까지의 왕복이 하나 더 늘어 위 경합 창이 그만큼 넓어진다.
+    const [session, goRaw] = await Promise.all([
+      this.loadSession(duelId),
+      this.redis.get(this.goKey(duelId, dto.round)),
+    ]);
     const participants: DuelParticipants = {
       id: duelId,
       challengerId: session.challengerId,
@@ -303,7 +340,8 @@ export class MinigameService {
       );
     }
 
-    const score = this.evaluate(session, dto, arrivedAt);
+    const goAt = goRaw === null ? undefined : Number(goRaw);
+    const score = this.evaluate(session, dto, arrivedAt, goAt);
 
     const stored = await this.redis.submitGameScore(
       duelId,
@@ -425,7 +463,12 @@ export class MinigameService {
 
     if (winnerId) {
       const outcome = await this.duelsService.finishByGame(duel.id, winnerId);
-      await this.redis.del(this.sessionKey(duel.id));
+      // 여기까지 오면 점수·원장·페널티가 **이미 커밋**됐다. 정리(TTL 걸린 키 삭제)가
+      // 실패했다고 예외를 올리면 settle의 catch가 결과를 삼켜 아무도 duel:completed를
+      // 받지 못하는데, 복구할 방법이 없다 — 재시도는 이미 COMPLETED인 결투를 보고
+      // null을 돌려주고, 스윕은 PENDING/ACCEPTED만 건드린다. 점수만 움직이고 두
+      // 클라이언트는 게임 화면에 갇힌다.
+      await this.cleanupSession(duel.id, session.round).catch(() => undefined);
       return outcome.status === 'confirmed'
         ? {
             status: 'completed',
@@ -445,7 +488,8 @@ export class MinigameService {
     }
 
     await this.duelsService.voidByGame(duel.id);
-    await this.redis.del(this.sessionKey(duel.id));
+    // 위와 같은 이유로 정리 실패가 결과 통보를 막지 않는다.
+    await this.cleanupSession(duel.id, session.round).catch(() => undefined);
     return { status: 'void', scores, participants: duel };
   }
 
@@ -501,6 +545,8 @@ export class MinigameService {
     session: GameSession,
     dto: GameSubmitDto,
     arrivedAt: number,
+    /** 서버가 game:go를 쏜 시각. 아직 안 쐈으면 undefined (REACTION 전용). */
+    goAt?: number,
   ): StoredScore {
     switch (session.type) {
       case MiniGameType.TAP: {
@@ -523,7 +569,7 @@ export class MinigameService {
       case MiniGameType.REACTION: {
         // 신호 전에 누른 제출 = 부정출발. 최하점으로 확정한다 — 이게 없으면 계속
         // 두드려서 0ms를 만들 수 있고, HSETNX라 다시 낼 수도 없다.
-        if (session.goAt === undefined || arrivedAt < session.goAt) {
+        if (goAt === undefined || arrivedAt < goAt) {
           return {
             primary: FALSE_START_PRIMARY,
             tiebreak: Number.MAX_SAFE_INTEGER,
@@ -533,7 +579,7 @@ export class MinigameService {
         }
         // 서버가 신호를 쏜 시각과 제출이 도착한 시각의 차이 — 클라이언트가 주장할 여지가 없다.
         // 대신 네트워크 왕복이 포함되므로, 사람이 낼 수 없는 값으로는 내려가지 않게 바닥을 둔다.
-        const measured = Math.max(arrivedAt - session.goAt, REACTION_MIN_MS);
+        const measured = Math.max(arrivedAt - goAt, REACTION_MIN_MS);
         return {
           primary: 0,
           tiebreak: Math.min(measured, REACTION_MAX_MS),

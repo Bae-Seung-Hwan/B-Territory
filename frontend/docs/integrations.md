@@ -56,6 +56,9 @@
      `{ status: 'error', code: 'MINIGAME_START_FAILED', message }`로 온다. 이때 결투는
      서버가 즉시 무효 처리하고 `duel:voided`도 보내므로, 게임 화면으로 넘어가지 말고
      결투를 닫으면 된다. `duel:accepted`를 받았다고 해서 `game:start`가 보장되지는 않는다.
+   - `game:start`·`game:go`는 **오프라인일 때 큐잉되지 않는다**(라운드 45초, 큐 보관 30분).
+     소켓이 끊긴 사이 수락이 진행되면 그 라운드는 미제출로 기권패다 — 재접속 후 지난
+     `game:start`가 재생되는 일은 없다. `duel:completed`/`duel:voided`는 기존대로 큐에 남는다.
 2. 플레이 후 `game:submit` `{ duelId, round, value? }`
 3. 먼저 낸 쪽은 대기 — 상대에겐 `game:opponent:submitted`만 간다 (점수는 공개되지 않는다)
 4. 양쪽 제출 또는 마감(45초) → 서버 정산

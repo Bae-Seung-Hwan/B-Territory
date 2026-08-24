@@ -82,6 +82,14 @@ export class RealtimeGateway
     userId: string,
     event: string,
     payload: unknown,
+    /**
+     * 라운드가 살아 있는 동안에만 의미가 있는 이벤트(game:start·game:go)는 큐에 넣지
+     * 않는다. 큐 보관은 30분(NOTIFICATION_QUEUE_TTL = PENALTY_TTL)인데 라운드는 45초라,
+     * 수락 시점에 잠깐 끊겼던 참가자가 한참 뒤 재접속해서 이미 지난 deadlineAt을 가진
+     * game:start를 재생받고 끝난 결투의 게임 화면을 연다. 못 받으면 미제출로 기권패인데,
+     * 그건 원래 정의된 결과다.
+     */
+    ephemeral = false,
   ): Promise<void> {
     // 메타의 socketId가 살아있는 소켓인지 확인한다 — 네트워크 단절 후 ping 타임아웃으로
     // disconnect가 발화하기 전까지 메타는 죽은 소켓을 가리키므로, 무조건 emit하면
@@ -92,6 +100,7 @@ export class RealtimeGateway
       socket.emit(event, payload);
       return;
     }
+    if (ephemeral) return;
     await this.redis.queueNotification(
       userId,
       event,
@@ -324,6 +333,8 @@ export class RealtimeGateway
     participants: DuelParticipants,
   ): Promise<void> {
     try {
+      // 세션을 남기면 이미 걸린 go 타이머가 VOID된 결투에 game:go를 쏜다.
+      await this.minigameService.discardSession(participants.id);
       await this.duelsService.voidByGame(participants.id);
       await this.emitToBoth(participants, 'duel:voided', {
         duelId: participants.id,
@@ -364,7 +375,7 @@ export class RealtimeGateway
       }, goDelayMs);
     }
 
-    await this.emitToBoth(participants, 'game:start', payload);
+    await this.emitToBoth(participants, 'game:start', payload, true);
   }
 
   /**
@@ -380,10 +391,12 @@ export class RealtimeGateway
     try {
       const fired = await this.minigameService.markGo(participants.id, round);
       if (!fired) return; // 라운드가 이미 끝났거나 세션이 바뀜
-      await this.emitToBoth(participants, 'game:go', {
-        duelId: participants.id,
-        round,
-      });
+      await this.emitToBoth(
+        participants,
+        'game:go',
+        { duelId: participants.id, round },
+        true,
+      );
     } catch (err) {
       this.logger.error(
         `미니게임 출발 신호 발사 실패 duelId=${participants.id} round=${round}`,
@@ -468,11 +481,23 @@ export class RealtimeGateway
     if (outcome.status === 'waiting' || outcome.status === 'settling') return;
 
     if (outcome.status === 'rematch') {
+      // 지난 라운드 결과 통보가 실패해도 다음 라운드는 반드시 열어야 한다.
+      //
+      // 이 시점엔 decide()가 이미 round+1 세션을 써둔 상태다. 여기서 예외가 나가면
+      // startGameRound가 실행되지 않아 새 라운드에 game:start도 마감 타이머도 없고,
+      // 호출측의 재시도는 expireRound(round)를 다시 부를 뿐인데 세션은 이미 다음
+      // 라운드라 라운드 불일치로 no-op이 된다 — 결투가 스윕까지 매달린다.
+      // (startGameRound가 "타이머를 emit보다 먼저" 거는 불변식도 같은 이유다)
       await this.emitToBoth(participants, 'game:round:result', {
         duelId: participants.id,
         round: outcome.plan.payload.round - 1,
         winnerId: null,
         scores: outcome.scores,
+      }).catch((err) => {
+        this.logger.error(
+          `라운드 결과 통보 실패 duelId=${participants.id} round=${outcome.plan.payload.round - 1} — 다음 라운드는 계속 진행한다`,
+          err,
+        );
       });
       await this.startGameRound(participants, outcome.plan);
       return;
@@ -501,10 +526,11 @@ export class RealtimeGateway
     participants: DuelParticipants,
     event: string,
     payload: unknown,
+    ephemeral = false,
   ): Promise<void> {
     await Promise.all([
-      this.notifyUser(participants.challengerId, event, payload),
-      this.notifyUser(participants.opponentId, event, payload),
+      this.notifyUser(participants.challengerId, event, payload, ephemeral),
+      this.notifyUser(participants.opponentId, event, payload, ephemeral),
     ]);
   }
 }

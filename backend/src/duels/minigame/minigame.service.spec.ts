@@ -55,6 +55,8 @@ describe('MinigameService', () => {
   let scoreStore: Map<string, Map<string, string>>;
   /** 정산 권리를 이미 가져간 라운드 (`${duelId}:${round}`) */
   let settled: Set<string>;
+  /** 라운드별 출발 신호 시각 키 (세션과 분리돼 있다) */
+  let goStore: Map<string, string>;
 
   const duel = {
     id: DUEL_ID,
@@ -78,8 +80,12 @@ describe('MinigameService', () => {
       opponentId: OPPONENT,
       // 기본값은 넉넉히 과거로 — TAP의 최소 경과시간 검사를 자연스럽게 통과한다.
       startedAt: overrides.startedAt ?? Date.now() - 60_000,
-      goAt: overrides.goAt,
     });
+    // 출발 신호 시각은 세션이 아니라 라운드 단위 별도 키에 있다(재경기 세션 덮어쓰기 방지).
+    goStore.clear();
+    if (overrides.goAt !== undefined) {
+      goStore.set(goKey(round), String(overrides.goAt));
+    }
   };
 
   const readSession = () =>
@@ -90,8 +96,13 @@ describe('MinigameService', () => {
       challengerId: string;
       opponentId: string;
       quizAnswerIndex?: number;
-      goAt?: number;
     };
+
+  const goKey = (round: number) => `duel:game:go:${DUEL_ID}:${round}`;
+  const readGoAt = (round = 1) => {
+    const raw = goStore.get(goKey(round));
+    return raw === undefined ? undefined : Number(raw);
+  };
 
   /** 제출이 서버에 도착하는 시각을 순서대로 지정한다 (submit 한 번당 Date.now() 한 번). */
   const arriveAt = (...times: number[]) => {
@@ -108,15 +119,29 @@ describe('MinigameService', () => {
     sessionRaw = null;
     scoreStore = new Map();
     settled = new Set();
+    goStore = new Map();
 
     redis = {
-      get: jest.fn(() => Promise.resolve(sessionRaw)),
+      get: jest.fn((key: string) =>
+        Promise.resolve(
+          key.startsWith('duel:game:go:')
+            ? (goStore.get(key) ?? null)
+            : sessionRaw,
+        ),
+      ),
+      // markGo의 SETNX — 이미 쏜 라운드면 false.
+      tryAcquireLock: jest.fn((key: string, _ttl: number, token: string) => {
+        if (goStore.has(key)) return Promise.resolve(false);
+        goStore.set(key, token);
+        return Promise.resolve(true);
+      }),
       set: jest.fn((_key: string, value: string) => {
         sessionRaw = value;
         return Promise.resolve();
       }),
-      del: jest.fn(() => {
-        sessionRaw = null;
+      del: jest.fn((key: string) => {
+        if (key.startsWith('duel:game:go:')) goStore.delete(key);
+        else sessionRaw = null;
         return Promise.resolve();
       }),
       submitGameScore: jest.fn(
@@ -207,7 +232,7 @@ describe('MinigameService', () => {
       expect(goDelayMs).toBeLessThan(REACTION_GO_MAX_MS);
       // 언제 켜질지 알면 미리 눌러둘 수 있다 — 페이로드에 흔적이 없어야 한다
       expect(JSON.stringify(payload)).not.toContain(String(goDelayMs));
-      expect(readSession().goAt).toBeUndefined();
+      expect(readGoAt()).toBeUndefined();
     });
 
     it('퀴즈는 선택지를 섞어 내려보내고 정답 위치는 세션에만 남긴다', async () => {
@@ -237,14 +262,14 @@ describe('MinigameService', () => {
       arriveAt(T0);
 
       await expect(service.markGo(DUEL_ID, 1)).resolves.toBe(true);
-      expect(readSession().goAt).toBe(T0);
+      expect(readGoAt()).toBe(T0);
     });
 
     it('이미 쏜 신호는 다시 기록하지 않는다', async () => {
       setSession(MiniGameType.REACTION, 1, undefined, { goAt: T0 });
 
       await expect(service.markGo(DUEL_ID, 1)).resolves.toBe(false);
-      expect(readSession().goAt).toBe(T0);
+      expect(readGoAt()).toBe(T0);
     });
 
     it('지난 라운드나 다른 게임의 신호는 무시한다', async () => {
@@ -587,6 +612,34 @@ describe('MinigameService', () => {
         DUEL_ID,
         CHALLENGER,
       );
+    });
+  });
+
+  describe('정산 후 정리 실패', () => {
+    /**
+     * finishByGame이 끝난 시점엔 점수·원장·30분 페널티가 **이미 커밋**돼 있다. 정리(TTL
+     * 걸린 키 삭제)가 실패했다고 예외를 올리면 settle의 catch가 결과를 삼켜 아무도
+     * duel:completed를 받지 못하는데, 복구할 길이 없다 — 재시도는 이미 COMPLETED인
+     * 결투를 보고 null을 돌려주고, 스윕은 PENDING/ACCEPTED만 건드린다.
+     */
+    it('세션 정리가 실패해도 승패 결과는 그대로 돌려준다', async () => {
+      setSession(MiniGameType.TAP);
+      (redis.del as jest.Mock).mockRejectedValue(new Error('Redis 응답 없음'));
+
+      await submit(CHALLENGER, 20);
+      const outcome = await submit(OPPONENT, 35);
+
+      expect(outcome.status).toBe('completed');
+    });
+
+    it('무효 처리 경로에서도 정리 실패가 결과를 삼키지 않는다', async () => {
+      // 양쪽 미제출 → 재경기 없이 즉시 VOID (마감 타이머 경로)
+      setSession(MiniGameType.TAP);
+      (redis.del as jest.Mock).mockRejectedValue(new Error('Redis 응답 없음'));
+
+      const outcome = await service.expireRound(DUEL_ID, 1);
+
+      expect(outcome?.status).toBe('void');
     });
   });
 
