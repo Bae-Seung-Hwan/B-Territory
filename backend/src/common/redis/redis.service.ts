@@ -98,7 +98,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.releaseLock(key, token);
   }
 
-  private dailyClaimKey(userId: string, spotId: number): string {
+  private dailyClaimKey(userId: string, spotId: number | '*'): string {
     return `claim:daily:${userId}:${spotId}`;
   }
 
@@ -119,10 +119,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.clearDailyGate(this.dailyClaimKey(userId, spotId), token);
   }
 
+  // spotId에 '*'를 넘기면 purgeUserKeys가 쓰는 SCAN 패턴이 된다 — 키 포맷이
+  // 두 곳으로 갈라져 한쪽만 바뀌는 사고를 막으려고 생성을 여기로 모았다.
   private missionDailyKey(
     mission: string,
     userId: string,
-    spotId: number,
+    spotId: number | '*',
   ): string {
     return `mission:${mission}:daily:${userId}:${spotId}`;
   }
@@ -152,7 +154,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private missionVisitKey(userId: string, spotId: number): string {
+  private missionVisitKey(userId: string, spotId: number | '*'): string {
     return `mission:visit:${userId}:${spotId}`;
   }
 
@@ -469,17 +471,25 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
    * 참조할 대상이 없고, 전부 TTL로 소멸한다. 호출측이 로그만 남긴다.
    */
   async purgeUserKeys(userId: string): Promise<void> {
-    await this.geoRemove(userId);
-    await this.client
-      .pipeline()
-      .del(`penalty:${userId}`)
-      .del(this.notifyKey(userId))
-      .exec();
-    // 일일 점령 키는 스팟별로 흩어져 있어 패턴으로 지운다.
-    // NOTE: 미션 API(#33)가 머지되면 visit:*·mission:daily:* 도 여기에 추가해야 한다.
-    await this.deleteByPattern(`claim:daily:${userId}:*`);
-    // 조우 쿨다운은 두 유저 id를 정렬해 만든 쌍 키라 어느 자리에 오는지 알 수 없다.
-    await this.deleteByPattern(`encounter:cooldown:*${userId}*`);
+    // 서로 건드리는 키가 겹치지 않아 순서에 의미가 없다 — 병렬로 보낸다.
+    await Promise.all([
+      this.geoRemove(userId),
+      this.client
+        .pipeline()
+        .del(`penalty:${userId}`)
+        .del(this.notifyKey(userId))
+        .exec(),
+      // 일일 점령·미션 게이트는 스팟별로 흩어져 있어 패턴으로 지운다.
+      this.deleteByPattern(this.dailyClaimKey(userId, '*')),
+      this.deleteByPattern(this.missionVisitKey(userId, '*')),
+      // 미션 종류(photo·review)마다 키가 갈려 mission 자리도 와일드카드로 둔다.
+      this.deleteByPattern(this.missionDailyKey('*', userId, '*')),
+      // 아래 둘은 두 유저 id를 정렬해 만든 쌍 키라 어느 자리에 오는지 알 수 없다.
+      this.deleteByPattern(`encounter:cooldown:*${userId}*`),
+      // 결투 락은 종료 처리(terminateActiveDuelsFor)에서 이미 풀리지만, 저장~락 획득
+      // 사이 크래시로 남은 고아 락은 그 경로를 타지 않아 여기서 함께 걷어낸다.
+      this.deleteByPattern(`duel:lock:*${userId}*`),
+    ]);
   }
 
   async hasPenalty(userId: string): Promise<boolean> {

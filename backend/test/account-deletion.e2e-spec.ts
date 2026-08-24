@@ -197,10 +197,44 @@ describe('Account deletion (e2e)', () => {
       .expect(404);
   });
 
-  it('미가입 사용자의 탈퇴 요청은 404', async () => {
+  /**
+   * 진행 중인 결투를 남긴 채 탈퇴하면 참가자 한쪽만 NULL인 활성 행이 남는다. 이 행은
+   * requestDuel의 hasActiveDuel 체크에 계속 잡혀 남은 상대가 새 결투를 신청하지 못하게
+   * 막고, lockKey가 NULL로 계산돼 엉뚱한 페어 락을 건드린다.
+   */
+  it.each([
+    [DuelStatus.PENDING, DuelStatus.EXPIRED],
+    [DuelStatus.ACCEPTED, DuelStatus.VOID],
+  ])('진행 중인 결투(%s)를 %s로 끝내고 탈퇴한다', async (from, to) => {
+    const { a, b } = await seed();
+    const active = await duelRepo.save({
+      challengerId: a.id,
+      opponentId: b.id,
+      status: from,
+    });
+
+    await request(app.getHttpServer())
+      .delete('/api/users/me')
+      .set('Authorization', 'Bearer uid-del-a')
+      .expect(204);
+
+    const closed = await duelRepo.findOne({ where: { id: active.id } });
+    // 활성 상태로 남으면 상대가 새 결투를 신청하지 못한다.
+    expect(closed?.status).toBe(to);
+    expect(closed?.challengerId).toBeNull();
+    expect(closed?.opponentId).toBe(b.id);
+  });
+
+  /**
+   * DB 삭제 커밋 직후 크래시하면 Firebase 계정만 남는다. 여기서 404로 막으면 같은
+   * 토큰으로 재시도해도 정리할 길이 없어 그 이메일로 영구 재가입이 불가능해진다.
+   */
+  it('DB 프로필이 없어도 탈퇴는 204로 끝나고 Firebase 계정을 정리한다', async () => {
     await request(app.getHttpServer())
       .delete('/api/users/me')
       .set('Authorization', 'Bearer uid-never-registered')
-      .expect(404);
+      .expect(204);
+
+    expect(deleted).toContain('uid-never-registered');
   });
 });

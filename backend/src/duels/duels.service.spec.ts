@@ -742,4 +742,129 @@ describe('DuelsService', () => {
       });
     });
   });
+
+  /**
+   * 탈퇴로 참가자가 사라진 활성 결투는 상대를 막는다 — hasActiveDuel이 고아 행을 계속
+   * 활성으로 세고, lockKey가 NULL로 계산돼 엉뚱한 키를 건드린다.
+   */
+  describe('terminateActiveDuelsFor / settleTerminatedDuels', () => {
+    it('PENDING은 EXPIRED, ACCEPTED는 VOID로 전이하고 advisory lock을 먼저 잡는다', async () => {
+      const pendingQb = createQueryBuilderMock(1, [
+        { id: 7, challengerId: 'user-a', opponentId: 'user-b' },
+      ]);
+      const acceptedQb = createQueryBuilderMock(1, [
+        { id: 8, challengerId: 'user-c', opponentId: 'user-a' },
+      ]);
+      txManager.createQueryBuilder
+        .mockReturnValueOnce(pendingQb)
+        .mockReturnValueOnce(acceptedQb);
+
+      const rows = await service.terminateActiveDuelsFor(
+        'user-a',
+        txManager as never,
+      );
+
+      // requestDuel과 같은 키를 잡아야 종료~유저 삭제 사이 신규 신청이 직렬화된다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        expect.stringContaining('pg_advisory_xact_lock'),
+        ['duel:user:user-a'],
+      );
+      expect(pendingQb.set).toHaveBeenCalledWith({
+        status: DuelStatus.EXPIRED,
+      });
+      expect(acceptedQb.set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: DuelStatus.VOID }),
+      );
+      expect(rows).toEqual([
+        {
+          id: 7,
+          challengerId: 'user-a',
+          opponentId: 'user-b',
+          event: 'duel:expired',
+        },
+        {
+          id: 8,
+          challengerId: 'user-c',
+          opponentId: 'user-a',
+          event: 'duel:voided',
+        },
+      ]);
+    });
+
+    // 유저 삭제 전에 돌아야 참가자 id가 살아 있어 락 키와 알림 대상을 알 수 있다.
+    it('종료 대상이 없으면 아무 뒷정리도 하지 않는다', async () => {
+      const notifier = jest.fn().mockResolvedValue(undefined);
+      service.setNotifier(notifier);
+
+      await service.settleTerminatedDuels([], 'user-a');
+
+      expect(redis.releaseLock).not.toHaveBeenCalled();
+      expect(notifier).not.toHaveBeenCalled();
+    });
+
+    it('페어 락을 row id 토큰으로 CAS 해제하고, 남는 상대에게만 알린다', async () => {
+      const notifier = jest.fn().mockResolvedValue(undefined);
+      service.setNotifier(notifier);
+
+      await service.settleTerminatedDuels(
+        [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            event: 'duel:expired',
+          },
+          {
+            id: 8,
+            challengerId: 'user-c',
+            opponentId: 'user-a',
+            event: 'duel:voided',
+          },
+        ],
+        'user-a',
+      );
+
+      // 키는 두 id를 정렬해 만들고, 토큰은 requestDuel과 같은 규칙(row id)이다.
+      expect(redis.releaseLock).toHaveBeenCalledWith(
+        'duel:lock:user-a:user-b',
+        '7',
+      );
+      expect(redis.releaseLock).toHaveBeenCalledWith(
+        'duel:lock:user-a:user-c',
+        '8',
+      );
+
+      expect(notifier).toHaveBeenCalledWith('user-b', 'duel:expired', {
+        duelId: 7,
+      });
+      expect(notifier).toHaveBeenCalledWith('user-c', 'duel:voided', {
+        duelId: 8,
+      });
+      // 탈퇴자에게는 보내지 않는다 — 큐는 곧 purgeUserKeys가 지운다.
+      expect(notifier).not.toHaveBeenCalledWith(
+        'user-a',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    // 계정은 이미 사라졌다 — Redis 실패로 탈퇴를 되돌릴 수 없다.
+    it('락 해제가 실패해도 예외를 던지지 않는다', async () => {
+      redis.releaseLock.mockRejectedValue(new Error('redis down'));
+
+      await expect(
+        service.settleTerminatedDuels(
+          [
+            {
+              id: 7,
+              challengerId: 'user-a',
+              opponentId: 'user-b',
+              event: 'duel:expired',
+            },
+          ],
+          'user-a',
+        ),
+      ).resolves.toBeUndefined();
+    });
+  });
 });

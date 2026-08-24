@@ -131,6 +131,43 @@ describe('RedisService', () => {
     });
   });
 
+  /**
+   * 탈퇴 시 남는 흔적을 고정한다. 새 기능이 유저 단위 키를 추가하면 여기도 같이
+   * 늘어나야 하는데, 놓쳐도 어디서도 실패하지 않아 조용히 남는다.
+   */
+  describe('purgeUserKeys', () => {
+    beforeEach(() => {
+      const chain = {
+        zrem: jest.fn().mockReturnThis(),
+        del: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([]),
+      };
+      (
+        service as unknown as { client: { pipeline: () => typeof chain } }
+      ).client.pipeline = () => chain;
+      client.scan.mockResolvedValue(['0', []]);
+    });
+
+    it('유저 단위 키를 패턴까지 빠짐없이 지운다', async () => {
+      await service.purgeUserKeys('user-1');
+
+      const patterns = client.scan.mock.calls.map(
+        (call: unknown[]) => call[2] as string,
+      );
+      expect(patterns.sort()).toEqual(
+        [
+          'claim:daily:user-1:*',
+          // 미션 API(#33)가 추가한 방문 창·일일 게이트. mission 자리는 photo·review로 갈린다.
+          'mission:visit:user-1:*',
+          'mission:*:daily:user-1:*',
+          // 쌍 키라 유저 id가 어느 자리에 오는지 알 수 없다.
+          'encounter:cooldown:*user-1*',
+          'duel:lock:*user-1*',
+        ].sort(),
+      );
+    });
+  });
+
   describe('drainNotifications', () => {
     /** MULTI 체이닝을 흉내내 lrange 결과를 돌려주는 목을 심는다. */
     const stubDrain = (entries: string[]) => {

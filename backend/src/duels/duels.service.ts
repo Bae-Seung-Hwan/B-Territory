@@ -7,7 +7,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
@@ -46,7 +46,13 @@ export type DuelNotifier = (
 
 const ACTIVE_STATUSES = [DuelStatus.PENDING, DuelStatus.ACCEPTED];
 
-type SweptDuelRow = { id: number; challengerId: string; opponentId: string };
+type SweptDuelRow = {
+  id: number;
+  challengerId: string;
+  opponentId: string;
+  // 탈퇴 종료 경로에서만 채운다 — EXPIRED/VOID를 한 배열로 넘기고 알림 때 다시 가른다.
+  event?: string;
+};
 
 @Injectable()
 export class DuelsService {
@@ -617,6 +623,114 @@ export class DuelsService {
   }
 
   /**
+   * 탈퇴하는 유저가 참가 중인 결투를 종료한다. **users 행을 지우는 트랜잭션 안에서**
+   * 호출해야 한다(manager를 넘기는 이유).
+   *
+   * FK가 SET NULL이라 유저 삭제 자체는 성공하지만, PENDING/ACCEPTED 행을 그대로 두면
+   * 참가자 한쪽만 NULL인 채 status가 살아남아 남는 상대가 두 가지 피해를 본다.
+   * 1) requestDuel의 hasActiveDuel 체크가 이 행을 여전히 활성으로 세어, 상대는 스윕이
+   *    정리할 때까지 새 결투를 아예 신청하지 못한다.
+   * 2) respondDuel·resolveDuel은 lockKey(challengerId, opponentId)를 그때그때 다시
+   *    계산하는데, 한쪽이 NULL이면 신청 시점에 실제로 잡았던 키와 다른 키가 나온다.
+   *    엉뚱한 키를 extend/release하고 진짜 락은 TTL까지 남는다.
+   *
+   * 전이는 스윕과 같게 맞춘다 — PENDING은 EXPIRED(응답을 못 받은 신청), ACCEPTED는
+   * VOID(결과가 확정되지 못한 대전).
+   *
+   * requestDuel과 같은 advisory lock을 잡아, 종료와 유저 삭제 사이에 이 유저를 상대로
+   * 한 새 결투가 끼어들어 다시 고아 행이 되는 것을 막는다(트랜잭션 종료 시 자동 해제).
+   *
+   * Redis 락 해제와 알림은 커밋 뒤라야 하므로 여기서 하지 않는다 — 반환한 행을
+   * settleTerminatedDuels에 넘긴다.
+   */
+  async terminateActiveDuelsFor(
+    userId: string,
+    manager: EntityManager,
+  ): Promise<SweptDuelRow[]> {
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`duel:user:${userId}`],
+    );
+
+    const mine = '("challengerId" = :userId OR "opponentId" = :userId)';
+
+    const expired = await manager
+      .createQueryBuilder()
+      .update(Duel)
+      .set({ status: DuelStatus.EXPIRED })
+      .where(`${mine} AND status = :pending`, {
+        userId,
+        pending: DuelStatus.PENDING,
+      })
+      .returning('id, "challengerId", "opponentId"')
+      .execute();
+
+    const voided = await manager
+      .createQueryBuilder()
+      .update(Duel)
+      .set({
+        status: DuelStatus.VOID,
+        completedAt: () => 'CURRENT_TIMESTAMP',
+      })
+      .where(`${mine} AND status = :accepted`, {
+        userId,
+        accepted: DuelStatus.ACCEPTED,
+      })
+      .returning('id, "challengerId", "opponentId"')
+      .execute();
+
+    return [
+      ...(expired.raw as SweptDuelRow[]).map((row) => ({
+        ...row,
+        event: 'duel:expired',
+      })),
+      ...(voided.raw as SweptDuelRow[]).map((row) => ({
+        ...row,
+        event: 'duel:voided',
+      })),
+    ];
+  }
+
+  /**
+   * terminateActiveDuelsFor가 끝낸 결투의 뒷정리 — **커밋 후에** 호출한다. 롤백된
+   * 트랜잭션의 결투를 종료됐다고 알리거나 살아 있는 락을 풀어버리면 안 된다.
+   *
+   * 알림은 남는 쪽에만 보낸다. 탈퇴자의 알림 큐는 어차피 purgeUserKeys가 지운다.
+   * 실패해도 탈퇴를 되돌리지 않는다 — 결투는 DB에서 이미 종료됐고, 남은 락은 TTL로
+   * 소멸하며 그마저도 purgeUserKeys의 `duel:lock:*` 정리가 걷어간다.
+   */
+  async settleTerminatedDuels(
+    rows: SweptDuelRow[],
+    leaverId: string,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+
+    // 락 토큰은 requestDuel과 같은 규칙(row id)이라, 소유자가 이 결투일 때만 CAS로 지운다.
+    await Promise.all(
+      rows.map((row) =>
+        this.redis
+          .releaseLock(
+            this.lockKey(row.challengerId, row.opponentId),
+            String(row.id),
+          )
+          .catch((err: Error) => {
+            this.logger.warn(
+              `탈퇴 결투 락 해제 실패 duelId=${row.id}: ${err.message}`,
+            );
+          }),
+      ),
+    );
+
+    for (const event of ['duel:expired', 'duel:voided']) {
+      await this.notifySwept(
+        rows.filter((row) => row.event === event),
+        event,
+        leaverId,
+      );
+    }
+  }
+
+  /**
    * 시간 기반 상태 전이를 강제할 durable한 백스톱 (주기 잡에서 호출).
    * - PENDING이 DUEL_REQUEST_TTL을 넘겨 방치됨 → EXPIRED
    *   (게이트웨이의 setTimeout은 프로세스 메모리라 서버 재시작 시 유실되고,
@@ -686,13 +800,15 @@ export class DuelsService {
   private async notifySwept(
     rows: SweptDuelRow[],
     event: string,
+    excludeUserId?: string,
   ): Promise<void> {
     if (!this.notifier || rows.length === 0) return;
     const results = await Promise.allSettled(
-      rows.flatMap((row) => [
-        this.notifier!(row.challengerId, event, { duelId: row.id }),
-        this.notifier!(row.opponentId, event, { duelId: row.id }),
-      ]),
+      rows.flatMap((row) =>
+        [row.challengerId, row.opponentId]
+          .filter((id) => id !== excludeUserId)
+          .map((id) => this.notifier!(id, event, { duelId: row.id })),
+      ),
     );
     const failed = results.filter((r) => r.status === 'rejected').length;
     if (failed > 0) {

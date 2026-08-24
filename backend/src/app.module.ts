@@ -7,6 +7,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { AccountModule } from './account/account.module';
 import { SpotsModule } from './spots/spots.module';
 import { FirebaseModule } from './common/firebase/firebase.module';
 import { RedisModule } from './common/redis/redis.module';
@@ -77,6 +78,7 @@ import { HealthModule } from './health/health.module';
     S3Module,
     AuthModule,
     UsersModule,
+    AccountModule,
     SpotsModule,
     ClaimsModule,
     MissionsModule,

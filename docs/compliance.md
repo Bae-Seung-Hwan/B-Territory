@@ -90,15 +90,16 @@
 
 Apple(가이드라인 5.1.1(v))·Google Play 모두 **계정을 생성하는 앱은 앱 안에서 계정 삭제가 가능해야** 한다. 예외가 없어 미구현 시 심사에서 리젝된다.
 
-구현: `DELETE /api/users/me` (`backend/src/users/users.service.ts` `deleteAccount`).
+구현: `DELETE /api/users/me` (`backend/src/account/account.service.ts` `deleteAccount`). users·duels·Firebase·Redis에 걸친 도메인 횡단 작업이라 `AccountModule`로 분리했다.
 
 | 대상 | 처리 | 근거 |
 |---|---|---|
 | `users` 행 | **하드 삭제** | 이메일·닉네임·Firebase UID 등 PII 제거 |
 | Firebase Auth 계정 | **삭제** | 남기면 같은 이메일로 재가입이 영구 불가 |
 | `score_events`·`spot_claims`·`claim_score_events`·`point_events` | `userId` → NULL | 원장은 append-only. 팀 점수는 `team` 컬럼으로 집계해 보존된다 |
-| `duels` | `userId` → NULL | 결투는 두 사람의 기록이라 행을 지우면 **상대방의 전적까지** 사라진다 |
-| Redis (좌표·페널티·알림 큐·일일 점령 키) | 삭제 | TTL로도 사라지지만 탈퇴는 "지금 지운다"가 요구사항 |
+| `duels` (완료된 행) | `userId` → NULL | 결투는 두 사람의 기록이라 행을 지우면 **상대방의 전적까지** 사라진다 |
+| `duels` (진행 중인 행) | **먼저 종료** (PENDING→`EXPIRED`, ACCEPTED→`VOID`) | 활성 상태로 두면 상대가 새 결투를 신청하지 못한다. 아래 참고 |
+| Redis (좌표·페널티·알림 큐·일일 점령·미션 방문/게이트·조우 쿨다운·결투 락) | 삭제 | TTL로도 사라지지만 탈퇴는 "지금 지운다"가 요구사항 |
 | **`location_usage_logs`** | **보존** | 위치정보법 제16조 2항 법정 자료. 아래 참고 |
 
 익명화(닉네임만 교체)가 아니라 하드 삭제인 이유는, 개인 랭킹이 `score_events JOIN users`(INNER JOIN)이라 `users` 행을 남기면 **탈퇴한 사용자가 명예의 전당에 계속 노출되기 때문**이다. 하드 삭제하면 조인에서 자연히 빠진다.
@@ -106,6 +107,10 @@ Apple(가이드라인 5.1.1(v))·Google Play 모두 **계정을 생성하는 앱
 > ⚠️ **개인정보처리방침에 반드시 명시할 것** — 위치정보 이용·제공사실 확인자료(`location_usage_logs`)는 법정 보존 의무(6개월) 대상이라 **탈퇴 후에도 남는다.** 4장에 적힌 대로 이 테이블은 애초에 `users` FK를 걸지 않아 탈퇴와 무관하게 유지된다. 방침에서 이 항목이 빠지면 실제 동작과 어긋난다.
 
 `duels`의 참가자 FK는 원래 `NO ACTION`이라 **결투 이력이 있는 유저는 탈퇴가 FK 위반으로 실패**했다. 마이그레이션 `DuelUserFkSetNull`로 `SET NULL`로 전환했다.
+
+진행 중인 결투를 그대로 두고 유저만 지우면 참가자 한쪽이 NULL인 활성 행이 남는데, 이 행은 상대의 새 결투 신청을 계속 막고(`hasActiveDuel` 체크에 잡힌다) 페어 락 키가 NULL로 계산돼 엉뚱한 키를 건드린다. 그래서 종료 처리를 `users` 행 삭제와 **같은 트랜잭션**에 묶고, 신청 경로와 동일한 advisory lock을 잡아 그 사이에 새 결투가 끼어들지 못하게 한다.
+
+탈퇴 API는 **멱등**이다. DB 삭제를 먼저 커밋하므로 그 직후 프로세스가 죽으면 Firebase 계정만 남는데, 이때 `404`로 막으면 재시도해도 정리할 길이 없어 그 이메일로 **영구 재가입 불가**가 된다 — 계정 삭제가 애초에 막으려던 상태다. 프로필이 없어도 Firebase 계정만 지우고 `204`로 끝낸다.
 
 ## 6. 미결 사항 (법률 자문 필요)
 

@@ -1,8 +1,6 @@
 import {
   Controller,
-  Delete,
   Get,
-  HttpCode,
   Param,
   ParseUUIDPipe,
   Req,
@@ -40,29 +38,6 @@ export class UsersController {
         errBody(ErrorCode.USER_NOT_REGISTERED, '등록되지 않은 사용자입니다.'),
       );
     return this.usersService.toProfile(user);
-  }
-
-  @Delete('me')
-  @UseGuards(FirebaseAuthGuard)
-  @HttpCode(204)
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: '회원 탈퇴 (계정 삭제)',
-    description:
-      '계정과 Firebase 인증 정보를 삭제한다. 점령·점수·결투 기록은 유저 참조만 끊긴 채 ' +
-      '남아 팀 점수가 보존되며, 위치정보 이용·제공사실 확인자료는 위치정보법 제16조 2항에 ' +
-      '따라 6개월간 보존된다. 되돌릴 수 없다.',
-  })
-  @ApiResponse({ status: 204, description: '탈퇴 완료' })
-  @ApiResponse({ status: 401, description: '유효하지 않은 Firebase ID Token' })
-  @ApiResponse({ status: 404, description: '등록되지 않은 사용자' })
-  async deleteMe(@Req() req: { user: { uid: string } }): Promise<void> {
-    const user = await this.usersService.findByFirebaseUid(req.user.uid);
-    if (!user)
-      throw new NotFoundException(
-        errBody(ErrorCode.USER_NOT_REGISTERED, '등록되지 않은 사용자입니다.'),
-      );
-    await this.usersService.deleteAccount(user);
   }
 
   @Get(':id')
