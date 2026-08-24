@@ -4,6 +4,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { Response } from 'express';
 import { RedisService } from '../common/redis/redis.service';
+import { withTimeout } from '../common/utils/with-timeout.util';
 
 // 의존성 확인 상한(ms). 컨테이너 healthcheck의 timeout(5s)보다 짧게 잡아, 응답이 오지 않는
 // 의존성 때문에 wget이 먼저 끊기고 "원인 불명 실패"가 되는 것을 막는다.
@@ -15,15 +16,6 @@ interface HealthBody {
   status: 'ok' | 'degraded';
   db: DependencyState;
   redis: DependencyState;
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms).unref();
-    }),
-  ]);
 }
 
 /**

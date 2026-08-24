@@ -75,6 +75,21 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
 
 - [ ] 소켓 연결 시작 시점 결정(로그인 직후 vs 지도 화면 진입 시) 및 `SocketProvider`에
       `connect()`/재연결·에러 처리 구현
+  - **`connect_error` 핸들러는 선택이 아니라 필수다.** 백엔드 인증이 라이프사이클 훅에서
+    네임스페이스 미들웨어로 옮겨가면서(PR #34), 인증 실패가 전송 계층 끊김이 아니라
+    `CONNECT_ERROR` 패킷으로 온다. socket.io-client는 이 패킷을 받으면 `socket.destroy()`를
+    호출해 재접속 구독을 해제하므로 **자동 재접속이 돌지 않는다**(`socket.active === false`).
+    Firebase ID 토큰은 1시간 만료라, 만료된 토큰으로 재접속하는 순간 소켓이 영구히 죽는다.
+  - 대응: `socket.on('connect_error', ...)`에서 `getIdToken(true)`로 토큰을 갱신해
+    `socket.auth.token`에 다시 넣고 `socket.connect()`를 **명시적으로** 호출한다.
+    무한 재시도 방지를 위해 백오프·시도 횟수 제한을 함께 둔다.
+  - 서버는 거부 사유를 `'unauthorized'` 고정 문구로만 보낸다(내부 에러 노출 방지). 만료
+    토큰인지 미가입 유저인지 구분할 수 없으므로, 갱신 후 재시도해도 계속 거부되면 로그인
+    화면으로 보내는 흐름이 필요하다.
+- [ ] 팀 채팅 배선 — `chat` 탭이 플레이스홀더다. 백엔드는 `/chat` 네임스페이스로 완성돼 있고
+      신고·차단 API(`POST /api/reports`, `POST|DELETE /api/blocks/:userId`)도 있다.
+      **UGC라 신고·차단 UI가 함께 있어야 Apple 심사(가이드라인 1.2)를 통과한다** —
+      `docs/community-policy.md` 참고.
 - [ ] `useLocation()`이 지도 화면에서 얻는 좌표를 `location:update`로 보내는 주기/쓰로틀링 결정
       (훅 연결 자체는 완료)
 - [ ] `encounter:detected` 등 수신 이벤트를 `useOverlayStore`/`useGameStore`에 연결하는 지점 설계
