@@ -1,6 +1,5 @@
 import {
   Injectable,
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -18,6 +17,7 @@ import { ScoresService } from '../scores/scores.service';
 import { DistrictsService } from '../districts/districts.service';
 import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { secondsUntilKstMidnight } from '../common/utils/kst.util';
+import { verifySpotProximity } from '../common/geo/spot-proximity.util';
 import {
   PG_FOREIGN_KEY_VIOLATION,
   pgErrorCode,
@@ -79,59 +79,13 @@ export class ClaimsService {
       );
     }
 
-    // NULL 좌표 대비 CASE WHEN으로 안전하게 처리. 점수 가중치 계산용으로 sigungucode도 함께 조회.
-    const result = await this.dataSource.query<
-      {
-        has_coords: boolean;
-        within_range: boolean | null;
-        distance: number | null;
-        sigungucode: string | null;
-      }[]
-    >(
-      `SELECT
-         "mapX" IS NOT NULL AND "mapY" IS NOT NULL AS has_coords,
-         CASE WHEN "mapX" IS NOT NULL AND "mapY" IS NOT NULL THEN
-           ST_DWithin(
-             ST_SetSRID(ST_MakePoint("mapX"::float, "mapY"::float), 4326)::geography,
-             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-             50
-           )
-         END AS within_range,
-         CASE WHEN "mapX" IS NOT NULL AND "mapY" IS NOT NULL THEN
-           ROUND(
-             ST_Distance(
-               ST_SetSRID(ST_MakePoint("mapX"::float, "mapY"::float), 4326)::geography,
-               ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
-             )::numeric, 1
-           )::float8
-         END AS distance,
-         sigungucode
-       FROM spots WHERE id = $3`,
-      [lng, lat, spotId],
+    // 방문 인증(50m) + 가중치용 sigungucode 조회를 공용 유틸로 위임 (missions 인증과 동일 규칙).
+    const sigungucode = await verifySpotProximity(
+      this.dataSource,
+      spotId,
+      lat,
+      lng,
     );
-
-    if (!result.length)
-      throw new NotFoundException(
-        errBody(ErrorCode.SPOT_NOT_FOUND, '관광지를 찾을 수 없습니다.'),
-      );
-
-    if (!result[0].has_coords)
-      throw new BadRequestException(
-        errBody(
-          ErrorCode.SPOT_NO_COORDINATES,
-          '해당 관광지는 좌표 정보가 없어 방문 인증이 불가합니다.',
-        ),
-      );
-
-    const { within_range, distance, sigungucode } = result[0];
-    if (!within_range) {
-      throw new BadRequestException(
-        errBody(
-          ErrorCode.VISIT_OUT_OF_RANGE,
-          `방문 인증 실패: 현재 위치가 ${distance}m 떨어져 있습니다. (허용: 50m 이내)`,
-        ),
-      );
-    }
 
     // 일일 점령 제한: 같은 관광지는 인당 하루 1회만 점령 가능 (KST 자정 리셋 —
     // 구 집계 크론과 같은 시계). SET NX가 확인과 기록을 원자로 처리한다.

@@ -10,9 +10,13 @@ import { UsersModule } from './users/users.module';
 import { SpotsModule } from './spots/spots.module';
 import { FirebaseModule } from './common/firebase/firebase.module';
 import { RedisModule } from './common/redis/redis.module';
+import { S3Module } from './common/s3/s3.module';
 import { ClaimsModule } from './claims/claims.module';
+import { MissionsModule } from './missions/missions.module';
 import { DuelsModule } from './duels/duels.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { ChatModule } from './chat/chat.module';
+import { ModerationModule } from './moderation/moderation.module';
 import { ScoresModule } from './scores/scores.module';
 import { DistrictsModule } from './districts/districts.module';
 import { FestivalsModule } from './festivals/festivals.module';
@@ -70,12 +74,16 @@ import { HealthModule } from './health/health.module';
     }),
     FirebaseModule,
     RedisModule,
+    S3Module,
     AuthModule,
     UsersModule,
     SpotsModule,
     ClaimsModule,
+    MissionsModule,
     DuelsModule,
     RealtimeModule,
+    ChatModule,
+    ModerationModule,
     ScoresModule,
     DistrictsModule,
     FestivalsModule,

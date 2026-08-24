@@ -16,6 +16,10 @@ export enum ScoreEventType {
   CLAIM_REVISIT = 'CLAIM_REVISIT',
   DUEL_WIN = 'DUEL_WIN',
   DUEL_LOSS = 'DUEL_LOSS',
+  // 미션 보너스 — 개인 점수에만 기여(teamPoints=0). 팀/영토 집계는 CLAIM_*만 계산하므로
+  // 미션은 결투(DUEL_*)와 같이 개인 랭킹·user.score에만 반영된다.
+  MISSION_PHOTO = 'MISSION_PHOTO',
+  MISSION_REVIEW = 'MISSION_REVIEW',
 }
 
 /**
