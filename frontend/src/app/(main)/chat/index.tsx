@@ -77,6 +77,10 @@ export default function ChatScreen() {
             placeholder={t('chat.inputPlaceholder')}
             placeholderTextColor="#666"
             onSubmitEditing={handleSend}
+            // 백엔드 ChatMessageDto의 @Length(1, 500)과 맞춘다 — 없으면 500자를 넘긴
+            // 메시지가 낙관적으로는 "보낸 메시지"로 표시되고 실제로는 서버 검증에서
+            // 거부돼 조용히 유실된다(use-chat-socket.ts의 sendMessage 가드도 참고).
+            maxLength={500}
           />
           <TouchableOpacity style={styles.sendBtn} onPress={handleSend}>
             <Text style={styles.sendBtnText}>{t('chat.send')}</Text>

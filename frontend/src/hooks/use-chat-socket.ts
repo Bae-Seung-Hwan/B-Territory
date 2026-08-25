@@ -11,6 +11,12 @@ function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// 백엔드 ChatMessageDto의 @Length(1, 500)과 일치시킨다. ChatScreen의 TextInput이
+// maxLength로 입력 자체를 막아 정상 경로에서는 닿을 일이 없지만, sendMessage는 훅의
+// 공개 API라 호출부를 신뢰하지 않고 여기서도 한 번 더 막는다 — 없으면 초과분이
+// 로컬에는 "보낸 메시지"로 낙관적 추가되고 서버에서만 조용히 거부된다.
+const MAX_MESSAGE_LENGTH = 500;
+
 /**
  * 소켓 실패 종류 — 텍스트가 아니라 종류만 들고 있는다. 이 상태는 useEffect의 소켓
  * 이벤트 콜백 안에서 set되는데, 그 콜백은 마운트 시 한 번만 등록되므로 여기서 i18n
@@ -95,7 +101,7 @@ export function useChatSocket() {
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || !profile) return;
+      if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || !profile) return;
       const payload: ChatMessageOutgoing = { text: trimmed };
       socketRef.current?.emit('chat:message', payload);
       // 서버가 발신자를 제외하고 릴레이하므로(PR #34), 내 메시지는 낙관적으로 직접 추가한다.
