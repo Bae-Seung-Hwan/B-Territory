@@ -57,4 +57,20 @@ describe('useSocialLoginConsent', () => {
     result.current.resolveConsent(false);
     await expect(second).resolves.toBe(false);
   });
+
+  it('대기 중에 다시 요청하면(연타) 새 Promise를 만들지 않고 같은 Promise를 돌려준다', async () => {
+    const onRequest = jest.fn();
+    const { result } = await renderHook(() => useSocialLoginConsent({ onRequest }));
+
+    const first = result.current.requestConsent();
+    const second = result.current.requestConsent();
+
+    // 같은 Promise 인스턴스라 첫 탭이 유실되지 않는다 — 하나만 resolve해도 둘 다 풀린다.
+    expect(second).toBe(first);
+    expect(onRequest).toHaveBeenCalledTimes(1);
+
+    result.current.resolveConsent(true);
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+  });
 });
