@@ -49,6 +49,7 @@ describe('RealtimeGateway 라이프사이클 훅', () => {
       // 이 스펙은 라이프사이클 훅만 다뤄 미니게임 경로를 타지 않는다.
       {} as never,
       { record: jest.fn() } as never,
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
     // 훅이 예외를 삼키고 로그만 남기는지 확인해야 하므로 로거 출력을 가로챈다.
     warn = jest

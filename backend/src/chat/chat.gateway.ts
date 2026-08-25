@@ -19,6 +19,10 @@ import {
   useSocketAuth,
   wsValidationPipe,
 } from '../common/ws/ws-auth';
+import {
+  userRoomOf,
+  WsSessionsService,
+} from '../common/ws/ws-sessions.service';
 import { ChatMessageDto } from './dto/chat-message.dto';
 import { ModerationService } from '../moderation/moderation.service';
 
@@ -56,12 +60,8 @@ export class ChatGateway implements OnGatewayInit {
     private readonly usersService: UsersService,
     private readonly redis: RedisService,
     private readonly moderation: ModerationService,
+    private readonly sessions: WsSessionsService,
   ) {}
-
-  /** 유저 전용 룸 — 차단 필터가 소켓을 찾지 않고 룸 이름만으로 제외할 수 있게 한다. */
-  private userRoomOf(userId: string): string {
-    return `user:${userId}`;
-  }
 
   /**
    * 발신자를 차단한 팀원의 **룸 이름** 목록. 릴레이에서 `.except()`로 제외한다.
@@ -76,7 +76,7 @@ export class ChatGateway implements OnGatewayInit {
    */
   private async blockerRooms(senderId: string): Promise<string[]> {
     const blockerIds = await this.moderation.getBlockedBy(senderId);
-    return blockerIds.map((id) => this.userRoomOf(id));
+    return blockerIds.map((id) => userRoomOf(id));
   }
 
   private roomOf(team: string): string {
@@ -126,6 +126,8 @@ export class ChatGateway implements OnGatewayInit {
    * 팀 메시지를 놓치는 창이 없다.
    */
   afterInit(namespace: Namespace): void {
+    // 탈퇴 시 이 유저의 소켓을 끊을 수 있도록 네임스페이스를 등록한다.
+    this.sessions.register(namespace);
     useSocketAuth(
       namespace,
       this.firebaseService,
@@ -135,8 +137,9 @@ export class ChatGateway implements OnGatewayInit {
       // 차단 제외도 첫 메시지부터 적용된다.
       async (socket, user) => {
         await socket.join(this.roomOf(user.team));
-        // 차단 필터가 이 룸 이름으로 수신자를 제외한다(blockerRooms 참고).
-        await socket.join(this.userRoomOf(user.id));
+        // 차단 필터가 이 룸 이름으로 수신자를 제외하고(blockerRooms 참고),
+        // 탈퇴 시 세션 종료도 이 룸으로 소켓을 찾는다.
+        await socket.join(userRoomOf(user.id));
       },
     );
   }
