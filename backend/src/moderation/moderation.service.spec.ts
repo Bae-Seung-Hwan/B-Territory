@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { QueryFailedError } from 'typeorm';
 import { ModerationService } from './moderation.service';
 import { ReportReason } from './entities/report.entity';
 import { UsersService } from '../users/users.service';
@@ -9,6 +10,18 @@ import { ErrorCode } from '../common/errors/error-code';
  * 신고·차단 — Apple 심사 가이드라인 1.2(UGC) 대응.
  */
 describe('ModerationService', () => {
+  /**
+   * findById 확인과 INSERT 사이에 대상이 탈퇴를 완료하면 Postgres가 내는 에러.
+   * 잡지 않으면 QueryFailedError가 그대로 새어나가 500이 된다.
+   */
+  function fkViolation() {
+    return new QueryFailedError('INSERT ...', [], {
+      name: 'error',
+      message: 'violates foreign key constraint',
+      code: '23503',
+    } as unknown as Error);
+  }
+
   function make() {
     const insertBuilder = {
       insert: jest.fn().mockReturnThis(),
@@ -146,6 +159,32 @@ describe('ModerationService', () => {
     });
   });
 
+  // 존재 확인은 INSERT와 같은 트랜잭션이 아니라, 그 사이 대상이 탈퇴하면 FK 위반이 난다.
+  it('차단 도중 대상이 탈퇴하면 500이 아니라 404를 낸다', async () => {
+    const { service, insertBuilder } = make();
+    insertBuilder.execute.mockRejectedValue(fkViolation());
+
+    const err = await service.block('u1', 'target-1').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as NotFoundException).getResponse()).toMatchObject({
+      code: ErrorCode.USER_NOT_FOUND,
+    });
+  });
+
+  // FK 위반이 아닌 DB 오류까지 404로 뭉개면 진짜 장애가 "없는 유저"로 감춰진다.
+  it('FK 위반이 아닌 DB 오류는 그대로 올린다', async () => {
+    const { service, insertBuilder } = make();
+    const other = new QueryFailedError('INSERT ...', [], {
+      name: 'error',
+      message: 'deadlock detected',
+      code: '40P01',
+    } as unknown as Error);
+    insertBuilder.execute.mockRejectedValue(other);
+
+    await expect(service.block('u1', 'target-1')).rejects.toBe(other);
+  });
+
   describe('report', () => {
     const dto = {
       targetUserId: 'target-1',
@@ -187,6 +226,18 @@ describe('ModerationService', () => {
         code: ErrorCode.REPORT_RATE_LIMIT,
       });
       expect(reportRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('신고 도중 대상이 탈퇴하면 500이 아니라 404를 낸다', async () => {
+      const { service, reportRepo } = make();
+      reportRepo.save.mockRejectedValue(fkViolation());
+
+      const err = await service.report('u1', dto).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(NotFoundException);
+      expect((err as NotFoundException).getResponse()).toMatchObject({
+        code: ErrorCode.USER_NOT_FOUND,
+      });
     });
   });
 });
