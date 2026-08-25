@@ -8,5 +8,7 @@ import { HallOfFameController } from './hall-of-fame.controller';
   imports: [ScoresModule],
   controllers: [HallOfFameController],
   providers: [HallOfFameService],
+  // 탈퇴(AccountModule)가 개인 랭킹 캐시를 무효화하기 위해 쓴다.
+  exports: [HallOfFameService],
 })
 export class HallOfFameModule {}

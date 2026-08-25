@@ -4,6 +4,7 @@ import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
 import { ModerationService } from '../moderation/moderation.service';
+import { WsSessionsService } from '../common/ws/ws-sessions.service';
 import { WsExceptionsFilter } from '../common/filters/ws-exception.filter';
 import { ErrorCode } from '../common/errors/error-code';
 
@@ -41,6 +42,7 @@ describe('ChatGateway', () => {
   let users: { findByFirebaseUid: jest.Mock };
   let redis: { consumeRateLimit: jest.Mock };
   let moderation: { getBlockedBy: jest.Mock };
+  let sessions: { register: jest.Mock; disconnectUser: jest.Mock };
 
   beforeEach(() => {
     firebase = { verifyIdToken: jest.fn() };
@@ -48,11 +50,13 @@ describe('ChatGateway', () => {
     redis = { consumeRateLimit: jest.fn().mockResolvedValue(true) };
     // 기본값: 아무도 발신자를 차단하지 않음 → 룸 브로드캐스트 그대로.
     moderation = { getBlockedBy: jest.fn().mockResolvedValue([]) };
+    sessions = { register: jest.fn(), disconnectUser: jest.fn() };
     gateway = new ChatGateway(
       firebase as unknown as FirebaseService,
       users as unknown as UsersService,
       redis as unknown as RedisService,
       moderation as unknown as ModerationService,
+      sessions as unknown as WsSessionsService,
     );
   });
 

@@ -98,7 +98,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.releaseLock(key, token);
   }
 
-  private dailyClaimKey(userId: string, spotId: number): string {
+  private dailyClaimKey(userId: string, spotId: number | '*'): string {
     return `claim:daily:${userId}:${spotId}`;
   }
 
@@ -119,10 +119,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.clearDailyGate(this.dailyClaimKey(userId, spotId), token);
   }
 
+  // spotId에 '*'를 넘기면 purgeUserKeys가 쓰는 SCAN 패턴이 된다 — 키 포맷이
+  // 두 곳으로 갈라져 한쪽만 바뀌는 사고를 막으려고 생성을 여기로 모았다.
   private missionDailyKey(
     mission: string,
     userId: string,
-    spotId: number,
+    spotId: number | '*',
   ): string {
     return `mission:${mission}:daily:${userId}:${spotId}`;
   }
@@ -152,7 +154,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private missionVisitKey(userId: string, spotId: number): string {
+  private missionVisitKey(userId: string, spotId: number | '*'): string {
     return `mission:visit:${userId}:${spotId}`;
   }
 
@@ -458,58 +460,141 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(`penalty:${userId}`);
   }
 
+  /**
+   * 탈퇴 시 해당 유저의 Redis 흔적을 모두 지운다.
+   *
+   * 전부 TTL이 걸려 있어 언젠가는 사라지지만, 탈퇴는 "지금 지운다"가 요구사항이라
+   * 명시적으로 정리한다. 특히 geo:users에 좌표가 남아 있으면 탈퇴한 유저가 다른
+   * 이용자의 결투 탐지 결과에 계속 잡힌다.
+   *
+   * 실패해도 탈퇴 자체를 되돌리지 않는다 — DB에서 계정이 사라진 뒤라 남은 키는
+   * 참조할 대상이 없고, 전부 TTL로 소멸한다. 호출측이 로그만 남긴다.
+   */
+  async purgeUserKeys(userId: string): Promise<void> {
+    // 서로 건드리는 키가 겹치지 않아 순서에 의미가 없다 — 병렬로 보낸다.
+    await Promise.all([
+      this.geoRemove(userId),
+      this.client
+        .pipeline()
+        .del(`penalty:${userId}`)
+        .del(this.notifyKey(userId))
+        .del(`report:rate:${userId}`)
+        // "나를 차단한 사람" 캐시와 그 버전 키(moderation.service).
+        .del(`chat:blockedby:${userId}`)
+        .del(`chat:blockedbyver:${userId}`)
+        .exec(),
+      // 채팅 레이트리밋은 종류(message·location)별로 키가 갈린다.
+      this.deleteByPattern(`chat:rate:*:${userId}`),
+      // 일일 점령·미션 게이트는 스팟별로 흩어져 있어 패턴으로 지운다.
+      this.deleteByPattern(this.dailyClaimKey(userId, '*')),
+      this.deleteByPattern(this.missionVisitKey(userId, '*')),
+      // 미션 종류(photo·review)마다 키가 갈려 mission 자리도 와일드카드로 둔다.
+      this.deleteByPattern(this.missionDailyKey('*', userId, '*')),
+      // 아래 둘은 두 유저 id를 정렬해 만든 쌍 키라 어느 자리에 오는지 알 수 없다.
+      this.deleteByPattern(`encounter:cooldown:*${userId}*`),
+      // 결투 락은 종료 처리(terminateActiveDuelsFor)에서 이미 풀리지만, 저장~락 획득
+      // 사이 크래시로 남은 고아 락은 그 경로를 타지 않아 여기서 함께 걷어낸다.
+      this.deleteByPattern(`duel:lock:*${userId}*`),
+    ]);
+  }
+
   async hasPenalty(userId: string): Promise<boolean> {
     const value = await this.client.get(`penalty:${userId}`);
     return value !== null;
   }
 
   /**
-   * 결투 결과 자가신고 합의 (Lua 원자 연산)
-   * - 첫 신고: 'waiting'
-   * - 두번째 신고가 첫 신고와 같은 승자: 'confirmed' + winnerId
-   * - 두번째 신고가 첫 신고와 다른 승자: 'conflict'
+   * 결투 미니게임 라운드 점수 제출 (Lua 원자 연산).
+   *
+   * HSETNX라 같은 라운드에 두 번 제출해도 첫 값만 남는다 — 재전송으로 점수를 덮어써
+   * 유리한 값으로 바꾸는 것을 막는다. 이미 제출한 유저면 status='duplicate'.
+   *
+   * 상대 점수는 어떤 경우에도 반환하지 않는다. 정산에 필요한 값은 호출측이
+   * claimRoundSettlement으로 따로 읽는다 — 그래야 락을 쥔 쪽만 점수를 보게 된다.
    */
-  async submitDuelResult(
+  async submitGameScore(
     duelId: number,
-    reporterId: string,
-    winnerId: string,
+    round: number,
+    userId: string,
+    entry: string,
+    ttlSeconds: number,
+  ): Promise<{ status: 'duplicate' | 'waiting' | 'both' }> {
+    const lua = `
+      if redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2]) == 0 then
+        return 'duplicate'
+      end
+      redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+      if redis.call('HLEN', KEYS[1]) < 2 then
+        return 'waiting'
+      end
+      return 'both'
+    `;
+    const status = (await this.client.eval(
+      lua,
+      1,
+      this.gameScoreKey(duelId, round),
+      userId,
+      entry,
+      String(ttlSeconds),
+    )) as 'duplicate' | 'waiting' | 'both';
+    return { status };
+  }
+
+  /**
+   * 라운드 정산 권리를 선점하면서 그 시점의 점수를 함께 읽는다 (Lua 원자 연산).
+   *
+   * 두 동작이 반드시 한 연산이어야 한다 — 락을 잡고 나서 따로 읽으면, 그 사이에 들어온
+   * 제출이 스냅샷에서 빠져 제때 낸 참가자가 기권패로 처리된다. Redis는 명령을 단일
+   * 스레드로 직렬화하므로, 여기서 안 읽힌 제출은 정산 시점 이후에 도착한 것이 확실하다.
+   *
+   * claimed=false면 다른 쪽(마감 타이머 또는 마지막 제출자)이 이미 정산 중이다.
+   */
+  async claimRoundSettlement(
+    duelId: number,
+    round: number,
     ttlSeconds: number,
   ): Promise<
-    | { status: 'waiting' }
-    | { status: 'confirmed'; winnerId: string }
-    | { status: 'conflict' }
+    { claimed: false } | { claimed: true; entries: Map<string, string> }
   > {
-    const key = `duel:result:${duelId}`;
     const lua = `
-      redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
-      redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
-      local all = redis.call('HGETALL', KEYS[1])
-      local winners = {}
-      local count = 0
-      for i = 1, #all, 2 do
-        count = count + 1
-        winners[count] = all[i + 1]
+      if not redis.call('SET', KEYS[1], '1', 'EX', tonumber(ARGV[1]), 'NX') then
+        return {'taken'}
       end
-      if count < 2 then
-        return {'waiting'}
-      end
-      if winners[1] == winners[2] then
-        return {'confirmed', winners[1]}
-      end
-      return {'conflict'}
+      local all = redis.call('HGETALL', KEYS[2])
+      table.insert(all, 1, 'claimed')
+      return all
     `;
     const result = (await this.client.eval(
       lua,
-      1,
-      key,
-      reporterId,
-      winnerId,
+      2,
+      this.settleKey(duelId, round),
+      this.gameScoreKey(duelId, round),
       String(ttlSeconds),
     )) as string[];
-    if (result[0] === 'waiting') return { status: 'waiting' };
-    if (result[0] === 'confirmed')
-      return { status: 'confirmed', winnerId: result[1] };
-    return { status: 'conflict' };
+
+    if (result[0] === 'taken') return { claimed: false };
+    const entries = new Map<string, string>();
+    for (let i = 1; i < result.length; i += 2) {
+      entries.set(result[i], result[i + 1]);
+    }
+    return { claimed: true, entries };
+  }
+
+  /**
+   * 정산 권리를 되돌린다 — 정산 도중 실패해 결과를 내지 못했을 때만 호출한다.
+   * 이걸 안 하면 그 라운드는 TTL이 끝날 때까지 아무도 정산하지 못해, 클라이언트가
+   * 결과를 못 받고 결투 스윕(수백 초 뒤)까지 매달린다.
+   */
+  async releaseRoundSettlement(duelId: number, round: number): Promise<void> {
+    await this.client.del(this.settleKey(duelId, round));
+  }
+
+  private gameScoreKey(duelId: number, round: number): string {
+    return `duel:game:${duelId}:r${round}`;
+  }
+
+  private settleKey(duelId: number, round: number): string {
+    return `duel:game:${duelId}:settled:r${round}`;
   }
 
   private static readonly NOTIFICATION_MAX = 50;

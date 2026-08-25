@@ -65,6 +65,21 @@ export class HallOfFameService {
     return 'ongoing';
   }
 
+  /**
+   * 개인 랭킹 캐시 무효화 — 탈퇴가 호출한다.
+   *
+   * 캐시된 RankingResult에는 닉네임과 userId가 그대로 박혀 있고 **끝난 시즌은 TTL이
+   * 24시간**이라, 지우지 않으면 탈퇴자가 최대 하루 동안 명예의 전당에 계속 노출된다.
+   * `backend/docs/API.md`와 `docs/compliance.md` 5장이 모두 "탈퇴 즉시 노출되지 않는다"고
+   * 약속하고 있어, 캐시를 두면 문서와 실제 동작이 어긋난다.
+   *
+   * 팀 랭킹(`hof:teams:*`)은 건드리지 않는다 — `score_events.team`으로만 집계해 유저
+   * 정보가 들어가지 않고, 탈퇴 후에도 팀 점수는 보존되는 것이 맞다.
+   */
+  async invalidateUserRanking(): Promise<void> {
+    await this.redis.deleteByPattern('hof:users:*');
+  }
+
   private async getRanking<T>(
     kind: 'teams' | 'users',
     season: number | undefined,
