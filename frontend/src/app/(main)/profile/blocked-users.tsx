@@ -1,4 +1,3 @@
-import { useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,50 +8,53 @@ import { Card } from '@/components/ui/Card';
 import { useBlockedUsers, useUnblockMutation, moderationErrorMessage } from '@/hooks/use-moderation';
 import type { BlockedUser } from '@/api/moderation';
 
-export default function BlockedUsersScreen() {
-  const router = useRouter();
+/**
+ * 행마다 자기 useUnblockMutation() 인스턴스를 갖는다 — 화면 전체가 하나를 공유하면
+ * A를 해제하는 동안 그 mutation의 isPending/variables가 B·C에도 걸려, 여러 행을
+ * 빠르게 잇달아 해제할 때 "지금 어느 행이 실제로 진행 중인지"가 마지막 호출
+ * 하나로만 뭉개진다. 행마다 독립시키면 각자의 pending 상태가 정확히 자기 행만 가리킨다.
+ */
+function BlockedUserRow({ user }: { user: BlockedUser }) {
   const { t } = useTranslation();
-  const { data: blocked, isLoading, isError, refetch } = useBlockedUsers();
   const unblockMutation = useUnblockMutation();
 
-  const handleUnblock = useCallback(
-    (user: BlockedUser) => {
-      Alert.alert(
-        t('moderation.unblockConfirmTitle'),
-        t('moderation.unblockConfirmMessage', { nickname: user.nickname }),
-        [
-          { text: t('moderation.cancel'), style: 'cancel' },
-          {
-            text: t('moderation.unblock'),
-            style: 'destructive',
-            onPress: () =>
-              unblockMutation.mutate(user.userId, {
-                onError: (err) => Alert.alert(t('auth.errors.title'), moderationErrorMessage(err, t)),
-              }),
-          },
-        ],
-      );
-    },
-    [t, unblockMutation],
-  );
+  const handleUnblock = () => {
+    Alert.alert(
+      t('moderation.unblockConfirmTitle'),
+      t('moderation.unblockConfirmMessage', { nickname: user.nickname }),
+      [
+        { text: t('moderation.cancel'), style: 'cancel' },
+        {
+          text: t('moderation.unblock'),
+          style: 'destructive',
+          onPress: () =>
+            unblockMutation.mutate(user.userId, {
+              onError: (err) => Alert.alert(t('auth.errors.title'), moderationErrorMessage(err, t)),
+            }),
+        },
+      ],
+    );
+  };
 
-  const renderItem = ({ item }: { item: BlockedUser }) => (
+  return (
     <Card style={styles.row}>
       <View style={styles.rowInfo}>
-        <Text style={styles.nickname}>{item.nickname}</Text>
+        <Text style={styles.nickname}>{user.nickname}</Text>
         <Text style={styles.blockedAt}>
-          {t('moderation.blockedAtLabel')}: {new Date(item.blockedAt).toLocaleDateString()}
+          {t('moderation.blockedAtLabel')}: {new Date(user.blockedAt).toLocaleDateString()}
         </Text>
       </View>
-      <TouchableOpacity
-        onPress={() => handleUnblock(item)}
-        disabled={unblockMutation.isPending}
-        hitSlop={8}
-      >
+      <TouchableOpacity onPress={handleUnblock} disabled={unblockMutation.isPending} hitSlop={8}>
         <Text style={styles.unblockText}>{t('moderation.unblock')}</Text>
       </TouchableOpacity>
     </Card>
   );
+}
+
+export default function BlockedUsersScreen() {
+  const router = useRouter();
+  const { t } = useTranslation();
+  const { data: blocked, isLoading, isError, refetch } = useBlockedUsers();
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -76,7 +78,7 @@ export default function BlockedUsersScreen() {
         <FlatList
           data={blocked}
           keyExtractor={(item) => item.userId}
-          renderItem={renderItem}
+          renderItem={({ item }) => <BlockedUserRow user={item} />}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             <Text style={styles.emptyState}>{t('moderation.blockedUsersEmpty')}</Text>

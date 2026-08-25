@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Platform, Text, TextInput, View, StyleSheet } from 'react-native';
-import { BottomSheetModal, BottomSheetTextInput } from '@gorhom/bottom-sheet';
+import { BottomSheetModal, BottomSheetScrollView, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { ReportReason } from '@/api/moderation';
 import { useBlockMutation, useReportMutation, moderationErrorMessage } from '@/hooks/use-moderation';
 import { useTranslation } from '@/i18n';
@@ -38,7 +38,10 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
   const { t } = useTranslation();
   const sheetRef = useRef<BottomSheetModal>(null);
   const [step, setStep] = useState<Step>('actions');
-  const [reason, setReason] = useState<ReportReason>(ReportReason.SPAM);
+  // null = 사용자가 아직 사유를 고르지 않음. 특정 사유를 기본 선택해두면 안 건드리고
+  // 제출해도 성공해버려, 실제로는 욕설/혐오를 신고하려던 유저가 스팸으로 잘못
+  // 접수시킬 수 있다 — 명시적으로 고르기 전까진 제출 자체를 막는다.
+  const [reason, setReason] = useState<ReportReason | null>(null);
   const [detail, setDetail] = useState('');
   const blockMutation = useBlockMutation();
   const reportMutation = useReportMutation();
@@ -52,7 +55,7 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
     setPrevTarget(target);
     if (target) {
       setStep('actions');
-      setReason(ReportReason.SPAM);
+      setReason(null);
       setDetail('');
     }
   }
@@ -83,7 +86,7 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
   };
 
   const handleSubmitReport = () => {
-    if (!target) return;
+    if (!target || !reason) return;
     reportMutation.mutate(
       {
         targetUserId: target.userId,
@@ -106,66 +109,77 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
       ref={sheetRef}
       snapPoints={[step === 'actions' ? '32%' : '65%']}
       onDismiss={onDismiss}
+      // 신고 스텝은 사유 카드 5개 + 내용 미리보기 + 상세 입력창 + 제출 버튼이 한
+      // 화면에 들어가는데, 작은 기기거나 상세 입력창에 포커스해 키보드가 뜨면 65%
+      // 높이를 넘길 수 있다. scrollable 없이는 넘친 만큼이 그냥 안 보이고 손이
+      // 안 닿는다 — BottomSheetScrollView로 감싸 넘치면 스크롤되게 한다.
+      scrollable
     >
-      {step === 'actions' && target && (
-        <View style={styles.actions}>
-          <Text style={styles.actionsTitle}>{t('moderation.actionsSheetTitle')}</Text>
-          <Text style={styles.targetNickname}>{target.nickname}</Text>
-          <Button title={t('moderation.report')} onPress={() => setStep('report')} style={styles.actionButton} />
-          <Button
-            title={t('moderation.block')}
-            onPress={handleBlock}
-            variant="danger"
-            loading={blockMutation.isPending}
-            style={styles.actionButton}
-          />
-        </View>
-      )}
-
-      {step === 'report' && target && (
-        <View style={styles.report}>
-          <Text style={styles.reportTitle}>{t('moderation.reportTitle')}</Text>
-          <View style={styles.reasonList}>
-            {REASONS.map((r) => (
-              <Card
-                key={r}
-                onPress={() => setReason(r)}
-                selected={reason === r}
-                style={styles.reasonCard}
-              >
-                <Text style={styles.reasonText}>{t(`moderation.reportReason.${r}`)}</Text>
-              </Card>
-            ))}
+      <BottomSheetScrollView contentContainerStyle={styles.scrollContent}>
+        {step === 'actions' && target && (
+          <View style={styles.actions}>
+            <Text style={styles.actionsTitle}>{t('moderation.actionsSheetTitle')}</Text>
+            <Text style={styles.targetNickname}>{target.nickname}</Text>
+            <Button title={t('moderation.report')} onPress={() => setStep('report')} style={styles.actionButton} />
+            <Button
+              title={t('moderation.block')}
+              onPress={handleBlock}
+              variant="danger"
+              loading={blockMutation.isPending}
+              style={styles.actionButton}
+            />
           </View>
+        )}
 
-          <Text style={styles.contentLabel}>{t('moderation.reportContentLabel')}</Text>
-          <Text style={styles.contentSnapshot} numberOfLines={4}>
-            {target.text}
-          </Text>
+        {step === 'report' && target && (
+          <View style={styles.report}>
+            <Text style={styles.reportTitle}>{t('moderation.reportTitle')}</Text>
+            <View style={styles.reasonList}>
+              {REASONS.map((r) => (
+                <Card
+                  key={r}
+                  onPress={() => setReason(r)}
+                  selected={reason === r}
+                  style={styles.reasonCard}
+                >
+                  <Text style={styles.reasonText}>{t(`moderation.reportReason.${r}`)}</Text>
+                </Card>
+              ))}
+            </View>
 
-          <DetailInput
-            style={styles.detailInput}
-            placeholder={t('moderation.detailPlaceholder')}
-            placeholderTextColor="#666"
-            value={detail}
-            onChangeText={setDetail}
-            maxLength={500}
-            multiline
-          />
+            <Text style={styles.contentLabel}>{t('moderation.reportContentLabel')}</Text>
+            <Text style={styles.contentSnapshot} numberOfLines={4}>
+              {target.text}
+            </Text>
 
-          <Button
-            title={t('moderation.submitReport')}
-            onPress={handleSubmitReport}
-            loading={reportMutation.isPending}
-            style={styles.actionButton}
-          />
-        </View>
-      )}
+            <DetailInput
+              style={styles.detailInput}
+              placeholder={t('moderation.detailPlaceholder')}
+              placeholderTextColor="#666"
+              value={detail}
+              onChangeText={setDetail}
+              maxLength={500}
+              multiline
+            />
+
+            <Button
+              title={t('moderation.submitReport')}
+              onPress={handleSubmitReport}
+              disabled={!reason}
+              loading={reportMutation.isPending}
+              style={styles.actionButton}
+            />
+          </View>
+        )}
+      </BottomSheetScrollView>
     </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
+  // scrollable 모드는 BottomSheet의 기본 padding(BottomSheetView 쪽)을 안 거치므로
+  // 여기서 직접 채운다.
+  scrollContent: { padding: 16, paddingBottom: 32 },
   actions: { gap: 10 },
   actionsTitle: { color: '#fff', fontSize: 16, fontWeight: '700' },
   targetNickname: { color: '#999', fontSize: 13, marginBottom: 6 },
