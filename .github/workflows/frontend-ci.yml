@@ -6,11 +6,11 @@ on:
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend-ci.yml'
+  # PR엔 paths 필터를 두지 않는다 — develop-protection이 이 job을 required status check로
+  # 요구하므로, 필터에 걸려 실행되지 않으면 체크가 영원히 "Expected" 상태로 남아 머지가
+  # 막힌다(룰셋은 skip을 pass로 치지 않는다). 백엔드 전용 PR에서도 그냥 한 번 돈다.
   pull_request:
     branches: [develop, main]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend-ci.yml'
 
 jobs:
   check:
@@ -50,4 +50,12 @@ jobs:
         run: npm test
 
       - name: Build check
+        env:
+          EXPO_PUBLIC_FIREBASE_API_KEY: ${{ vars.EXPO_PUBLIC_FIREBASE_API_KEY }}
+          EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ vars.EXPO_PUBLIC_FIREBASE_PROJECT_ID }}
+          EXPO_PUBLIC_FIREBASE_APP_ID: ${{ vars.EXPO_PUBLIC_FIREBASE_APP_ID }}
+          # 웹 export는 네이티브 매니페스트를 안 만들어 실제로는 필요 없는 값이지만,
+          # app.config.js가 누락 시 fail-fast하도록 가드하고 있어 더미 값을 채워준다.
+          GOOGLE_MAPS_ANDROID_API_KEY: web-build-placeholder
         run: npx expo export --platform web

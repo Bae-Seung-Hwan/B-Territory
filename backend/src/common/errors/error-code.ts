@@ -1,0 +1,80 @@
+/**
+ * API 에러 응답의 machine-readable 코드.
+ *
+ * 프론트가 이 `code`로 다국어(한/영/…) 문구를 매핑한다. 응답에 함께 내려가는 `message`는
+ * 사람이 읽는 기본(한국어) 보조 텍스트일 뿐이며, 최종 사용자 노출 문구는 프론트가 code로
+ * 결정한다. NestJS의 HttpException/WsException에 객체를 넘기면 그 객체가 그대로 응답
+ * 본문이 되므로, throw 시 아래 errBody()로 `{ code, message }` 형태를 만들어 넘긴다.
+ *
+ * 주의: class-validator(ValidationPipe)가 던지는 검증 에러는 여기 대상이 아니며 기존
+ * `{ statusCode, message: string[], error }` 형태를 그대로 유지한다.
+ */
+export enum ErrorCode {
+  // 인증 / 유저
+  TOKEN_REQUIRED = 'TOKEN_REQUIRED',
+  INVALID_TOKEN = 'INVALID_TOKEN',
+  UNAUTHENTICATED_CONNECTION = 'UNAUTHENTICATED_CONNECTION',
+  EMAIL_REQUIRED = 'EMAIL_REQUIRED',
+  EMAIL_NOT_VERIFIED = 'EMAIL_NOT_VERIFIED',
+  USER_ALREADY_EXISTS = 'USER_ALREADY_EXISTS',
+  USER_NOT_REGISTERED = 'USER_NOT_REGISTERED',
+  USER_NOT_FOUND = 'USER_NOT_FOUND',
+  TEAM_NOT_ASSIGNED = 'TEAM_NOT_ASSIGNED',
+
+  // 관광지 / 점령
+  SPOT_NOT_FOUND = 'SPOT_NOT_FOUND',
+  SPOT_NO_COORDINATES = 'SPOT_NO_COORDINATES',
+  VISIT_OUT_OF_RANGE = 'VISIT_OUT_OF_RANGE',
+  DAILY_CLAIM_LIMIT = 'DAILY_CLAIM_LIMIT',
+  DEFENSE_ACTIVE = 'DEFENSE_ACTIVE',
+  DUEL_PENALTY_ACTIVE = 'DUEL_PENALTY_ACTIVE',
+
+  // 미션 (현장 사진 인증 · 리뷰)
+  MISSION_VISIT_REQUIRED = 'MISSION_VISIT_REQUIRED',
+  MISSION_DAILY_LIMIT = 'MISSION_DAILY_LIMIT',
+  MISSION_UNSUPPORTED_IMAGE = 'MISSION_UNSUPPORTED_IMAGE',
+
+  // 구 / 군
+  DISTRICT_NOT_FOUND = 'DISTRICT_NOT_FOUND',
+
+  // 채팅
+  CHAT_RATE_LIMIT = 'CHAT_RATE_LIMIT',
+
+  // 신고 / 차단 (UGC 운영 — Apple 가이드라인 1.2)
+  BLOCK_SELF = 'BLOCK_SELF',
+  REPORT_SELF = 'REPORT_SELF',
+  REPORT_RATE_LIMIT = 'REPORT_RATE_LIMIT',
+
+  // 결투
+  DUEL_SELF_CHALLENGE = 'DUEL_SELF_CHALLENGE',
+  DUEL_TARGET_NOT_FOUND = 'DUEL_TARGET_NOT_FOUND',
+  DUEL_SAME_TEAM = 'DUEL_SAME_TEAM',
+  DUEL_CHALLENGER_PENALTY = 'DUEL_CHALLENGER_PENALTY',
+  DUEL_TARGET_PENALTY = 'DUEL_TARGET_PENALTY',
+  // 차단당한 경우. 차단 사실을 드러내지 않도록 사유를 뭉뚱그린 코드다.
+  DUEL_TARGET_UNAVAILABLE = 'DUEL_TARGET_UNAVAILABLE',
+  DUEL_TARGET_LOCATION_UNKNOWN = 'DUEL_TARGET_LOCATION_UNKNOWN',
+  DUEL_OUT_OF_RANGE = 'DUEL_OUT_OF_RANGE',
+  DUEL_ALREADY_ACTIVE = 'DUEL_ALREADY_ACTIVE',
+  DUEL_ALREADY_PENDING = 'DUEL_ALREADY_PENDING',
+  DUEL_NOT_FOUND = 'DUEL_NOT_FOUND',
+  DUEL_NOT_RECIPIENT = 'DUEL_NOT_RECIPIENT',
+  DUEL_ALREADY_HANDLED = 'DUEL_ALREADY_HANDLED',
+  DUEL_NOT_ACCEPTED = 'DUEL_NOT_ACCEPTED',
+  DUEL_NOT_PARTICIPANT = 'DUEL_NOT_PARTICIPANT',
+  DUEL_WINNER_NOT_PARTICIPANT = 'DUEL_WINNER_NOT_PARTICIPANT',
+}
+
+export interface ApiErrorBody {
+  code: ErrorCode;
+  message: string;
+}
+
+/**
+ * HttpException/WsException에 넘길 에러 응답 본문을 만든다.
+ * 예) throw new NotFoundException(errBody(ErrorCode.SPOT_NOT_FOUND, '관광지를 찾을 수 없습니다.'))
+ * → 응답 본문: { "code": "SPOT_NOT_FOUND", "message": "관광지를 찾을 수 없습니다." }
+ */
+export function errBody(code: ErrorCode, message: string): ApiErrorBody {
+  return { code, message };
+}

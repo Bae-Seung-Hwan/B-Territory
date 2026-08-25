@@ -4,16 +4,29 @@ import { BullModule, InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { SpotClaim } from './entities/spot-claim.entity';
 import { DistrictClaim } from './entities/district-claim.entity';
+import { DistrictClaimHistory } from './entities/district-claim-history.entity';
+import { Spot } from '../spots/entities/spot.entity';
 import { ClaimsService } from './claims.service';
 import { ClaimsController } from './claims.controller';
 import { ClaimsProcessor } from './claims.processor';
 import { UsersModule } from '../users/users.module';
+import { ScoresModule } from '../scores/scores.module';
+import { DistrictsModule } from '../districts/districts.module';
+import { LocationLogsModule } from '../location-logs/location-logs.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([SpotClaim, DistrictClaim]),
+    TypeOrmModule.forFeature([
+      SpotClaim,
+      DistrictClaim,
+      DistrictClaimHistory,
+      Spot,
+    ]),
     BullModule.registerQueue({ name: 'district-aggregation' }),
     UsersModule,
+    ScoresModule,
+    DistrictsModule,
+    LocationLogsModule,
   ],
   controllers: [ClaimsController],
   providers: [ClaimsService, ClaimsProcessor],

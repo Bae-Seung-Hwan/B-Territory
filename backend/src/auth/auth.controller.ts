@@ -21,12 +21,22 @@ export class AuthController {
   @ApiResponse({ status: 201, description: '회원가입 성공' })
   @ApiResponse({ status: 400, description: '이메일 정보가 없는 계정' })
   @ApiResponse({ status: 401, description: '유효하지 않은 Firebase ID Token' })
+  @ApiResponse({
+    status: 403,
+    description: 'Firebase 이메일 인증(email_verified)을 먼저 완료해야 함',
+  })
   @ApiResponse({ status: 409, description: '이미 가입된 사용자' })
   register(
     @Body() dto: RegisterDto,
-    @Req() req: { user: { uid: string; email?: string } },
+    @Req()
+    req: { user: { uid: string; email?: string; email_verified?: boolean } },
   ) {
-    return this.authService.register(dto, req.user.uid, req.user.email);
+    return this.authService.register(
+      dto,
+      req.user.uid,
+      req.user.email,
+      req.user.email_verified,
+    );
   }
 
   @Get('me')

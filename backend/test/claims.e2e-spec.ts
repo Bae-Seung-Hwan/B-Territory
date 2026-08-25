@@ -10,6 +10,14 @@ import { FirebaseService } from '../src/common/firebase/firebase.service';
 import { User } from '../src/users/entities/user.entity';
 import { Spot } from '../src/spots/entities/spot.entity';
 import { ClaimsService } from '../src/claims/claims.service';
+import { RedisService } from '../src/common/redis/redis.service';
+import { DistrictsService } from '../src/districts/districts.service';
+import { startOfKstWeek } from '../src/common/utils/kst.util';
+import {
+  ScoreEvent,
+  ScoreEventType,
+} from '../src/scores/entities/score-event.entity';
+import { DistrictClaimHistory } from '../src/claims/entities/district-claim-history.entity';
 
 const mockFirebaseService = {
   verifyIdToken: (token: string) => Promise.resolve({ uid: token }),
@@ -23,6 +31,9 @@ interface VisitSuccessBody {
   success: boolean;
   spotId: number;
   team: string;
+  type: string;
+  pointsAwarded: number;
+  teamPointsAwarded: number;
   defenseSeconds: number;
 }
 
@@ -39,7 +50,7 @@ interface SpotClaimBody {
 interface DistrictClaimBody {
   sigungucode: string;
   team: string | null;
-  spotCount: number;
+  teamScore: number;
   calculatedAt: string | null;
 }
 
@@ -47,14 +58,33 @@ describe('Claims (e2e)', () => {
   let app: INestApplication<App>;
   let userRepo: Repository<User>;
   let spotRepo: Repository<Spot>;
+  let scoreRepo: Repository<ScoreEvent>;
+  let historyRepo: Repository<DistrictClaimHistory>;
   let claimsService: ClaimsService;
+  let districtsService: DistrictsService;
+  let redisService: RedisService;
   let dataSource: DataSource;
   let spotId: number;
+  let weightedSpotId: number;
   const sigungucode = '99TEST';
+  // 실제 시딩된 구 코드(해운대구=16, 외국인 방문 비율이 높아 가중치 > 1) — 가중치 반영 검증용
+  const weightedSigungucode = '16';
 
+  // districts는 부팅 시 CSV로 시딩된 레퍼런스 데이터라 truncate 대상에서 제외한다
+  // (가중치 캐시는 부팅 시 메모리에 로드되므로 점수 산정에 영향 없음).
+  // capital_designations는 포함한다 — 남아 있으면 이 스펙의 점령 점수에 수도 배수 1.2배가
+  // 섞여 들어간다. 지금 단언은 미등록 구(99TEST)나 toBeGreaterThan이라 통과하지만,
+  // 정확한 값으로 조이는 순간 실행 순서에 따라 플래키해지는 자리다.
   const truncateAll = () =>
     dataSource.query(
-      'TRUNCATE TABLE "spot_claims", "district_claims", "users", "spots" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "score_events", "district_claim_history", "spot_claims", "district_claims", "capital_designations", "users", "spots" RESTART IDENTITY CASCADE',
+    );
+
+  // 원장만 비우면 부팅 catch-up이 이미 써둔 수도 공유 캐시가 그대로 남아 배수가 계속 걸린다.
+  // 캐시는 원장을 뒤따르는 값이므로 같이 지워야 truncate가 실제로 효력을 갖는다.
+  const clearCapitalCache = async () =>
+    redisService.del(
+      await districtsService.capitalCacheKey(startOfKstWeek(new Date())),
     );
 
   beforeAll(async () => {
@@ -70,10 +100,15 @@ describe('Claims (e2e)', () => {
 
     userRepo = moduleFixture.get(getRepositoryToken(User));
     spotRepo = moduleFixture.get(getRepositoryToken(Spot));
+    scoreRepo = moduleFixture.get(getRepositoryToken(ScoreEvent));
+    historyRepo = moduleFixture.get(getRepositoryToken(DistrictClaimHistory));
     claimsService = moduleFixture.get(ClaimsService);
+    districtsService = moduleFixture.get(DistrictsService);
+    redisService = moduleFixture.get(RedisService);
     dataSource = moduleFixture.get(DataSource);
 
     await truncateAll();
+    await clearCapitalCache();
 
     await userRepo.save([
       {
@@ -107,14 +142,25 @@ describe('Claims (e2e)', () => {
       sigungucode,
     });
     spotId = spot.id;
+
+    // 가중치 검증용 — 실제 시딩된 구(해운대구=16)에 속한 관광지
+    const weightedSpot = await spotRepo.save({
+      contentId: 'test-spot-weighted',
+      title: '가중치 테스트 관광지',
+      mapX: SPOT_LNG,
+      mapY: SPOT_LAT,
+      sigungucode: weightedSigungucode,
+    });
+    weightedSpotId = weightedSpot.id;
   });
 
   afterAll(async () => {
     await truncateAll();
+    await clearCapitalCache();
     await app.close();
   });
 
-  it('시나리오 1: 반경 50m 이내 좌표 → 201 점령 성공', async () => {
+  it('시나리오 1: 반경 50m 이내 좌표 → 201 점령 성공 + 신규 점수 지급', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/claims/visit')
       .set('Authorization', 'Bearer uid-teamA')
@@ -122,8 +168,59 @@ describe('Claims (e2e)', () => {
       .expect(201);
 
     const body = res.body as VisitSuccessBody;
-    expect(body).toMatchObject({ success: true, spotId, team: 'A' });
+    // 99TEST는 districts 미등록 → 가중치 1.0 → 기본 점수 그대로
+    expect(body).toMatchObject({
+      success: true,
+      spotId,
+      team: 'A',
+      type: ScoreEventType.CLAIM_NEW,
+      pointsAwarded: 100,
+      teamPointsAwarded: 100,
+    });
     expect(body.defenseSeconds).toBeGreaterThan(0);
+
+    // 원장에 NEW 이벤트 1건 적재
+    const events = await scoreRepo.find({ where: { spotId } });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: ScoreEventType.CLAIM_NEW,
+      team: 'A',
+      personalPoints: 100,
+      teamPoints: 100,
+    });
+
+    // user.score 반영
+    const user = await userRepo.findOne({
+      where: { firebaseUid: 'uid-teamA' },
+    });
+    expect(user?.score).toBe(100);
+  });
+
+  // (구 시나리오 1-B "재방문 → 성공하되 0점"은 A안 확정으로 폐기 — 재방문은 시나리오 1-1처럼
+  //  일일 제한(409)으로 완전 차단된다. 점수 0 경로는 일일 게이트 때문에 도달 불가.)
+
+  it('시나리오 1-C: 외국인 방문 비율 가중치가 점수에 반영된다', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/claims/visit')
+      .set('Authorization', 'Bearer uid-teamA')
+      .send({ spotId: weightedSpotId, lat: SPOT_LAT, lng: SPOT_LNG })
+      .expect(201);
+
+    const body = res.body as VisitSuccessBody;
+    expect(body.type).toBe(ScoreEventType.CLAIM_NEW);
+    // 해운대구(16)는 가중치 > 1 → 기본 100보다 큰 점수
+    expect(body.pointsAwarded).toBeGreaterThan(100);
+    expect(body.teamPointsAwarded).toBe(body.pointsAwarded);
+  });
+
+  it('시나리오 1-1: 같은 유저가 같은 관광지 재점령 시도 → 409 일일 점령 제한', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/claims/visit')
+      .set('Authorization', 'Bearer uid-teamA')
+      .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
+      .expect(409);
+
+    expect((res.body as ErrorBody).message).toContain('오늘 이미 점령');
   });
 
   it('시나리오 2: 50m 초과 좌표 → 400 방문 인증 실패', async () => {
@@ -148,6 +245,17 @@ describe('Claims (e2e)', () => {
     expect(body.message).toMatch(/\d+초/);
   });
 
+  it('시나리오 3-1: 방어에 막힌 시도는 일일 횟수를 소진하지 않는다 (재시도해도 방어 409, 일일 제한 409가 아님)', async () => {
+    // 시나리오 3에서 teamB의 일일 키가 롤백되지 않았다면 이번 응답은 "오늘 이미 점령"이 된다
+    const res = await request(app.getHttpServer())
+      .post('/api/claims/visit')
+      .set('Authorization', 'Bearer uid-teamB')
+      .send({ spotId, lat: SPOT_LAT, lng: SPOT_LNG })
+      .expect(409);
+
+    expect((res.body as ErrorBody).message).toContain('방어 시간 중');
+  });
+
   it('시나리오 4: GET /claims/spots/:spotId — 점령 현황 정상 반환', async () => {
     const res = await request(app.getHttpServer())
       .get(`/api/claims/spots/${spotId}`)
@@ -158,8 +266,11 @@ describe('Claims (e2e)', () => {
     expect(body.claimedAt).not.toBeNull();
   });
 
-  it('시나리오 5: GET /claims/districts/:sigungucode — 구 단위 현황 정상 반환', async () => {
-    await claimsService.aggregateDistricts();
+  it('시나리오 5: 12h 윈도우 집계 → 구 보유팀·팀점수 판정 + 이력 적재', async () => {
+    const result = await claimsService.aggregateDistricts();
+    // 99TEST(팀점수 100) + 해운대구 16(가중치 반영) 두 구가 활동으로 갱신됨
+    expect(result.aggregated).toBeGreaterThanOrEqual(2);
+    expect(result.snapshot).toBeGreaterThanOrEqual(2);
 
     const res = await request(app.getHttpServer())
       .get(`/api/claims/districts/${sigungucode}`)
@@ -169,9 +280,14 @@ describe('Claims (e2e)', () => {
     expect(body).toMatchObject({
       sigungucode,
       team: 'A',
-      spotCount: 1,
+      teamScore: 100,
     });
     expect(body.calculatedAt).not.toBeNull();
+
+    // 이력 테이블(명예의 전당 소스)에 스냅샷 적재 확인
+    const history = await historyRepo.find({ where: { sigungucode } });
+    expect(history.length).toBeGreaterThanOrEqual(1);
+    expect(history[0]).toMatchObject({ team: 'A', teamScore: 100 });
   });
 
   it('시나리오 6: spotId에 음수 또는 문자 전송 → 400 validation 오류', async () => {

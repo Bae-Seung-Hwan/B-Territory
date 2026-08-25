@@ -1,0 +1,3 @@
+# core.autocrlf=true인 Windows 체크아웃에서도 셸 스크립트는 LF를 유지해야 한다.
+# CRLF로 받으면 WSL bash가 `\r`를 명령의 일부로 읽어 실행이 깨진다.
+*.sh text eol=lf

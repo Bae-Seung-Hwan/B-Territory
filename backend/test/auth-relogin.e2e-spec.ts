@@ -12,15 +12,22 @@ import { User } from '../src/users/entities/user.entity';
 const FIREBASE_UID = 'e2e-relogin-uid';
 const RACE_UID = 'e2e-relogin-race-uid';
 const NO_EMAIL_UID = 'e2e-relogin-no-email-uid';
-const ALL_UIDS = [FIREBASE_UID, RACE_UID, NO_EMAIL_UID];
+const UNVERIFIED_UID = 'e2e-relogin-unverified-uid';
+const ALL_UIDS = [FIREBASE_UID, RACE_UID, NO_EMAIL_UID, UNVERIFIED_UID];
 
 // 토큰 문자열은 "uid:세션번호" 형태 — 실제 재로그인처럼 매번 다른 토큰 문자열이지만
-// 같은 uid로 디코딩되는 상황을 재현. NO_EMAIL_UID는 이메일 없는 계정(전화번호/익명 로그인)을 재현.
+// 같은 uid로 디코딩되는 상황을 재현. Firebase가 검증한 토큰의 email_verified 클레임도
+// 함께 흉내낸다: 기본은 인증됨(true), UNVERIFIED_UID만 미인증(false). NO_EMAIL_UID는
+// 이메일 없는 계정(전화번호/익명 로그인)이라 register의 이메일 유무 검사에서 먼저 걸린다.
 const mockFirebaseService = {
   verifyIdToken: (token: string) => {
     const [uid] = token.split(':');
     if (uid === NO_EMAIL_UID) return Promise.resolve({ uid });
-    return Promise.resolve({ uid, email: `${uid}@test.com` });
+    return Promise.resolve({
+      uid,
+      email: `${uid}@test.com`,
+      email_verified: uid !== UNVERIFIED_UID,
+    });
   },
 };
 
@@ -70,7 +77,22 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     expect((res.body as ErrorBody).message).toContain('등록되지 않은');
   });
 
-  it('최초 로그인(토큰 A)으로 register → 201 가입 성공', async () => {
+  it('이메일 인증 없이 register 시도 → 403', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${UNVERIFIED_UID}:login-session-1`)
+      .send({ nickname: '미인증', nationality: 'KR' })
+      .expect(403);
+
+    expect((res.body as ErrorBody).message).toContain('이메일 인증');
+
+    const count = await userRepo.count({
+      where: { firebaseUid: UNVERIFIED_UID },
+    });
+    expect(count).toBe(0); // 계정이 생성되지 않음
+  });
+
+  it('이메일 인증된 토큰(email_verified=true)으로 register → 201 가입 성공', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${FIREBASE_UID}:login-session-1`)

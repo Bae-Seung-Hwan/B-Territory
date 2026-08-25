@@ -11,6 +11,9 @@ import { DataSource, In, Repository } from 'typeorm';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { UsersService } from '../users/users.service';
+import { ScoresService } from '../scores/scores.service';
+import { ModerationService } from '../moderation/moderation.service';
+import { ScoreEventType } from '../scores/entities/score-event.entity';
 import { sortedPairKey } from '../common/utils/pair-key.util';
 import {
   ALLY_BONUS_MIN_COUNT,
@@ -23,6 +26,11 @@ import {
   ENCOUNTER_RADIUS_M,
   PENALTY_TTL,
 } from './constants';
+import { ErrorCode, errBody } from '../common/errors/error-code';
+import {
+  PG_FOREIGN_KEY_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 
 export type DuelResultOutcome =
   | { status: 'waiting' }
@@ -50,6 +58,8 @@ export class DuelsService {
     private readonly dataSource: DataSource,
     private readonly redis: RedisService,
     private readonly usersService: UsersService,
+    private readonly scoresService: ScoresService,
+    private readonly moderation: ModerationService,
   ) {}
 
   private lockKey(a: string, b: string): string {
@@ -157,22 +167,57 @@ export class DuelsService {
     targetUserId: string,
   ): Promise<Duel> {
     if (challenger.id === targetUserId) {
-      throw new BadRequestException('자기 자신에게 결투를 신청할 수 없습니다.');
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.DUEL_SELF_CHALLENGE,
+          '자기 자신에게 결투를 신청할 수 없습니다.',
+        ),
+      );
     }
 
     const target = await this.usersService.findById(targetUserId);
-    if (!target) throw new NotFoundException('상대 유저를 찾을 수 없습니다.');
+    if (!target)
+      throw new NotFoundException(
+        errBody(
+          ErrorCode.DUEL_TARGET_NOT_FOUND,
+          '상대 유저를 찾을 수 없습니다.',
+        ),
+      );
     if (target.team === challenger.team) {
-      throw new BadRequestException('같은 팀에게는 결투를 신청할 수 없습니다.');
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.DUEL_SAME_TEAM,
+          '같은 팀에게는 결투를 신청할 수 없습니다.',
+        ),
+      );
     }
 
     if (await this.redis.hasPenalty(challenger.id)) {
       throw new ForbiddenException(
-        '결투 페널티 중에는 결투를 신청할 수 없습니다.',
+        errBody(
+          ErrorCode.DUEL_CHALLENGER_PENALTY,
+          '결투 페널티 중에는 결투를 신청할 수 없습니다.',
+        ),
       );
     }
     if (await this.redis.hasPenalty(targetUserId)) {
-      throw new ForbiddenException('상대가 결투 페널티 중입니다.');
+      throw new ForbiddenException(
+        errBody(ErrorCode.DUEL_TARGET_PENALTY, '상대가 결투 페널티 중입니다.'),
+      );
+    }
+
+    // 나를 차단한 상대에게는 결투를 걸 수 없다. 차단을 채팅에만 걸면, 차단당한 쪽이
+    // 물리적으로 따라다니며 duel:request를 반복해 duel:requested 알림으로 계속
+    // 접촉할 수 있어 "악성 사용자 차단"이 반쪽이 된다.
+    // 거부 사유는 차단 사실을 드러내지 않는다 — 알려주면 차단 여부를 탐지하는 수단이 된다.
+    const blockedBy = await this.moderation.getBlockedBy(challenger.id);
+    if (blockedBy.includes(targetUserId)) {
+      throw new ForbiddenException(
+        errBody(
+          ErrorCode.DUEL_TARGET_UNAVAILABLE,
+          '지금은 이 상대에게 결투를 신청할 수 없습니다.',
+        ),
+      );
     }
 
     // geo:users의 좌표는 유저가 끊긴 뒤에도 스윕 전까지 남아있을 수 있으므로,
@@ -180,14 +225,20 @@ export class DuelsService {
     const targetMeta = await this.redis.getUserMeta(targetUserId);
     if (!targetMeta) {
       throw new BadRequestException(
-        '상대의 위치 정보를 확인할 수 없습니다. 상대가 접속 중인지 확인해주세요.',
+        errBody(
+          ErrorCode.DUEL_TARGET_LOCATION_UNKNOWN,
+          '상대의 위치 정보를 확인할 수 없습니다. 상대가 접속 중인지 확인해주세요.',
+        ),
       );
     }
 
     const inRange = await this.verifyProximity(challenger.id, targetUserId);
     if (!inRange) {
       throw new BadRequestException(
-        `반경 ${ENCOUNTER_RADIUS_M}m 이내에 있어야 결투를 신청할 수 있습니다.`,
+        errBody(
+          ErrorCode.DUEL_OUT_OF_RANGE,
+          `반경 ${ENCOUNTER_RADIUS_M}m 이내에 있어야 결투를 신청할 수 있습니다.`,
+        ),
       );
     }
 
@@ -213,7 +264,10 @@ export class DuelsService {
       });
       if (hasActiveDuel) {
         throw new ConflictException(
-          '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+          errBody(
+            ErrorCode.DUEL_ALREADY_ACTIVE,
+            '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+          ),
         );
       }
 
@@ -235,7 +289,12 @@ export class DuelsService {
     );
     if (!acquired) {
       await this.duelRepo.delete(duel.id);
-      throw new ConflictException('이미 진행 중인 결투 요청이 있습니다.');
+      throw new ConflictException(
+        errBody(
+          ErrorCode.DUEL_ALREADY_PENDING,
+          '이미 진행 중인 결투 요청이 있습니다.',
+        ),
+      );
     }
 
     return duel;
@@ -247,10 +306,16 @@ export class DuelsService {
     accept: boolean,
   ): Promise<Duel> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
-    if (!duel) throw new NotFoundException('결투를 찾을 수 없습니다.');
+    if (!duel)
+      throw new NotFoundException(
+        errBody(ErrorCode.DUEL_NOT_FOUND, '결투를 찾을 수 없습니다.'),
+      );
     if (duel.opponentId !== responderId) {
       throw new ForbiddenException(
-        '본인에게 온 결투 요청만 응답할 수 있습니다.',
+        errBody(
+          ErrorCode.DUEL_NOT_RECIPIENT,
+          '본인에게 온 결투 요청만 응답할 수 있습니다.',
+        ),
       );
     }
 
@@ -268,7 +333,9 @@ export class DuelsService {
       })
       .execute();
     if (updateResult.affected === 0) {
-      throw new ConflictException('이미 처리된 결투입니다.');
+      throw new ConflictException(
+        errBody(ErrorCode.DUEL_ALREADY_HANDLED, '이미 처리된 결투입니다.'),
+      );
     }
 
     const lockKey = this.lockKey(duel.challengerId, duel.opponentId);
@@ -322,16 +389,34 @@ export class DuelsService {
     winnerId: string,
   ): Promise<DuelResultOutcome> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
-    if (!duel) throw new NotFoundException('결투를 찾을 수 없습니다.');
+    if (!duel)
+      throw new NotFoundException(
+        errBody(ErrorCode.DUEL_NOT_FOUND, '결투를 찾을 수 없습니다.'),
+      );
     if (duel.status !== DuelStatus.ACCEPTED) {
-      throw new ConflictException('수락된 결투만 결과를 제출할 수 있습니다.');
+      throw new ConflictException(
+        errBody(
+          ErrorCode.DUEL_NOT_ACCEPTED,
+          '수락된 결투만 결과를 제출할 수 있습니다.',
+        ),
+      );
     }
     const participants = [duel.challengerId, duel.opponentId];
     if (!participants.includes(reporterId)) {
-      throw new ForbiddenException('결투 참가자만 결과를 제출할 수 있습니다.');
+      throw new ForbiddenException(
+        errBody(
+          ErrorCode.DUEL_NOT_PARTICIPANT,
+          '결투 참가자만 결과를 제출할 수 있습니다.',
+        ),
+      );
     }
     if (!participants.includes(winnerId)) {
-      throw new BadRequestException('승자는 결투 참가자여야 합니다.');
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.DUEL_WINNER_NOT_PARTICIPANT,
+          '승자는 결투 참가자여야 합니다.',
+        ),
+      );
     }
 
     // 신고 접수 시각을 DB 시계로 스탬프하는 조건부 UPDATE — 두 역할을 겸한다:
@@ -349,7 +434,12 @@ export class DuelsService {
       })
       .execute();
     if (stamped.affected === 0) {
-      throw new ConflictException('수락된 결투만 결과를 제출할 수 있습니다.');
+      throw new ConflictException(
+        errBody(
+          ErrorCode.DUEL_NOT_ACCEPTED,
+          '수락된 결투만 결과를 제출할 수 있습니다.',
+        ),
+      );
     }
 
     const result = await this.redis.submitDuelResult(
@@ -402,6 +492,16 @@ export class DuelsService {
       BASE_DUEL_SCORE * (allyBonus ? ALLY_BONUS_MULTIPLIER : 1),
     );
 
+    // 원장에 남길 이벤트 시점의 팀. CAS와 같은 트랜잭션에서 append해야 하므로 미리 읽어둔다.
+    // 탈퇴 등으로 유저 row가 사라졌으면 applyScoreDelta도 no-op이 되므로 원장 행도 남기지 않는다.
+    // 이 조회와 insert 사이에 참가자가 사라지는 경우는 트랜잭션 안에서 SAVEPOINT로 처리한다.
+    const teamByUserId = new Map(
+      (await this.usersService.findByIds([winnerId, loserId])).map((u) => [
+        u.id,
+        u.team,
+      ]),
+    );
+
     const penalty = await this.redis.setPenalty(loserId, PENALTY_TTL);
 
     let claimed: boolean;
@@ -427,6 +527,50 @@ export class DuelsService {
 
         await this.usersService.applyScoreDelta(winnerId, scoreDelta, manager);
         await this.usersService.applyScoreDelta(loserId, -scoreDelta, manager);
+
+        // 점수 원장에도 append한다 — 개인 랭킹(명예의 전당)은 users.score가 아니라
+        // SUM(score_events.personalPoints)로 산출되므로, 여기서 기록하지 않으면 결투 점수가
+        // /users/me의 score에는 반영되는데 개인 랭킹에서는 통째로 빠져 두 값이 어긋난다.
+        // teamPoints는 항상 0 — 결투 점수는 팀 점수·구 집계에 절대 포함되지 않는다(기획 확정).
+        // 원장에는 명목 증감을 그대로 남긴다. users.score는 GREATEST(0, ...)로 하한이 걸리므로
+        // 0에서 더 깎인 유저는 두 값이 갈리는데, 원장은 감사 로그라 실제 판정을 보존한다.
+        for (const [userId, points] of [
+          [winnerId, scoreDelta],
+          [loserId, -scoreDelta],
+        ] as const) {
+          const team = teamByUserId.get(userId);
+          if (team === undefined) continue;
+
+          // 위 팀 스냅샷은 트랜잭션 밖에서 읽은 값이라, 그 뒤에 참가자가 삭제되면 스킵 판정이
+          // 낡아 사라진 유저의 uuid로 insert를 시도하게 된다 → FK 위반. Postgres는 실패한 문이
+          // 트랜잭션 전체를 abort시키므로 catch만으로는 결투 확정까지 함께 날아간다. SAVEPOINT로
+          // 이 insert만 되돌려, 사라진 참가자의 원장 행만 건너뛰고 나머지는 그대로 커밋한다.
+          //
+          // 이 insert에서 외부 상태에 달린 FK는 userId뿐이다 — duelId는 바로 위에서 이 트랜잭션이
+          // 갱신한 행이라 반드시 존재하고 spotId는 넘기지 않는다. 그래서 23503을 "참가자가 사라짐"
+          // 으로 읽어도 다른 원인을 삼키지 않는다.
+          await manager.query('SAVEPOINT duel_ledger');
+          try {
+            await this.scoresService.record(manager, {
+              userId,
+              team,
+              type:
+                userId === winnerId
+                  ? ScoreEventType.DUEL_WIN
+                  : ScoreEventType.DUEL_LOSS,
+              personalPoints: points,
+              teamPoints: 0,
+              duelId: duel.id,
+            });
+            await manager.query('RELEASE SAVEPOINT duel_ledger');
+          } catch (err) {
+            if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
+            await manager.query('ROLLBACK TO SAVEPOINT duel_ledger');
+            this.logger.warn(
+              `결투 원장 append 생략 — 참가자가 사라짐 duelId=${duel.id} userId=${userId}`,
+            );
+          }
+        }
         return true;
       });
     } catch (err) {

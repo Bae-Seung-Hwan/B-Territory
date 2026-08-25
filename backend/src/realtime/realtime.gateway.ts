@@ -3,17 +3,24 @@ import {
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
-  WsException,
 } from '@nestjs/websockets';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger, UseFilters } from '@nestjs/common';
 import { Namespace, Socket } from 'socket.io';
+import { WsExceptionsFilter } from '../common/filters/ws-exception.filter';
 import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
 import { sortedPairKey } from '../common/utils/pair-key.util';
+import {
+  SocketData,
+  getSocketUser,
+  useSocketAuth,
+  wsValidationPipe,
+} from '../common/ws/ws-auth';
 import { DuelsService } from '../duels/duels.service';
 import { LocationUpdateDto } from '../duels/dto/location-update.dto';
 import { DuelRequestDto } from '../duels/dto/duel-request.dto';
@@ -24,28 +31,13 @@ import {
   ENCOUNTER_COOLDOWN_TTL,
   NOTIFICATION_QUEUE_TTL,
 } from '../duels/constants';
+import { LocationLogsService } from '../location-logs/location-logs.service';
+import { LocationServiceCode } from '../location-logs/constants';
 
-interface AuthenticatedUser {
-  id: string;
-  team: string;
-  nickname: string;
-}
-
-type SocketData = { user?: AuthenticatedUser };
-
-// NOTE: 클래스 레벨 @UsePipes로 적용하면 @ConnectedSocket()의 Socket 파라미터까지 검증 대상이 되어
-// (whitelist+forbidNonWhitelisted 조합이 class-validator 데코레이터가 없는 Socket의 모든 속성을
-// "허용되지 않음"으로 판단해 예외를 던짐) 모든 핸들러가 실패한다. @MessageBody() 파라미터에만
-// 개별적으로 붙여서 DTO만 검증되도록 한다.
-const wsValidationPipe = new ValidationPipe({
-  transform: true,
-  whitelist: true,
-  forbidNonWhitelisted: true,
-});
-
+@UseFilters(WsExceptionsFilter)
 @WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
 export class RealtimeGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   private readonly logger = new Logger(RealtimeGateway.name);
 
@@ -59,21 +51,12 @@ export class RealtimeGateway
     private readonly usersService: UsersService,
     private readonly redis: RedisService,
     private readonly duelsService: DuelsService,
+    private readonly locationLogs: LocationLogsService,
   ) {
     // 정리 잡(duel-cleanup)이 스윕한 결투의 참가자에게 알림을 보낼 수 있도록 콜백 주입
     this.duelsService.setNotifier((userId, event, payload) =>
       this.notifyUser(userId, event, payload),
     );
-  }
-
-  private getUser(client: Socket): AuthenticatedUser {
-    const user = (client.data as SocketData).user;
-    if (!user) throw new WsException('인증되지 않은 연결입니다.');
-    return user;
-  }
-
-  private setUser(client: Socket, user: AuthenticatedUser): void {
-    (client.data as SocketData).user = user;
   }
 
   /**
@@ -103,39 +86,59 @@ export class RealtimeGateway
     );
   }
 
+  /**
+   * 인증은 핸드셰이크 미들웨어에서 끝낸다 — 라이프사이클 훅에서 하면 클라이언트가
+   * 인증 완료 전에 connect를 받아, 곧바로 보낸 이벤트가 미인증으로 거부된다.
+   */
+  afterInit(namespace: Namespace): void {
+    useSocketAuth(
+      namespace,
+      this.firebaseService,
+      this.usersService,
+      this.logger,
+    );
+  }
+
+  /**
+   * 라이프사이클 훅은 반드시 자체적으로 예외를 삼켜야 한다 — @UseFilters(WsExceptionsFilter)는
+   * @SubscribeMessage 핸들러에만 걸리고, @nestjs/websockets는 이 훅이 돌려준 Promise에
+   * .catch를 걸지 않는다. 여기서 reject가 새어나가면 unhandledRejection이 되어 소켓 하나가
+   * 접속하는 순간 프로세스 전체가 죽고, 그 시점에 붙어 있던 모든 유저가 함께 끊긴다.
+   */
   async handleConnection(client: Socket): Promise<void> {
     try {
-      const token = client.handshake.auth?.token as string | undefined;
-      if (!token) throw new Error('missing token');
-
-      const decoded = await this.firebaseService.verifyIdToken(token);
-      const user = await this.usersService.findByFirebaseUid(decoded.uid);
-      if (!user || !user.team) throw new Error('unregistered user');
-
-      this.setUser(client, {
-        id: user.id,
-        team: user.team,
-        nickname: user.nickname,
-      });
-
+      // 미들웨어를 통과한 소켓만 여기 도달하므로 user는 항상 있다.
+      // 밀린 알림 재생은 emit이라 핸드셰이크가 아닌 연결 확립 후에 해야 유실되지 않는다.
+      const user = getSocketUser(client);
       const pending = await this.redis.drainNotifications(user.id);
       for (const { event, payload } of pending) {
         client.emit(event, payload);
       }
     } catch (err) {
-      this.logger.warn(`연결 거부: ${(err as Error).message}`);
-      client.disconnect(true);
+      // 여기까지 오는 건 Redis 자체가 응답하지 않는 경우다(손상된 엔트리는
+      // drainNotifications가 엔트리 단위로 걸러낸다).
+      //
+      // 이때 연결을 끊지 않는다 — MULTI가 실패했으면 큐는 그대로 살아 있어 다음 접속에
+      // 재생되고, 반대로 끊으면 장애가 지속되는 내내 접속→드레인 실패→끊김→재접속이
+      // 루프를 돈다. 소켓은 살려두고 알림 재생만 포기한다.
+      this.logger.warn(`밀린 알림 재생 실패: ${(err as Error).message}`);
     }
   }
 
+  /** handleConnection과 같은 이유로 예외를 밖으로 흘리지 않는다. */
   async handleDisconnect(client: Socket): Promise<void> {
-    const user = (client.data as SocketData).user;
-    if (!user) return;
-    // 멀티 디바이스 대응: 메타에 등록된 최신 소켓이 아니면(다른 기기가 이후에 접속) 위치를 지우지 않는다.
-    // 메타가 이미 만료된 경우에는 남은 geo 좌표만 정리한다.
-    const meta = await this.redis.getUserMeta(user.id);
-    if (meta && meta.socketId !== client.id) return;
-    await this.redis.geoRemove(user.id);
+    try {
+      const user = (client.data as SocketData).user;
+      if (!user) return;
+      // 멀티 디바이스 대응: 메타에 등록된 최신 소켓이 아니면(다른 기기가 이후에 접속) 위치를 지우지 않는다.
+      // 메타가 이미 만료된 경우에는 남은 geo 좌표만 정리한다.
+      const meta = await this.redis.getUserMeta(user.id);
+      if (meta && meta.socketId !== client.id) return;
+      await this.redis.geoRemove(user.id);
+    } catch (err) {
+      // 소켓은 이미 끊긴 뒤라 복구할 게 없다 — geo 좌표는 다음 location:update나 TTL로 정리된다.
+      this.logger.warn(`연결 종료 정리 실패: ${(err as Error).message}`);
+    }
   }
 
   @SubscribeMessage('location:update')
@@ -143,7 +146,15 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody(wsValidationPipe) dto: LocationUpdateDto,
   ) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
+
+    // 좌표를 전송받은 시점마다 이용사실을 기록한다(법 제16조 2항). 실시간 좌표는 빈도가 높아
+    // 큐 적재만 하고 응답을 막지 않는다 — 적재 실패는 LocationLogsService가 에러 로그로 남긴다.
+    this.locationLogs.record({
+      subjectId: user.id,
+      service: LocationServiceCode.DUEL_MATCH,
+    });
+
     await this.redis.geoAdd(user.id, dto.lat, dto.lng, user.team, client.id);
 
     const opponents = await this.duelsService.findNearbyOpponents(
@@ -199,7 +210,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody(wsValidationPipe) dto: DuelRequestDto,
   ) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
     const duel = await this.duelsService.requestDuel(user, dto.targetUserId);
 
     await this.notifyUser(dto.targetUserId, 'duel:requested', {
@@ -252,7 +263,7 @@ export class RealtimeGateway
   }
 
   private async respondToDuel(client: Socket, duelId: number, accept: boolean) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
     const duel = await this.duelsService.respondDuel(duelId, user.id, accept);
 
     const event = accept ? 'duel:accepted' : 'duel:rejected';
@@ -268,7 +279,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody(wsValidationPipe) dto: DuelResultDto,
   ) {
-    const user = this.getUser(client);
+    const user = getSocketUser(client);
     const outcome = await this.duelsService.submitResult(
       dto.duelId,
       user.id,
