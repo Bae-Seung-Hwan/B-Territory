@@ -459,10 +459,13 @@ export class RealtimeGateway
       // 상대에겐 "제출했다"는 사실만 알린다 — 점수를 흘리면 나중에 내는 쪽이 맞춰서 조작한다.
       const { challengerId, opponentId } = outcome.participants;
       const waitingFor = user.id === challengerId ? opponentId : challengerId;
-      await this.notifyUser(waitingFor, 'game:opponent:submitted', {
-        duelId: dto.duelId,
-        round: dto.round,
-      });
+      // game:start·game:go와 같은 라운드 한정 이벤트다 — 큐에 넣지 않는다(notifyUser 주석).
+      await this.notifyUser(
+        waitingFor,
+        'game:opponent:submitted',
+        { duelId: dto.duelId, round: dto.round },
+        true,
+      );
       return { status: 'waiting' };
     }
 
@@ -488,12 +491,20 @@ export class RealtimeGateway
       // 호출측의 재시도는 expireRound(round)를 다시 부를 뿐인데 세션은 이미 다음
       // 라운드라 라운드 불일치로 no-op이 된다 — 결투가 스윕까지 매달린다.
       // (startGameRound가 "타이머를 emit보다 먼저" 거는 불변식도 같은 이유다)
-      await this.emitToBoth(participants, 'game:round:result', {
-        duelId: participants.id,
-        round: outcome.plan.payload.round - 1,
-        winnerId: null,
-        scores: outcome.scores,
-      }).catch((err) => {
+      // 지난 라운드의 결과 화면이라 라운드 한정이다 — 큐잉하면 재접속한 유저가 이미
+      // 끝난 결투의 중간 라운드 결과를 본다. 결투 종료 통보(duel:completed·duel:voided)만
+      // 나중에 받아도 의미가 있어 그쪽은 큐에 남긴다.
+      await this.emitToBoth(
+        participants,
+        'game:round:result',
+        {
+          duelId: participants.id,
+          round: outcome.plan.payload.round - 1,
+          winnerId: null,
+          scores: outcome.scores,
+        },
+        true,
+      ).catch((err) => {
         this.logger.error(
           `라운드 결과 통보 실패 duelId=${participants.id} round=${outcome.plan.payload.round - 1} — 다음 라운드는 계속 진행한다`,
           err,

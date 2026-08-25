@@ -273,6 +273,42 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
     jest.useRealTimers();
   });
 
+  /**
+   * game:start와 같은 성질의 라운드 한정 이벤트다 — 45초짜리 라운드의 "상대가 제출했다"를
+   * 30분 큐에 넣으면, 재접속한 유저가 이미 끝난 결투에 대해 대기 UI를 띄운다.
+   */
+  it('game:opponent:submitted도 큐잉하지 않는다', async () => {
+    const queueNotification = jest.fn().mockResolvedValue(undefined);
+    const gateway = new RealtimeGateway(
+      {} as unknown as FirebaseService,
+      {} as unknown as UsersService,
+      {
+        getUserMeta: jest.fn().mockResolvedValue(null),
+        queueNotification,
+      } as unknown as RedisService,
+      { setNotifier: jest.fn() } as unknown as DuelsService,
+      {
+        submit: jest.fn().mockResolvedValue({
+          status: 'waiting',
+          participants: {
+            id: duel.id,
+            challengerId: duel.challengerId,
+            opponentId: duel.opponentId,
+          },
+        }),
+      } as never,
+      { record: jest.fn() } as never,
+    );
+
+    const result = await gateway.handleGameSubmit(mockSocket() as never, {
+      duelId: duel.id,
+      round: 1,
+    });
+
+    expect(result).toEqual({ status: 'waiting' });
+    expect(queueNotification).not.toHaveBeenCalled();
+  });
+
   it('무효 처리까지 실패해도 ack는 돌려준다', async () => {
     const { gateway, duelsService, minigameService } = make();
     minigameService.start.mockRejectedValue(new Error('Redis 응답 없음'));

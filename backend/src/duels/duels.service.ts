@@ -454,10 +454,9 @@ export class DuelsService {
     }
 
     const resolved = await this.resolveDuel(duel, winnerId);
-    await this.redis.releaseLock(
-      this.lockKey(duel.challengerId, duel.opponentId),
-      String(duel.id),
-    );
+    // 여기부터는 점수·원장·페널티가 이미 커밋된 뒤다 — 락 해제 실패로 예외를 올리면
+    // 안 된다(releasePairLockQuietly 주석).
+    await this.releasePairLockQuietly(duel);
     // 확정 직전에 정리 잡이 ACCEPTED->VOID를 선점했을 수 있다. 그 경우 COMPLETED가
     // 아니므로 승자 없는 결과를 confirmed로 알리지 않고 무효로 매핑한다.
     return resolved.status === DuelStatus.COMPLETED
@@ -486,10 +485,8 @@ export class DuelsService {
       })
       .execute();
 
-    await this.redis.releaseLock(
-      this.lockKey(duel.challengerId, duel.opponentId),
-      String(duel.id),
-    );
+    // VOID가 이미 커밋된 뒤다 — finishByGame과 같은 이유로 락 해제는 조용히 처리한다.
+    await this.releasePairLockQuietly(duel);
     // 이미 다른 경로(스윕 등)가 상태를 옮겼다면 그쪽이 커밋한 현재 상태를 그대로 돌려준다.
     if (updated.affected === 0) {
       return this.duelRepo.findOne({ where: { id: duelId } });
@@ -498,6 +495,30 @@ export class DuelsService {
     duel.status = DuelStatus.VOID;
     duel.completedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
     return duel;
+  }
+
+  /**
+   * 결투가 종료 상태로 **커밋된 뒤**의 페어 락 해제. 실패해도 예외를 올리지 않는다.
+   *
+   * 이 지점 이후로 예외가 나가면 MinigameService.settle의 catch가 결과를 삼키고,
+   * 재시도는 getAcceptedDuel에서 COMPLETED/VOID를 보고 null로 접는다. 스윕은
+   * PENDING/ACCEPTED만 건드리므로 아무도 duel:completed·duel:voided를 보내지 못하고,
+   * 점수·페널티만 움직인 채 두 클라이언트가 게임 화면에 갇힌다 — MinigameService.decide가
+   * cleanupSession을 삼키는 것과 정확히 같은 이유다.
+   *
+   * 놓친 락은 DUEL_ACTIVE_TTL로 자연 회수되고, 탈퇴 경로의 purgeUserKeys도 걷어간다.
+   */
+  private async releasePairLockQuietly(duel: Duel): Promise<void> {
+    try {
+      await this.redis.releaseLock(
+        this.lockKey(duel.challengerId, duel.opponentId),
+        String(duel.id),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `결투 페어 락 해제 실패 duelId=${duel.id} (TTL로 회수됨): ${(err as Error).message}`,
+      );
+    }
   }
 
   /**

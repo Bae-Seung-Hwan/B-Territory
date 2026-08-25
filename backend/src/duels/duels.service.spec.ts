@@ -328,6 +328,34 @@ describe('DuelsService', () => {
       expect(redis.setPenalty).not.toHaveBeenCalled();
     });
 
+    /**
+     * 락 해제 시점엔 점수·원장·페널티가 이미 커밋돼 있다. 여기서 예외를 올리면
+     * MinigameService.settle의 catch가 결과를 삼키고, 재시도는 getAcceptedDuel에서
+     * COMPLETED/VOID를 보고 null로 접는다 — 스윕도 종료 상태는 건드리지 않아
+     * 아무도 duel:completed를 받지 못한 채 점수만 움직인다. 락은 TTL로 회수된다.
+     */
+    it('락 해제가 실패해도 finishByGame은 확정 결과를 돌려준다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.geoSearch.mockResolvedValue([]);
+      redis.releaseLock.mockRejectedValue(new Error('redis down'));
+
+      const outcome = await service.finishByGame(1, challenger.id);
+
+      expect(outcome.status).toBe('confirmed');
+      if (outcome.status === 'confirmed') {
+        expect(outcome.duel.winnerId).toBe(challenger.id);
+      }
+    });
+
+    it('락 해제가 실패해도 voidByGame은 VOID 결과를 돌려준다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.releaseLock.mockRejectedValue(new Error('redis down'));
+
+      const voided = await service.voidByGame(1);
+
+      expect(voided?.status).toBe(DuelStatus.VOID);
+    });
+
     it('미니게임 승자에게 기본 점수를 적용하고 패자에게 30분 페널티를 건다', async () => {
       duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
       // 아군 보너스 조건 미충족: 주변에 같은 팀 후보가 없음
