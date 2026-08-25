@@ -152,6 +152,9 @@ export const en: Translations = {
     logout: 'Log Out',
     logoutConfirmTitle: 'Log Out',
     logoutConfirmMessage: 'Are you sure you want to log out?',
+    blockedUsersLink: 'Manage Blocked Users',
+    contactTitle: 'Contact Us',
+    contactEmail: 'B.territory123@gmail.com',
   },
   map: {
     hud: {
@@ -248,6 +251,41 @@ export const en: Translations = {
     miniGame: {
       title: 'Mini Game',
       placeholder: 'The mini-game UI will be implemented here',
+    },
+  },
+  // Shared by the chat long-press menu (report/block) and the profile "manage blocks" screen.
+  moderation: {
+    actionsSheetTitle: 'Message actions',
+    report: 'Report',
+    block: 'Block',
+    cancel: 'Cancel',
+    reportTitle: 'Choose a reason',
+    reportReason: {
+      SPAM: 'Spam / Ads',
+      ABUSE: 'Abuse / Harassment',
+      SEXUAL: 'Sexual content',
+      HATE: 'Hate speech',
+      OTHER: 'Other',
+    },
+    reportContentLabel: 'Reported message',
+    detailPlaceholder: 'Add details (optional, up to 500 characters)',
+    submitReport: 'Submit report',
+    reportSuccess: 'Report submitted',
+    blockConfirmTitle: 'Block this user?',
+    blockConfirmMessage: "Blocking {{nickname}} stops their messages from reaching you.",
+    blockSuccess: 'Blocked',
+    blockedUsersTitle: 'Manage Blocked Users',
+    blockedUsersEmpty: 'No blocked users',
+    blockedAtLabel: 'Blocked on',
+    unblock: 'Unblock',
+    unblockConfirmTitle: 'Unblock this user?',
+    unblockConfirmMessage: "You'll start receiving messages from {{nickname}} again.",
+    errors: {
+      blockSelf: 'You cannot block yourself',
+      reportSelf: 'You cannot report yourself',
+      reportRateLimit: 'Too many reports. Please try again shortly',
+      userNotFound: 'User not found',
+      failed: 'Something went wrong',
     },
   },
 };

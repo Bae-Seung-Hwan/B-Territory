@@ -15,6 +15,10 @@ import { BrandColors } from '@/constants/theme';
 import { useChatSocket, type ChatSocketError } from '@/hooks/use-chat-socket';
 import { useChatStore, type ChatFeedItem } from '@/store/useChatStore';
 import { CHAT_ENABLED } from '@/config/feature-flags';
+import {
+  MessageActionSheet,
+  type MessageActionTarget,
+} from '@/components/chat/MessageActionSheet';
 
 function chatErrorKey(error: ChatSocketError): string {
   switch (error) {
@@ -33,6 +37,8 @@ export default function ChatScreen() {
   const { sendMessage, retryMessage, chatError } = useChatSocket();
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<ChatFeedItem>>(null);
+  // 롱프레스로 연 신고/차단 대상. null이면 시트가 닫혀 있다(MessageActionSheet 참고).
+  const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
 
   const handleSend = () => {
     if (!text.trim()) return;
@@ -42,10 +48,20 @@ export default function ChatScreen() {
 
   const renderItem = ({ item }: { item: ChatFeedItem }) => (
     <View style={item.mine ? styles.mineRow : styles.theirRow}>
-      <View style={[styles.bubble, item.mine ? styles.mineBubble : styles.theirBubble]}>
+      <TouchableOpacity
+        activeOpacity={item.mine ? 1 : 0.7}
+        // 내 메시지는 신고·차단 대상이 될 수 없다 — 롱프레스도 걸지 않는다.
+        onLongPress={
+          item.mine
+            ? undefined
+            : () =>
+                setActionTarget({ userId: item.userId, nickname: item.nickname, text: item.text })
+        }
+        style={[styles.bubble, item.mine ? styles.mineBubble : styles.theirBubble]}
+      >
         {!item.mine && <Text style={styles.nickname}>{item.nickname}</Text>}
         <Text style={styles.messageText}>{item.text}</Text>
-      </View>
+      </TouchableOpacity>
       {item.status === 'failed' && (
         <TouchableOpacity onPress={() => retryMessage(item)} hitSlop={6}>
           <Text style={styles.failedText}>
@@ -96,6 +112,7 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+      <MessageActionSheet target={actionTarget} onDismiss={() => setActionTarget(null)} />
     </SafeAreaView>
   );
 }

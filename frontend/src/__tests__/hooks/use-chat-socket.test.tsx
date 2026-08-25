@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook } from '@testing-library/react-native';
 import { io } from 'socket.io-client';
 import { useChatSocket } from '@/hooks/use-chat-socket';
 import { useChatStore } from '@/store/useChatStore';

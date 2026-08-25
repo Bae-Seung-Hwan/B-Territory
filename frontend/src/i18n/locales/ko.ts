@@ -147,6 +147,9 @@ export const ko = {
     logout: '로그아웃',
     logoutConfirmTitle: '로그아웃',
     logoutConfirmMessage: '정말 로그아웃하시겠어요?',
+    blockedUsersLink: '차단 관리',
+    contactTitle: '문의하기',
+    contactEmail: 'B.territory123@gmail.com',
   },
   map: {
     hud: {
@@ -249,6 +252,41 @@ export const ko = {
     miniGame: {
       title: '미니게임',
       placeholder: '미니게임 UI가 여기에 구현됩니다',
+    },
+  },
+  // 채팅 메시지 길게 누르기(신고/차단)와 profile의 차단 관리 화면이 함께 쓴다.
+  moderation: {
+    actionsSheetTitle: '메시지 작업',
+    report: '신고하기',
+    block: '차단하기',
+    cancel: '취소',
+    reportTitle: '신고 사유를 선택하세요',
+    reportReason: {
+      SPAM: '스팸 · 광고',
+      ABUSE: '욕설 · 괴롭힘',
+      SEXUAL: '음란물',
+      HATE: '혐오 발언',
+      OTHER: '기타',
+    },
+    reportContentLabel: '신고 대상 메시지',
+    detailPlaceholder: '자세한 내용을 알려주세요 (선택, 최대 500자)',
+    submitReport: '신고 접수',
+    reportSuccess: '신고가 접수되었습니다',
+    blockConfirmTitle: '차단하시겠습니까?',
+    blockConfirmMessage: '{{nickname}}님을 차단하면 이후 메시지가 나에게 전달되지 않습니다.',
+    blockSuccess: '차단되었습니다',
+    blockedUsersTitle: '차단 관리',
+    blockedUsersEmpty: '차단한 사용자가 없습니다',
+    blockedAtLabel: '차단일',
+    unblock: '차단 해제',
+    unblockConfirmTitle: '차단을 해제하시겠습니까?',
+    unblockConfirmMessage: '{{nickname}}님의 메시지를 다시 받게 됩니다.',
+    errors: {
+      blockSelf: '자기 자신은 차단할 수 없습니다',
+      reportSelf: '자기 자신은 신고할 수 없습니다',
+      reportRateLimit: '신고가 너무 잦습니다. 잠시 후 다시 시도해주세요',
+      userNotFound: '사용자를 찾을 수 없습니다',
+      failed: '처리에 실패했습니다',
     },
   },
 };
