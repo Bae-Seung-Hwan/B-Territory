@@ -161,7 +161,7 @@ function validateVisitorStats(filePath, issues) {
 
 const DATASETS = [
   { file: 'mission_places_final.csv', validate: validateMissionPlaces },
-  { file: 'festivals_fix.csv', validate: validateFestivals },
+  { file: 'festivals.csv', validate: validateFestivals },
   { file: 'code_tables.csv', validate: validateCodeTables },
   { file: 'visitor_stats_long.csv', validate: validateVisitorStats },
 ];
