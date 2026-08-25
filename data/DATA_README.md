@@ -20,7 +20,7 @@
 | festivals.csv | 앱/백엔드 초기 시딩용 최종 축제 데이터 | 20 |
 | festivals_removed_missing_dates.csv | 날짜가 없어 최종 축제 데이터에서 제외한 항목 | 20 |
 | festivals_removed_review_issues.csv | 리뷰에서 확인된 날짜 오매칭·중복 제거 항목 | 5 |
-| festival_manual_fixes_report.csv | 축제 날짜·주소 수동 보정 근거 리포트 | 8 |
+| festival_manual_fixes_report.csv | 축제 날짜·주소·장소·구 코드 수동 보정 근거 리포트 | 15 |
 | busan_districts_boundary.geojson | 부산 16개 구·군 경계 GeoJSON | 16 |
 | code_tables.csv | 지역코드/분류코드 참고표 | 50 |
 
@@ -48,7 +48,7 @@
   - festivals_removed_missing_dates.csv: 20건
   - festivals_removed_review_issues.csv: 5건
 - 날짜가 없거나 날짜 오매칭이 확인된 축제는 최종 시딩 파일에서 제외했습니다.
-- 수동 보정한 날짜·주소 근거는 festival_manual_fixes_report.csv에 기록했습니다.
+- 수동 보정한 날짜·주소·장소·구 코드 근거는 festival_manual_fixes_report.csv에 기록했습니다.
 - 2026-08-25 기준 종료된 축제도 일부 포함되어 있습니다. 백엔드 조회 API에서 end_date 기준으로 노출 여부를 필터링합니다.
 
 ### busan_districts.csv
@@ -197,6 +197,7 @@ foreign_visitor_share 정의:
 | festivals.csv 행 수 | 20건 |
 | festivals.csv 필수 필드 누락 | 0건 |
 | festivals.csv end_date < start_date | 0건 |
+| festival_manual_fixes_report.csv 행 수 | 15건 |
 | 축제 데이터 분할 합계 | 20 + 20 + 5 = 45건 |
 | visitor_stats_long.csv sigungu_code 누락 | 0건 |
 | busan_districts.csv 외국인 방문 비율 | 반영 |

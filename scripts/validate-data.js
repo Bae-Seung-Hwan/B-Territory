@@ -125,6 +125,21 @@ function checkUnique(records, field, label, issues) {
   }
 }
 
+function checkDateOrder(records, startField, endField, label, issues) {
+  records.forEach((r, idx) => {
+    const start = (r[startField] || '').trim();
+    const end = (r[endField] || '').trim();
+    if (!start || !end) return;
+    if (!/^\d{8}$/.test(start) || !/^\d{8}$/.test(end)) {
+      issues.push(`[${label}] 날짜 형식 오류 (행 ${idx + 2}): ${startField}=${start}, ${endField}=${end}`);
+      return;
+    }
+    if (end < start) {
+      issues.push(`[${label}] 종료일이 시작일보다 빠름 (행 ${idx + 2}): ${start} ~ ${end}`);
+    }
+  });
+}
+
 function validateMissionPlaces(filePath, issues) {
   const records = loadCsv(filePath);
   const label = 'mission_places_final';
@@ -138,9 +153,10 @@ function validateMissionPlaces(filePath, issues) {
 function validateFestivals(filePath, issues) {
   const records = loadCsv(filePath);
   const label = 'festivals';
-  checkRequiredFields(records, ['title', 'address', 'map_x', 'map_y'], label, issues);
+  checkRequiredFields(records, ['title', 'address', 'map_x', 'map_y', 'start_date', 'end_date', 'sigungu_code'], label, issues);
   checkDuplicates(records, ['title', 'address'], label, issues);
   checkCoordinates(records, 'map_x', 'map_y', label, issues);
+  checkDateOrder(records, 'start_date', 'end_date', label, issues);
   return records.length;
 }
 

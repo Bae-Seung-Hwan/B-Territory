@@ -22,7 +22,6 @@ export const CATEGORY_META: Record<string, CategoryMeta> = {
   '15': { color: '#d55181', emoji: '🎪', showFromZoom: 12 },
   '25': { color: '#199e70', emoji: '🚶', showFromZoom: 12 },
   '28': { color: '#d95926', emoji: '🏄', showFromZoom: 12 },
-  '32': { color: '#c98500', emoji: '🏠', showFromZoom: 13 },
   '38': { color: '#e66767', emoji: '🛍', showFromZoom: 13 },
   '39': { color: '#008300', emoji: '🍴', showFromZoom: 13 },
 };
