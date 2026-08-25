@@ -4,6 +4,7 @@ import { BullModule, InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Duel } from './entities/duel.entity';
 import { DuelsService } from './duels.service';
+import { MinigameService } from './minigame/minigame.service';
 import { GeoCleanupProcessor } from './geo-cleanup.processor';
 import { DuelCleanupProcessor } from './duel-cleanup.processor';
 import { UsersModule } from '../users/users.module';
@@ -22,8 +23,13 @@ import { DUEL_SWEEP_INTERVAL_MS, GEO_PRUNE_INTERVAL_MS } from './constants';
     // 나를 차단한 상대에게 결투를 걸지 못하게 하기 위함.
     ModerationModule,
   ],
-  providers: [DuelsService, GeoCleanupProcessor, DuelCleanupProcessor],
-  exports: [DuelsService],
+  providers: [
+    DuelsService,
+    MinigameService,
+    GeoCleanupProcessor,
+    DuelCleanupProcessor,
+  ],
+  exports: [DuelsService, MinigameService],
 })
 export class DuelsModule implements OnModuleInit {
   private readonly logger = new Logger(DuelsModule.name);

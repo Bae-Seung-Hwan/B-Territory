@@ -36,7 +36,60 @@
 - `useSocket()`으로 소켓 인스턴스를 꺼내 쓸 수 있는 Context만 제공 — `autoConnect: false`라 실제 연결은 아무도 시작하지 않음
 - 오버레이(`useOverlayStore`)는 `EnemyDetectionAlert` → `DuelRequest` → `MiniGame` 화면 흐름만 갖추고 있고, 이 체인을 트리거하는 `setShowEnemyAlert(true)` / `setEnemyInfo(...)` 호출이 코드 어디에도 없어 실제로 뜰 방법이 없음
 - `useLocation()`(`src/hooks/use-location.ts`)은 지도 화면(`map/index.tsx`)에서 호출돼 좌표를 얻고 있지만, 그 좌표를 `location:update`로 보내는 쪽이 없어 서버는 여전히 위치를 모름
-- 백엔드(PR #13, `feature/Bae/realtime-duel`)가 이미 제공하는 이벤트: 송신 `location:update`, 수신 `encounter:detected`/`duel:requested`/`duel:accepted`/`duel:rejected`/`duel:completed`/`duel:voided`/`duel:expired`, 송신 `duel:request`/`duel:accept`/`duel:reject`/`duel:result` — 실제 배선 시 백엔드 코드에서 페이로드 스키마 재확인 필요
+- 백엔드가 제공하는 이벤트
+  - 송신: `location:update`, `duel:request`, `duel:accept`, `duel:reject`, `game:submit`
+  - 수신: `encounter:detected`, `duel:requested`, `duel:accepted`, `duel:rejected`, `duel:expired`, `game:start`, **`game:go`**, `game:opponent:submitted`, `game:round:result`, `duel:completed`, `duel:voided`
+  - 실제 배선 시 백엔드 코드(`backend/src/realtime/realtime.gateway.ts`)에서 페이로드 스키마 재확인 필요
+
+### 결투 미니게임 (`feature/Bae/duel-minigame`)
+
+**클라이언트는 게임만 진행하고, 판정은 전부 서버가 한다.** 클라이언트는 "내가 이겼다"도
+"몇 ms 걸렸다"도 보내지 않는다 — **자기가 무엇을 골랐는지만** 알리고, 승패와 소요 시간은
+서버가 자기 시계로 계산한다. 자가신고(`duel:result`)는 폐기됐다.
+
+수신 이벤트는 `game:start` / `game:go` / `game:opponent:submitted` / `game:round:result`,
+송신은 `game:submit` 하나뿐이다.
+
+1. `duel:accept` 성공 → 서버가 게임 종류를 골라 양쪽에 `game:start`
+   `{ duelId, gameType: 'TAP'|'REACTION'|'QUIZ', round, maxRounds, deadlineAt, tap?, quiz? }`
+   - **ack를 반드시 확인할 것.** 미니게임 시작에 실패하면(서버측 Redis 장애 등) ack가
+     `{ status: 'error', code: 'MINIGAME_START_FAILED', message }`로 온다. 이때 결투는
+     서버가 즉시 무효 처리하고 `duel:voided`도 보내므로, 게임 화면으로 넘어가지 말고
+     결투를 닫으면 된다. `duel:accepted`를 받았다고 해서 `game:start`가 보장되지는 않는다.
+   - `game:start`·`game:go`는 **오프라인일 때 큐잉되지 않는다**(라운드 45초, 큐 보관 30분).
+     소켓이 끊긴 사이 수락이 진행되면 그 라운드는 미제출로 기권패다 — 재접속 후 지난
+     `game:start`가 재생되는 일은 없다. `duel:completed`/`duel:voided`는 기존대로 큐에 남는다.
+2. 플레이 후 `game:submit` `{ duelId, round, value? }`
+3. 먼저 낸 쪽은 대기 — 상대에겐 `game:opponent:submitted`만 간다 (점수는 공개되지 않는다)
+4. 양쪽 제출 또는 마감(45초) → 서버 정산
+   - 서버는 `deadlineAt`을 조금 지나서 정산한다(네트워크 지연 여유). 마감 직전 제출도
+     받아들여지므로 클라이언트가 미리 잘라 보내지 않아도 된다
+   - 승부가 나면 기존 `duel:completed` (`scores` 배열이 추가로 실린다)
+   - 동점이면 `game:round:result` 후 `game:start`(round 2)로 재경기 1회
+   - 재경기도 동점이거나 양쪽 다 미제출이면 `duel:voided`
+   - 한쪽만 미제출이면 기권패 → 제출한 쪽 승리
+
+**게임별 `value`와 서버 판정**
+
+| 게임 | 클라이언트가 보내는 `value` | 서버가 하는 일 |
+|---|---|---|
+| `TAP` | 탭 횟수 | 많은 쪽 승. 상한(60) + 5초를 실제로 채웠는지 검사 |
+| `REACTION` | **없음** (생략) | `game:go`를 쏜 시각부터 제출 도착까지를 서버가 직접 측정, 빠른 쪽 승 |
+| `QUIZ` | 고른 선택지 인덱스 | 정답 채점 + 문제 전송~도착 시간을 서버가 측정. 정답 우선, 둘 다 정답이면 빠른 쪽 |
+
+**⚠️ 반응속도 게임은 클라이언트가 신호를 만들면 안 된다.** 기존 `ReactionGame.tsx`의
+`startWaiting()`이 `setTimeout`으로 초록불을 켜는 구조인데, 이러면 반응 시간을 클라이언트가
+아무 값이나 주장할 수 있다. **서버가 보내는 `game:go` `{ duelId, round }`를 기다렸다가**
+초록불을 켜고, 탭하면 `game:submit`을 보내면 된다(`value` 불필요). 대기 시간은 서버가
+랜덤으로 정하고 알려주지 않는다.
+
+`game:go` 전에 보낸 제출은 **부정출발**로 그 라운드 최하점 처리된다(HSETNX라 재제출도 안 된다).
+따라서 초록불 전 탭은 서버로 보내지 말고 클라이언트에서 "너무 빨랐어요"로 잡아주는 게 좋다.
+결과의 `scores[]`에 `falseStart: true`로 표시된다.
+
+`quiz.question`·`quiz.choices`는 `{ ko, en }` 형태로 내려온다(소켓에 lang 파라미터가 없어
+양쪽 언어를 모두 보낸다). 선택지는 서버가 매번 섞고, 정답은 서버 세션에만 있어 페이로드에
+실리지 않는다.
 
 ## Firebase Authentication
 

@@ -32,9 +32,13 @@ import {
   pgErrorCode,
 } from '../common/utils/pg-error.util';
 
-export type DuelResultOutcome =
-  | { status: 'waiting' }
-  | { status: 'conflict'; duel: Duel }
+/**
+ * 미니게임 판정으로 결투가 끝났을 때의 결과.
+ * - confirmed: 승패가 확정되어 점수·페널티가 반영됨
+ * - void: 무승부이거나, 확정 직전에 정리 잡이 VOID를 선점함 (점수 변동 없음)
+ */
+export type DuelFinishOutcome =
+  | { status: 'void'; duel: Duel }
   | { status: 'confirmed'; duel: Duel };
 
 /** 게이트웨이가 주입하는 알림 콜백 (온라인이면 즉시 emit, 아니면 Redis 큐잉) */
@@ -412,11 +416,8 @@ export class DuelsService {
     return duel;
   }
 
-  async submitResult(
-    duelId: number,
-    reporterId: string,
-    winnerId: string,
-  ): Promise<DuelResultOutcome> {
+  /** ACCEPTED 상태의 결투를 읽어온다 — 미니게임 세션 시작·점수 제출의 공통 전제 확인. */
+  async getAcceptedDuel(duelId: number): Promise<Duel> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
     if (!duel)
       throw new NotFoundException(
@@ -426,33 +427,22 @@ export class DuelsService {
       throw new ConflictException(
         errBody(
           ErrorCode.DUEL_NOT_ACCEPTED,
-          '수락된 결투만 결과를 제출할 수 있습니다.',
+          '수락된 결투만 미니게임을 진행할 수 있습니다.',
         ),
       );
     }
-    const participants = [duel.challengerId, duel.opponentId];
-    if (!participants.includes(reporterId)) {
-      throw new ForbiddenException(
-        errBody(
-          ErrorCode.DUEL_NOT_PARTICIPANT,
-          '결투 참가자만 결과를 제출할 수 있습니다.',
-        ),
-      );
-    }
-    if (!participants.includes(winnerId)) {
-      throw new BadRequestException(
-        errBody(
-          ErrorCode.DUEL_WINNER_NOT_PARTICIPANT,
-          '승자는 결투 참가자여야 합니다.',
-        ),
-      );
-    }
+    return duel;
+  }
 
-    // 신고 접수 시각을 DB 시계로 스탬프하는 조건부 UPDATE — 두 역할을 겸한다:
-    // 1) sweepStaleDuels가 이 스탬프가 신선한 동안 VOID를 유예하므로, 양측이 실제로
-    //    신고를 진행 중인 결투가 타이밍상 스윕에 선점되어 결과가 버려지지 않는다
-    // 2) 스윕이 이미 VOID를 커밋한 뒤라면 affected=0으로 즉시 거부되어, 신고가
-    //    Redis에만 기록된 채 유실되는 일이 없다 (위의 status 확인과 달리 원자적)
+  /**
+   * 결과 처리가 진행 중임을 DB 시계로 스탬프하는 조건부 UPDATE (미니게임 점수 제출 시 호출).
+   * 두 역할을 겸한다:
+   * 1) sweepStaleDuels가 이 스탬프가 신선한 동안 VOID를 유예하므로, 양측이 실제로 게임을
+   *    진행 중인 결투가 타이밍상 스윕에 선점되어 결과가 버려지지 않는다
+   * 2) 스윕이 이미 VOID를 커밋한 뒤라면 affected=0으로 즉시 거부되어, 제출이 Redis에만
+   *    기록된 채 유실되는 일이 없다 (단순 status 조회와 달리 원자적)
+   */
+  async markResultInProgress(duelId: number): Promise<void> {
     const stamped = await this.duelRepo
       .createQueryBuilder()
       .update(Duel)
@@ -466,37 +456,98 @@ export class DuelsService {
       throw new ConflictException(
         errBody(
           ErrorCode.DUEL_NOT_ACCEPTED,
-          '수락된 결투만 결과를 제출할 수 있습니다.',
+          '수락된 결투만 미니게임을 진행할 수 있습니다.',
+        ),
+      );
+    }
+  }
+
+  /**
+   * 미니게임 판정으로 나온 승자를 결투 결과로 확정한다.
+   *
+   * 승자는 서버가 두 참가자의 점수를 비교해 정한 값이어야 한다 — 클라이언트가 보낸
+   * 승패 주장을 그대로 넘기면 안 된다(자가신고 시절의 취약점).
+   */
+  async finishByGame(
+    duelId: number,
+    winnerId: string,
+  ): Promise<DuelFinishOutcome> {
+    const duel = await this.getAcceptedDuel(duelId);
+    if (![duel.challengerId, duel.opponentId].includes(winnerId)) {
+      throw new BadRequestException(
+        errBody(
+          ErrorCode.DUEL_WINNER_NOT_PARTICIPANT,
+          '승자는 결투 참가자여야 합니다.',
         ),
       );
     }
 
-    const result = await this.redis.submitDuelResult(
-      duelId,
-      reporterId,
-      winnerId,
-      DUEL_RESULT_TTL,
-    );
-    if (result.status === 'waiting') return { status: 'waiting' };
+    const resolved = await this.resolveDuel(duel, winnerId);
+    // 여기부터는 점수·원장·페널티가 이미 커밋된 뒤다 — 락 해제 실패로 예외를 올리면
+    // 안 된다(releasePairLockQuietly 주석).
+    await this.releasePairLockQuietly(duel);
+    // 확정 직전에 정리 잡이 ACCEPTED->VOID를 선점했을 수 있다. 그 경우 COMPLETED가
+    // 아니므로 승자 없는 결과를 confirmed로 알리지 않고 무효로 매핑한다.
+    return resolved.status === DuelStatus.COMPLETED
+      ? { status: 'confirmed', duel: resolved }
+      : { status: 'void', duel: resolved };
+  }
 
-    const lock = this.lockKey(duel.challengerId, duel.opponentId);
-    const token = String(duel.id);
-    if (result.status === 'conflict') {
-      duel.status = DuelStatus.VOID;
-      duel.completedAt = new Date();
-      await this.duelRepo.save(duel);
-      await this.redis.releaseLock(lock, token);
-      return { status: 'conflict', duel };
+  /**
+   * 승패를 가리지 못한 결투를 무효 처리한다 (재경기까지 갔는데도 동점, 양쪽 모두 미제출 등).
+   * 점수 변동도 페널티도 없다.
+   */
+  async voidByGame(duelId: number): Promise<Duel | null> {
+    const duel = await this.duelRepo.findOne({ where: { id: duelId } });
+    if (!duel) return null;
+
+    const updated = await this.duelRepo
+      .createQueryBuilder()
+      .update(Duel)
+      .set({
+        status: DuelStatus.VOID,
+        completedAt: () => 'CURRENT_TIMESTAMP',
+      })
+      .where('id = :id AND status = :accepted', {
+        id: duelId,
+        accepted: DuelStatus.ACCEPTED,
+      })
+      .execute();
+
+    // VOID가 이미 커밋된 뒤다 — finishByGame과 같은 이유로 락 해제는 조용히 처리한다.
+    await this.releasePairLockQuietly(duel);
+    // 이미 다른 경로(스윕 등)가 상태를 옮겼다면 그쪽이 커밋한 현재 상태를 그대로 돌려준다.
+    if (updated.affected === 0) {
+      return this.duelRepo.findOne({ where: { id: duelId } });
     }
 
-    const resolved = await this.resolveDuel(duel, result.winnerId);
-    await this.redis.releaseLock(lock, token);
-    // 상태 확인~resolveDuel 사이에 정리 잡이 ACCEPTED→VOID를 선점했을 수 있다.
-    // 그 경우 COMPLETED가 아니므로 승자 없는 결과를 'confirmed'로 알리지 않고 무효로 매핑한다.
-    if (resolved.status !== DuelStatus.COMPLETED) {
-      return { status: 'conflict', duel: resolved };
+    duel.status = DuelStatus.VOID;
+    duel.completedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
+    return duel;
+  }
+
+  /**
+   * 결투가 종료 상태로 **커밋된 뒤**의 페어 락 해제. 실패해도 예외를 올리지 않는다.
+   *
+   * 이 지점 이후로 예외가 나가면 MinigameService.settle의 catch가 결과를 삼키고,
+   * 재시도는 getAcceptedDuel에서 COMPLETED/VOID를 보고 null로 접는다. 스윕은
+   * PENDING/ACCEPTED만 건드리므로 아무도 duel:completed·duel:voided를 보내지 못하고,
+   * 점수·페널티만 움직인 채 두 클라이언트가 게임 화면에 갇힌다 — MinigameService.decide가
+   * cleanupSession을 삼키는 것과 정확히 같은 이유다.
+   *
+   * 놓친 락은 DUEL_ACTIVE_TTL로 자연 회수되고, 탈퇴 경로의 purgeUserKeys도 걷어간다.
+   */
+  private async releasePairLockQuietly(duel: Duel): Promise<void> {
+    try {
+      await this.redis.releaseLock(
+        this.lockKey(duel.challengerId, duel.opponentId),
+        String(duel.id),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `결투 페어 락 해제 실패 duelId=${duel.id} (TTL로 회수됨): ${(err as Error).message}`,
+      );
     }
-    return { status: 'confirmed', duel: resolved };
   }
 
   /**
