@@ -21,6 +21,10 @@ import {
   useSocketAuth,
   wsValidationPipe,
 } from '../common/ws/ws-auth';
+import {
+  userRoomOf,
+  WsSessionsService,
+} from '../common/ws/ws-sessions.service';
 import { DuelsService } from '../duels/duels.service';
 import { LocationUpdateDto } from '../duels/dto/location-update.dto';
 import { DuelRequestDto } from '../duels/dto/duel-request.dto';
@@ -52,6 +56,7 @@ export class RealtimeGateway
     private readonly redis: RedisService,
     private readonly duelsService: DuelsService,
     private readonly locationLogs: LocationLogsService,
+    private readonly sessions: WsSessionsService,
   ) {
     // 정리 잡(duel-cleanup)이 스윕한 결투의 참가자에게 알림을 보낼 수 있도록 콜백 주입
     this.duelsService.setNotifier((userId, event, payload) =>
@@ -91,11 +96,17 @@ export class RealtimeGateway
    * 인증 완료 전에 connect를 받아, 곧바로 보낸 이벤트가 미인증으로 거부된다.
    */
   afterInit(namespace: Namespace): void {
+    // 탈퇴 시 이 유저의 소켓을 끊을 수 있도록 네임스페이스를 등록한다.
+    this.sessions.register(namespace);
     useSocketAuth(
       namespace,
       this.firebaseService,
       this.usersService,
       this.logger,
+      // 유저 룸은 세션 종료(WsSessionsService)가 소켓을 찾는 유일한 수단이다. 여기서
+      // join해야 핸드셰이크 안에서 끝나 접속 직후 탈퇴해도 놓치는 소켓이 없다.
+      // (알림 전송은 기존대로 meta의 socketId를 쓴다 — 죽은 소켓 판별이 필요해서다)
+      (socket, user) => socket.join(userRoomOf(user.id)),
     );
   }
 

@@ -1,0 +1,158 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { DataSource } from 'typeorm';
+import { User } from '../users/entities/user.entity';
+import { FirebaseService } from '../common/firebase/firebase.service';
+import { RedisService } from '../common/redis/redis.service';
+import { DuelsService } from '../duels/duels.service';
+import { HallOfFameService } from '../hall-of-fame/hall-of-fame.service';
+import { WsSessionsService } from '../common/ws/ws-sessions.service';
+
+/**
+ * 계정 삭제(탈퇴) — 앱스토어·플레이스토어가 계정 생성 앱에 요구하는 필수 기능이다.
+ *
+ * users·duels·Firebase·Redis에 걸친 도메인 횡단 작업이라 UsersService가 아니라 별도
+ * 모듈에 둔다. UsersService에 두면 UsersModule이 DuelsModule을 참조해야 하는데,
+ * DuelsModule과 ModerationModule이 이미 UsersModule을 쓰고 있어 삼각 순환이 생긴다
+ * (부팅 시 서로의 심볼이 undefined가 되어 실제로 죽는다). 여기로 올리면 의존이
+ * AccountModule -> {UsersModule, DuelsModule} 한 방향으로만 흐른다.
+ */
+@Injectable()
+export class AccountService {
+  private readonly logger = new Logger(AccountService.name);
+
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly firebaseService: FirebaseService,
+    private readonly redis: RedisService,
+    private readonly duelsService: DuelsService,
+    private readonly hallOfFame: HallOfFameService,
+    private readonly sessions: WsSessionsService,
+  ) {}
+
+  /**
+   * 남기는 것 / 지우는 것:
+   * - `users` 행은 **하드 삭제**한다. 익명화(닉네임만 교체)로는 안 되는데, 개인 랭킹이
+   *   `score_events JOIN users`(INNER)라 행을 남기면 탈퇴한 유저가 명예의 전당에 계속
+   *   노출되기 때문이다. 하드 삭제하면 조인에서 자연히 빠진다.
+   * - 원장·점령·결투는 FK가 전부 SET NULL이라 행은 남고 유저 참조만 끊긴다. 팀 점수는
+   *   `score_events.team`으로 집계해 users를 조인하지 않으므로 그대로 보존된다.
+   * - `location_usage_logs`는 **건드리지 않는다.** 위치정보법 제16조 2항의 법정 보존
+   *   자료(6개월)이며, 그래서 애초에 users FK를 걸지 않았다(docs/compliance.md 4장).
+   *   개인정보처리방침에 "탈퇴 후에도 이 기록은 보존된다"를 명시해야 한다.
+   * - Firebase Auth 계정도 지운다. 남겨두면 같은 이메일로 재가입이 영구 불가해진다.
+   *
+   * 순서가 중요하다. DB 삭제를 먼저 커밋한 뒤 Firebase를 지운다 — 반대로 하면 Firebase만
+   * 지워지고 DB 삭제가 실패했을 때 로그인할 수 없는데 계정은 남은 상태가 된다. 이 순서의
+   * 크래시 창(DB 커밋 직후 프로세스 사망)은 deleteOrphanedAuth가 받아낸다.
+   *
+   * 커밋 이후의 정리는 **소켓 종료 → Redis 정리 → Firebase** 순이다. Firebase 삭제는 외부
+   * HTTPS 왕복이라 수백 ms가 걸리는데, 그동안 geo·meta 키가 살아 있으면 남은 유저에게
+   * 탈퇴자가 계속 "접속 중"으로 보여 결투 신청이 들어오고, 그 신청은 이미 사라진 유저를
+   * 참조해 FK 위반으로 터진다. 소켓을 먼저 끊는 것도 같은 이유다 — 살아 있는 소켓이
+   * location:update 한 번이면 방금 지운 geo 키를 되살린다.
+   *
+   * 다만 그 창은 Firebase 앞이 아니라 **커밋 직후**부터 열린다. requestDuel이 상대를
+   * 통과시키는 실질적 관문이 geo가 아니라 meta(getUserMeta)라, 커밋과 geo·meta 삭제
+   * 사이에 들어온 신청은 전부 FK 위반이 된다. 그 사이에 결투 뒷정리(락 해제·알림)가
+   * 끼어 있으면 창이 결투 수에 비례해 늘어나므로, geo·meta만 트랜잭션보다 **먼저**
+   * 걷어내 창 자체를 없앤다(아래 removeFromDiscovery).
+   */
+  async deleteAccount(user: User): Promise<void> {
+    // 탐지 대상에서 먼저 내린다. 이 시점부터 requestDuel이 이 유저를
+    // DUEL_TARGET_LOCATION_UNKNOWN으로 깔끔히 거절하므로, 아래 트랜잭션이 커밋되는
+    // 순간 생길 수 있는 "이미 사라진 유저를 참조하는 신청"이 원천 차단된다.
+    //
+    // 트랜잭션보다 먼저 지워도 손해가 없다 — 롤백되면 탈퇴자는 계정이 살아 있는 채로
+    // 잠시 오프라인으로 보일 뿐이고, 다음 location:update 한 번에 원상복구된다.
+    // (반대로 커밋 뒤에 지우면 그 사이 신청이 FK 위반 500으로 터진다.)
+    await this.removeFromDiscovery(user.id);
+
+    // 진행 중인 결투 종료와 users 행 삭제를 한 트랜잭션에 묶는다. 종료 처리가
+    // requestDuel과 같은 advisory lock을 잡으므로, 그 사이에 이 유저를 상대로 새 결투가
+    // 만들어져 다시 참가자 한쪽이 NULL인 활성 행으로 남는 창이 닫힌다.
+    const terminated = await this.dataSource.transaction(async (manager) => {
+      const rows = await this.duelsService.terminateActiveDuelsFor(
+        user.id,
+        manager,
+      );
+      await manager.delete(User, { id: user.id });
+      return rows;
+    });
+
+    // 락 해제·알림은 커밋 뒤에 한다 — 롤백된 트랜잭션의 결투를 상대에게 종료됐다고
+    // 알리거나 아직 유효한 락을 풀어버리면 안 된다. (상대는 아직 접속 중이어야 하므로
+    // 소켓을 끊기 전에 보낸다. 탈퇴자 본인은 수신 대상에서 빠진다.)
+    await this.duelsService.settleTerminatedDuels(terminated, user.id);
+
+    // 인증은 핸드셰이크에서 한 번만 하므로, 끊지 않으면 이미 열린 소켓이 탈퇴 후에도
+    // 인증된 채로 남아 위치를 갱신하고 채팅을 계속 쓴다.
+    this.sessions.disconnectUser(user.id);
+
+    // Redis 정리는 실패해도 탈퇴를 되돌리지 않는다 — 계정은 이미 사라졌고 남은 키는
+    // 전부 TTL로 소멸한다. 다만 조용히 넘기지 않고 로그로 남긴다.
+    //
+    // 둘은 서로 독립적이라 반드시 따로 처리한다. 직렬로 await하면 키 정리가 실패했을 때
+    // 랭킹 캐시 무효화가 통째로 건너뛰어지고, 그 캐시에는 닉네임이 박혀 있으며 끝난
+    // 시즌 TTL이 24시간이라 "탈퇴 즉시 노출되지 않는다"는 약속이 하루 동안 깨진다.
+    await this.settleQuietly(user.id, [
+      ['Redis 키 정리', this.redis.purgeUserKeys(user.id)],
+      ['개인 랭킹 캐시 무효화', this.hallOfFame.invalidateUserRanking()],
+    ]);
+
+    await this.firebaseService.deleteUser(user.firebaseUid);
+  }
+
+  /**
+   * geo·meta에서 유저를 내려 결투 탐지 대상에서 제외한다.
+   *
+   * 실패해도 탈퇴를 막지 않는다 — 남은 키는 TTL로 사라지고, 그때까지의 결투 신청은
+   * FK 위반으로 거절될 뿐(상대에게 500) 탈퇴 자체는 유효하다. purgeUserKeys가 뒤에서
+   * 같은 키를 한 번 더 지우므로 여기서의 실패는 대개 그쪽에서 회수된다.
+   */
+  private async removeFromDiscovery(userId: string): Promise<void> {
+    try {
+      await this.redis.geoRemove(userId);
+    } catch (err) {
+      this.logger.warn(
+        `탈퇴 전 위치 정보 제거 실패 (userId=${userId}): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * 탈퇴 커밋 이후의 뒷정리들을 **서로 독립적으로** 실행하고, 실패는 로그로만 남긴다.
+   * 하나가 실패해도 나머지는 반드시 수행되어야 하므로 allSettled를 쓴다.
+   */
+  private async settleQuietly(
+    userId: string,
+    tasks: [string, Promise<unknown>][],
+  ): Promise<void> {
+    const results = await Promise.allSettled(tasks.map(([, task]) => task));
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        this.logger.warn(
+          `탈퇴 후 ${tasks[i][0]} 실패 (userId=${userId}): ` +
+            `${(result.reason as Error)?.message ?? String(result.reason)}`,
+        );
+      }
+    });
+  }
+
+  /**
+   * DB 프로필 없이 Firebase 계정만 남은 상태를 정리한다 — deleteAccount의 크래시 복구 경로.
+   *
+   * deleteAccount는 DB 삭제를 먼저 커밋하는데, 그 직후 프로세스가 죽으면(배포·OOM)
+   * Firebase 계정만 남는다. 이때 탈퇴 요청을 404로 막으면 재시도해도 이 계정에 손댈
+   * 방법이 없어져, 그 이메일로 영구 재가입 불가가 된다 — 계정 삭제 기능이 애초에
+   * 막으려던 바로 그 상태다. 그래서 프로필이 없어도 탈퇴는 성공으로 끝낸다(멱등).
+   *
+   * Redis 키는 유저 UUID로 저장되는데 그 id를 알 방법이 이미 사라졌으므로 손대지
+   * 못한다. 참조 대상이 없는 키들이라 TTL로 소멸한다.
+   */
+  async deleteOrphanedAuth(firebaseUid: string): Promise<void> {
+    this.logger.warn(
+      `DB 프로필 없는 Firebase 계정 정리 (firebaseUid=${firebaseUid})`,
+    );
+    await this.firebaseService.deleteUser(firebaseUid);
+  }
+}

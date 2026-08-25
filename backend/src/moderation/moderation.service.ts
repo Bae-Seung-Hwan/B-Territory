@@ -12,6 +12,10 @@ import { CreateReportDto } from './dto/create-report.dto';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
 import { ErrorCode, errBody } from '../common/errors/error-code';
+import {
+  PG_FOREIGN_KEY_VIOLATION,
+  pgErrorCode,
+} from '../common/utils/pg-error.util';
 
 // 신고 도배 방지 — 같은 신고자가 짧은 시간에 대량 접수하는 것을 막는다.
 const REPORT_LIMIT = 10;
@@ -68,6 +72,24 @@ export class ModerationService {
     }));
   }
 
+  /**
+   * FK 위반(23503)을 "유저 없음"(404)으로 매핑한다. 그 외 에러는 그대로 올린다.
+   *
+   * block·report 모두 대상 존재를 `usersService.findById`로 먼저 확인하지만, 그 확인은
+   * INSERT와 같은 트랜잭션이 아니다. 확인 이후 INSERT 전에 대상이 탈퇴를 완료하면 이미
+   * 사라진 users.id를 참조하게 되고, 잡지 않으면 TypeORM의 QueryFailedError가 그대로
+   * 새어나가 차단자·신고자가 404 대신 500을 받는다.
+   *
+   * INSERT는 실패하면 롤백만 되고 부분 반영이 남지 않으므로 정합성 문제는 없다 —
+   * 응답 코드만 실제 상황(대상이 사라짐)에 맞게 바로잡는다.
+   */
+  private rethrowIfUserGone(err: unknown): never {
+    if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
+    throw new NotFoundException(
+      errBody(ErrorCode.USER_NOT_FOUND, '유저를 찾을 수 없습니다.'),
+    );
+  }
+
   async block(blockerId: string, blockedId: string): Promise<void> {
     if (blockerId === blockedId)
       throw new BadRequestException(
@@ -82,13 +104,15 @@ export class ModerationService {
 
     // 이미 차단한 상대를 다시 차단해도 성공으로 본다(멱등) — 클라이언트 재시도나
     // 중복 탭에서 409를 받을 이유가 없다.
+    // orIgnore()는 unique 충돌만 삼킨다 — FK 위반은 그대로 올라오므로 아래에서 매핑한다.
     await this.blockRepo
       .createQueryBuilder()
       .insert()
       .into(UserBlock)
       .values({ blockerId, blockedId })
       .orIgnore()
-      .execute();
+      .execute()
+      .catch((err: unknown) => this.rethrowIfUserGone(err));
 
     await this.invalidateBlockedBy(blockedId);
   }
@@ -188,15 +212,17 @@ export class ModerationService {
         ),
       );
 
-    const saved = await this.reportRepo.save({
-      reporterId,
-      targetUserId: dto.targetUserId,
-      targetNickname: target.nickname,
-      reason: dto.reason,
-      contentSnapshot: dto.contentSnapshot ?? null,
-      detail: dto.detail ?? null,
-      status: ReportStatus.PENDING,
-    });
+    const saved = await this.reportRepo
+      .save({
+        reporterId,
+        targetUserId: dto.targetUserId,
+        targetNickname: target.nickname,
+        reason: dto.reason,
+        contentSnapshot: dto.contentSnapshot ?? null,
+        detail: dto.detail ?? null,
+        status: ReportStatus.PENDING,
+      })
+      .catch((err: unknown) => this.rethrowIfUserGone(err));
 
     // 운영자가 별도 도구 없이도 접수 사실을 인지할 수 있도록 로그로 남긴다.
     this.logger.warn(
