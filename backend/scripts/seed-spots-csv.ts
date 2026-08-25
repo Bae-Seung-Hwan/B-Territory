@@ -2,6 +2,11 @@ import { Client } from 'pg';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
+import {
+  BUSAN_SIGUNGU_CODE_BY_NAME,
+  VALID_SIGUNGU_CODES,
+  districtNameFromAddress,
+} from '../src/common/geo/busan-district.util';
 
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
@@ -11,12 +16,6 @@ const REQUIRED_DB_VARS = [
   'DB_PASSWORD',
   'DB_NAME',
 ] as const;
-
-import {
-  BUSAN_SIGUNGU_CODE_BY_NAME,
-  VALID_SIGUNGU_CODES,
-  districtNameFromAddress,
-} from '../src/common/geo/busan-district.util';
 
 const AREA_CODE = '6'; // 부산
 const CSV_PATH = path.join(__dirname, '../../data/mission_places_final.csv');

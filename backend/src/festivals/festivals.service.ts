@@ -5,7 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import { Festival } from './entities/festival.entity';
 import { FestivalStatus } from './dto/festival-query.dto';
 import { kstDateString, kstYyyymmdd } from '../common/utils/kst.util';
-import { ktoSigunguFromAddress } from '../common/geo/busan-district.util';
+import {
+  ktoSigunguFromAddress,
+  VALID_SIGUNGU_CODES,
+} from '../common/geo/busan-district.util';
 
 /**
  * TourAPI 원본 필드. **문자열로 온다는 보장이 없다** — 같은 응답의 totalCount가 이미
@@ -178,8 +181,28 @@ function regionOf(
 ): RegionVerdict {
   if (regnCd) return regnCd === LDONG_REGN_CD ? 'busan' : 'other';
   if (apiAreaCode) return apiAreaCode === AREA_CODE ? 'busan' : 'other';
+  // 여기서 districtNameFromAddress를 쓰면 안 된다. 그 함수는 "이미 부산으로 확인된
+  // 주소"에서 구 이름을 뽑는 용도라 타 시도를 걸러내지 못한다 — 서울 강서구, 대구 서구,
+  // 광주 남구, 인천 동구가 전부 부산으로 오판된다. 지역 판정은 접두사로만 한다.
   if (addr1) return addr1.startsWith('부산') ? 'busan' : 'other';
   return 'unknown';
+}
+
+/**
+ * API가 준 sigungucode는 **KTO 부산 코드일 때만** 채택한다.
+ *
+ * festivals.sigungucode는 시더(seed-festivals-csv)도 쓰는 컬럼이고 구 단위 집계의
+ * GROUP BY 키다. 시더는 VALID_SIGUNGU_CODES로 걸러 모르는 값을 null로 떨어뜨리는데
+ * (seed-festivals-csv의 normalizeSigungu), 동기화만 원본을 그대로 믿으면 같은 컬럼에
+ * 쓰는 두 경로의 방어 수준이 달라진다.
+ *
+ * 이 PR이 areacode에서 겪은 것과 같은 변화 — upstream이 예고 없이 필드 의미를 바꿔
+ * sigungucode에 법정동 코드('350'·'26350')를 채우기 시작하는 것 — 가 오면, 해운대구
+ * 축제는 '350'이고 spots는 '16'이라 같은 구가 둘로 쪼개진다. 모르는 값은 채택하지 않고
+ * 아래 환산·주소 폴백으로 넘겨, 체계가 섞이느니 비는 편을 택한다.
+ */
+function ktoSigunguFromApi(value: string | null): string | null {
+  return value && VALID_SIGUNGU_CODES.has(value) ? value : null;
 }
 
 @Injectable()
@@ -269,6 +292,7 @@ export class FestivalsService {
     const syncedAt = new Date();
     const syncedContentIds: string[] = [];
     let skipped = 0;
+    const unexpectedSigungu = new Set<string>();
     for (let page = 1; page <= totalPages; page++) {
       const items =
         page === 1
@@ -301,6 +325,14 @@ export class FestivalsService {
         const eventEndDate = parseYmd(item.eventenddate);
         if (!eventStartDate || !eventEndDate) continue;
 
+        // 원본이 KTO 부산 코드가 아닌 sigungucode를 주기 시작하면 아래에서 조용히
+        // 폴백으로 넘어간다. areacode가 그랬듯 스키마 변경의 첫 신호일 수 있어,
+        // 어떤 값이 들어왔는지 표본을 모아 경고로 드러낸다.
+        const apiSigungu = nullIfBlank(item.sigungucode);
+        if (apiSigungu && !ktoSigunguFromApi(apiSigungu)) {
+          unexpectedSigungu.add(apiSigungu);
+        }
+
         rows.push({
           contentId,
           title,
@@ -317,14 +349,15 @@ export class FestivalsService {
           areacode: region === 'busan' ? AREA_CODE : null,
           //
           // 구는 세 근거를 권위 순으로 본다.
-          // 1) API가 준 sigungucode — 구형 레코드가 쓰는 KTO 체계 그대로다.
+          // 1) API가 준 sigungucode — 구형 레코드가 쓰는 KTO 체계 그대로다. 단 KTO 부산
+          //    코드로 검증된 값만 쓴다(ktoSigunguFromApi) — 시더와 같은 방어 수준이다.
           // 2) 법정동 시군구코드 환산 — 3자리라 전국에서 유일하지 않지만('110'은 부산 중구이자
           //    서울 종로구의 접미 코드다) 이미 부산으로 확인된 행에서만 쓰므로 안전하다.
           //    환산표에 없으면 넘어간다 — 법정동 코드를 그대로 넣어 체계를 섞지 않는다.
           // 3) 주소의 구 이름 — lDongSignguCd 없이 주소로만 통과한 행이 구를 잃지 않게 한다.
           sigungucode:
             region === 'busan'
-              ? (nullIfBlank(item.sigungucode) ??
+              ? (ktoSigunguFromApi(apiSigungu) ??
                 KTO_SIGUNGU_BY_LDONG[nullIfBlank(item.lDongSignguCd) ?? ''] ??
                 (addr1 ? ktoSigunguFromAddress(addr1) : null))
               : null,
@@ -342,6 +375,16 @@ export class FestivalsService {
     if (skipped > 0) {
       this.logger.warn(
         `부산이 아닌 축제 ${skipped}건 제외 — 지역 필터가 무시됐는지 확인 필요`,
+      );
+    }
+
+    // 표본은 앞 10종만 남긴다 — 전 행이 새 체계로 바뀌면 종류가 구 수만큼 늘어나
+    // 로그 한 줄이 비대해진다. 어떤 체계로 바뀌었는지 알아보는 데는 몇 개면 충분하다.
+    if (unexpectedSigungu.size > 0) {
+      const sample = [...unexpectedSigungu].slice(0, 10).join(', ');
+      this.logger.warn(
+        `KTO 부산 시군구코드가 아닌 sigungucode ${unexpectedSigungu.size}종을 무시하고 ` +
+          `법정동 환산·주소로 대체했다 (${sample}) — 원본 코드 체계 변경 여부 확인 필요`,
       );
     }
 

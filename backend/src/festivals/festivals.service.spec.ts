@@ -137,6 +137,45 @@ describe('FestivalsService.syncFromApi', () => {
     expect(upsertParams(query)[P_SIGUNGUCODE]).toBe('9');
   });
 
+  /**
+   * areacode를 예고 없이 비웠던 것과 같은 유형의 변화가 sigungucode에 오는 경우다.
+   * 원본을 그대로 믿으면 해운대구 축제가 '350'이 되고 spots는 '16'이라, 같은 구가
+   * 둘로 쪼개진다. 시더는 VALID_SIGUNGU_CODES로 거르므로 동기화도 같은 수준이어야 한다.
+   */
+  it('KTO 부산 코드가 아닌 sigungucode는 채택하지 않고 환산으로 내려간다', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const { service, query } = makeService([
+      // 원본이 KTO 코드 대신 법정동 코드를 주기 시작한 상황.
+      { ...BUSAN_ITEM, sigungucode: '350', lDongSignguCd: '350' },
+    ]);
+
+    await service.syncFromApi();
+
+    // '350'을 그대로 쓰지 않고 환산표를 타 해운대구(16)가 된다.
+    expect(upsertParams(query)[P_SIGUNGUCODE]).toBe('16');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('KTO 부산 시군구코드가 아닌'),
+    );
+  });
+
+  // 부산 KTO 코드는 1~16뿐이다. 범위 밖 값은 환산·주소 폴백도 못 타면 비워 둔다 —
+  // 체계가 섞인 값을 GROUP BY 키에 넣느니 없는 편이 낫다.
+  it('범위 밖 sigungucode는 폴백도 없으면 비워 둔다', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const { service, query } = makeService([
+      {
+        ...BUSAN_ITEM,
+        sigungucode: '26350',
+        lDongSignguCd: '',
+        addr1: '부산광역시',
+      },
+    ]);
+
+    await service.syncFromApi();
+
+    expect(upsertParams(query)[P_SIGUNGUCODE]).toBeNull();
+  });
+
   it('지역 필터가 무시돼 전국 데이터가 와도 부산 외 축제는 걸러낸다', async () => {
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     const { service, query } = makeService([
