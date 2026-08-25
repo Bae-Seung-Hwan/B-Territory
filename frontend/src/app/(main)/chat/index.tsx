@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -19,6 +19,7 @@ import {
   MessageActionSheet,
   type MessageActionTarget,
 } from '@/components/chat/MessageActionSheet';
+import { useBlockedUsers } from '@/hooks/use-moderation';
 
 function chatErrorKey(error: ChatSocketError): string {
   switch (error) {
@@ -39,6 +40,21 @@ export default function ChatScreen() {
   const listRef = useRef<FlatList<ChatFeedItem>>(null);
   // 롱프레스로 연 신고/차단 대상. null이면 시트가 닫혀 있다(MessageActionSheet 참고).
   const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
+
+  // 차단한 사용자의 메시지는 화면에서도 거른다. 서버(ChatGateway의 blockerRooms)가
+  // 릴레이 단계에서 이미 막지만 그건 **앞으로 올** 메시지 얘기고, 차단하기 전에 이미
+  // 받아 스토어에 쌓인 메시지는 그대로 남는다 — 괴롭힘 때문에 차단했는데 정작 그
+  // 메시지가 계속 보이면 차단이 반쪽이 된다. 백엔드 GET /api/blocks 문서가 요구하는
+  // "서버 릴레이 필터의 이중 방어"가 이것이다.
+  const { data: blockedUsers } = useBlockedUsers();
+  const blockedIds = useMemo(
+    () => new Set((blockedUsers ?? []).map((u) => u.userId)),
+    [blockedUsers],
+  );
+  const visibleMessages = useMemo(
+    () => messages.filter((m) => m.mine || !blockedIds.has(m.userId)),
+    [messages, blockedIds],
+  );
 
   const handleSend = () => {
     if (!text.trim()) return;
@@ -87,7 +103,7 @@ export default function ChatScreen() {
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <FlatList
           ref={listRef}
-          data={messages}
+          data={visibleMessages}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           contentContainerStyle={styles.list}

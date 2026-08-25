@@ -30,6 +30,14 @@ interface ChatStore {
    * 짧은 시간 안에 오므로 실무에서는 거의 발생하지 않는다.
    */
   setMessageStatus: (id: string, status: ChatFeedItem['status']) => void;
+  /**
+   * 한 사용자가 보낸 메시지를 피드에서 걷어낸다(차단 시 호출).
+   *
+   * 화면 단의 차단 필터만으로도 안 보이게는 되지만, 그건 차단이 유지되는 동안만이라
+   * 나중에 차단을 풀면 예전 메시지가 되살아난다 — 괴롭힘 때문에 차단한 경우 그
+   * 메시지가 다시 나타나는 건 의도한 동작이 아니다. 스토어에서 아예 지운다.
+   */
+  removeMessagesByUser: (userId: string) => void;
   clear: () => void;
 }
 
@@ -40,6 +48,12 @@ export const useChatStore = create<ChatStore>((set) => ({
   setMessageStatus: (id, status) =>
     set((state) => ({
       messages: state.messages.map((m) => (m.id === id ? { ...m, status } : m)),
+    })),
+  removeMessagesByUser: (userId) =>
+    set((state) => ({
+      // 내 메시지는 남긴다 — 차단 대상과 userId가 같을 수 없지만(자기 차단은 서버가
+      // BLOCK_SELF로 막는다), 낙관적 표시 중인 내 메시지가 휩쓸리지 않게 명시한다.
+      messages: state.messages.filter((m) => m.mine || m.userId !== userId),
     })),
   clear: () => set({ messages: [] }),
 }));

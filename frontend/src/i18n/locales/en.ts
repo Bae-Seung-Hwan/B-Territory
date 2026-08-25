@@ -255,6 +255,9 @@ export const en: Translations = {
   },
   // Shared by the chat long-press menu (report/block) and the profile "manage blocks" screen.
   moderation: {
+    // Title for success alerts. Reusing the error title (auth.errors.title = 'Error')
+    // would show "Error" on a successful report, which reads as a failure.
+    noticeTitle: 'Notice',
     actionsSheetTitle: 'Message actions',
     report: 'Report',
     block: 'Block',

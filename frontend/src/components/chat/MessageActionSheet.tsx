@@ -8,6 +8,7 @@ import { BrandColors } from '@/constants/theme';
 import { BottomSheet } from '@/components/ui/BottomSheet';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { useChatStore } from '@/store/useChatStore';
 
 // BottomSheetTextInput의 blur 처리가 web에서 크래시 난다(register.tsx의 CountrySearchInput과
 // 동일한 이유) — native에서만 바텀시트 전용 입력을 쓴다.
@@ -45,6 +46,7 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
   const [detail, setDetail] = useState('');
   const blockMutation = useBlockMutation();
   const reportMutation = useReportMutation();
+  const removeMessagesByUser = useChatStore((s) => s.removeMessagesByUser);
 
   // target이 바뀔 때(새 롱프레스) 폼 상태를 리셋한다 — effect가 아니라 렌더 중에 직접
   // setState하는, React가 안내하는 "prop이 바뀌면 state를 조정하는" 패턴이다. effect
@@ -77,7 +79,15 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
         style: 'destructive',
         onPress: () => {
           blockMutation.mutate(userId, {
-            onSuccess: () => sheetRef.current?.dismiss(),
+            onSuccess: () => {
+              // 이미 받아둔 이 사용자의 메시지도 피드에서 걷어낸다 — 차단 필터만으로는
+              // 차단을 푸는 순간 되살아난다(useChatStore.removeMessagesByUser 주석).
+              removeMessagesByUser(userId);
+              sheetRef.current?.dismiss();
+              // 차단은 화면에 즉시 드러나는 변화가 적어(상대 메시지가 사라지는 것뿐)
+              // 확인 문구가 없으면 처리됐는지 알기 어렵다.
+              Alert.alert(t('moderation.noticeTitle'), t('moderation.blockSuccess'));
+            },
             onError: (err) => Alert.alert(t('auth.errors.title'), moderationErrorMessage(err, t)),
           });
         },
@@ -97,7 +107,7 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
       {
         onSuccess: () => {
           sheetRef.current?.dismiss();
-          Alert.alert(t('auth.errors.title'), t('moderation.reportSuccess'));
+          Alert.alert(t('moderation.noticeTitle'), t('moderation.reportSuccess'));
         },
         onError: (err) => Alert.alert(t('auth.errors.title'), moderationErrorMessage(err, t)),
       },

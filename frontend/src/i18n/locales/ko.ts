@@ -256,6 +256,9 @@ export const ko = {
   },
   // 채팅 메시지 길게 누르기(신고/차단)와 profile의 차단 관리 화면이 함께 쓴다.
   moderation: {
+    // 성공 알림용 제목. 에러 알림(auth.errors.title = '오류')을 재사용하면 신고가
+    // 접수됐는데도 "오류"라는 제목이 떠 접수 여부가 헷갈린다.
+    noticeTitle: '알림',
     actionsSheetTitle: '메시지 작업',
     report: '신고하기',
     block: '차단하기',
