@@ -258,39 +258,58 @@ export class DuelsService {
     // advisory lock으로 확인과 저장을 직렬화한다. 부분 유니크 인덱스는 한 유저가
     // challenger와 opponent로 엇갈려 등장하는 동시 신청을 막지 못해 이 방식을 쓴다.
     const participantIds = [challenger.id, targetUserId];
-    const duel = await this.dataSource.transaction(async (manager) => {
-      // 트랜잭션 종료 시 자동 해제. id 정렬로 락 획득 순서를 고정해 교차 신청 간 데드락 방지.
-      for (const id of [...participantIds].sort()) {
-        await manager.query(
-          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-          [`duel:user:${id}`],
+    const duel = await this.dataSource
+      .transaction(async (manager) => {
+        // 트랜잭션 종료 시 자동 해제. id 정렬로 락 획득 순서를 고정해 교차 신청 간 데드락 방지.
+        for (const id of [...participantIds].sort()) {
+          await manager.query(
+            'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+            [`duel:user:${id}`],
+          );
+        }
+        const hasActiveDuel = await manager.exists(Duel, {
+          where: [
+            { challengerId: In(participantIds), status: In(ACTIVE_STATUSES) },
+            { opponentId: In(participantIds), status: In(ACTIVE_STATUSES) },
+          ],
+        });
+        if (hasActiveDuel) {
+          throw new ConflictException(
+            errBody(
+              ErrorCode.DUEL_ALREADY_ACTIVE,
+              '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+            ),
+          );
+        }
+
+        // 락보다 DB row를 먼저 만들어, row의 id를 락의 소유권 토큰으로 사용한다.
+        // (락 획득 실패 시 방금 만든 row만 지우면 되므로 롤백이 단순해진다)
+        return manager.save(
+          manager.create(Duel, {
+            challengerId: challenger.id,
+            opponentId: targetUserId,
+            status: DuelStatus.PENDING,
+          }),
         );
-      }
-      const hasActiveDuel = await manager.exists(Duel, {
-        where: [
-          { challengerId: In(participantIds), status: In(ACTIVE_STATUSES) },
-          { opponentId: In(participantIds), status: In(ACTIVE_STATUSES) },
-        ],
-      });
-      if (hasActiveDuel) {
-        throw new ConflictException(
+      })
+      // 위 사전 검문(findById·getUserMeta·verifyProximity)은 전부 트랜잭션 밖이라, 그것들이
+      // 끝난 뒤 advisory lock을 기다리는 동안 대상이 탈퇴를 완료할 수 있다. 그러면 INSERT가
+      // 이미 사라진 users.id를 참조해 FK 위반(23503)이 나는데, 잡지 않으면 QueryFailedError가
+      // 그대로 새어나가 신청자가 404 대신 500을 받는다.
+      //
+      // resolveDuel과 달리 SAVEPOINT는 필요 없다 — 이 트랜잭션의 유일한 쓰기가 이 INSERT라
+      // 통째로 롤백되는 것이 맞다(부분 반영이 남지 않는다).
+      // 이론상 challengerId 쪽 위반(신청자가 자기 계정을 동시에 지운 경우)도 같은 코드로
+      // 오지만, 그때는 토큰이 이미 죽어 다음 요청부터 인증에서 막힌다.
+      .catch((err: unknown) => {
+        if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
+        throw new NotFoundException(
           errBody(
-            ErrorCode.DUEL_ALREADY_ACTIVE,
-            '본인 또는 상대가 이미 진행 중인 결투가 있습니다.',
+            ErrorCode.DUEL_TARGET_NOT_FOUND,
+            '상대 유저를 찾을 수 없습니다.',
           ),
         );
-      }
-
-      // 락보다 DB row를 먼저 만들어, row의 id를 락의 소유권 토큰으로 사용한다.
-      // (락 획득 실패 시 방금 만든 row만 지우면 되므로 롤백이 단순해진다)
-      return manager.save(
-        manager.create(Duel, {
-          challengerId: challenger.id,
-          opponentId: targetUserId,
-          status: DuelStatus.PENDING,
-        }),
-      );
-    });
+      });
 
     const acquired = await this.redis.tryAcquireLock(
       this.lockKey(challenger.id, targetUserId),
