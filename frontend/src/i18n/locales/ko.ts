@@ -106,6 +106,8 @@ export const ko = {
     emptyState: '아직 메시지가 없습니다',
     inputPlaceholder: '메시지를 입력하세요',
     send: '전송',
+    messageFailed: '전송 실패',
+    retry: '재전송',
     errors: {
       connection: '채팅 연결에 실패했습니다. 다시 접속을 시도합니다',
       rateLimit: '메시지를 너무 자주 보냈습니다. 잠시 후 다시 시도해주세요',

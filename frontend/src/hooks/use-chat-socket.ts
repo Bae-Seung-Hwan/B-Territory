@@ -4,7 +4,7 @@ import { API_BASE_URL } from '@/lib/api-client';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
 import { CHAT_ENABLED } from '@/config/feature-flags';
-import { useChatStore } from '@/store/useChatStore';
+import { useChatStore, type ChatFeedItem } from '@/store/useChatStore';
 import type { ChatMessageIncoming, ChatMessageOutgoing } from '@/types/chat-events';
 
 function makeId(): string {
@@ -16,6 +16,12 @@ function makeId(): string {
 // 공개 API라 호출부를 신뢰하지 않고 여기서도 한 번 더 막는다 — 없으면 초과분이
 // 로컬에는 "보낸 메시지"로 낙관적 추가되고 서버에서만 조용히 거부된다.
 const MAX_MESSAGE_LENGTH = 500;
+
+// ack 대기 상한(ms). 핸들러가 throw로 끝나면(레이트리밋 등) NestJS는 ack 콜백 자체를
+// 호출하지 않으므로, 서버 변경 없이 클라이언트가 스스로 타임아웃을 걸어 "ack가 이
+// 시간 안에 안 왔다 = 거부됐다"로 판정한다. 레이트리밋 윈도우(5초)보다 여유 있게 잡되
+// 사용자가 실패를 너무 오래 기다리지 않게 한다.
+const ACK_TIMEOUT_MS = 5_000;
 
 /**
  * 소켓 실패 종류 — 텍스트가 아니라 종류만 들고 있는다. 이 상태는 useEffect의 소켓
@@ -38,6 +44,7 @@ export type ChatSocketError = 'connection' | 'rateLimit' | 'unknown';
 export function useChatSocket() {
   const socketRef = useRef<Socket | null>(null);
   const addMessage = useChatStore((s) => s.addMessage);
+  const setMessageStatus = useChatStore((s) => s.setMessageStatus);
   const { profile, isAuthenticated } = useAuth();
   const [chatError, setChatError] = useState<ChatSocketError | null>(null);
 
@@ -98,25 +105,62 @@ export function useChatSocket() {
     return () => clearTimeout(timer);
   }, [chatError]);
 
+  /**
+   * ack로 이 메시지 하나의 성패를 판정한다. 성공하면 서버가 이미 돌려주는
+   * { status: 'ok' }가 ack로 그대로 온다(백엔드 변경 불필요). 실패(레이트리밋 등
+   * 핸들러 throw)는 ack 콜백 자체가 호출되지 않는다는 게 기존 문서화된 동작이라,
+   * 서버가 여전히 몰라도 socket.io-client의 timeout()이 ACK_TIMEOUT_MS 안에 ack가
+   * 안 오면 스스로 에러를 만들어 콜백에 넘긴다 — 순수 클라이언트 기능이다.
+   */
+  const emitWithAck = useCallback(
+    (id: string, payload: ChatMessageOutgoing) => {
+      const socket = socketRef.current;
+      if (!socket) {
+        // CHAT_ENABLED가 false라 소켓 자체가 없는 로컬 전용 모드 — 원래도 낙관적
+        // 표시만 하던 경로라 실패로 표시하지 않는다.
+        setMessageStatus(id, undefined);
+        return;
+      }
+      socket
+        .timeout(ACK_TIMEOUT_MS)
+        .emit('chat:message', payload, (err: Error | null) => {
+          setMessageStatus(id, err ? 'failed' : undefined);
+        });
+    },
+    [setMessageStatus],
+  );
+
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || !profile) return;
-      const payload: ChatMessageOutgoing = { text: trimmed };
-      socketRef.current?.emit('chat:message', payload);
-      // 서버가 발신자를 제외하고 릴레이하므로(PR #34), 내 메시지는 낙관적으로 직접 추가한다.
+      const id = makeId();
+      // 서버가 발신자를 제외하고 릴레이하므로(PR #34), 내 메시지는 낙관적으로 직접
+      // 추가한다. ack 결과가 오기 전까지는 'sending'으로 표시된다.
       addMessage({
-        id: makeId(),
+        id,
         mine: true,
         userId: profile.id,
         nickname: profile.nickname,
         team: profile.team,
         text: trimmed,
         at: new Date().toISOString(),
+        status: 'sending',
       });
+      emitWithAck(id, { text: trimmed });
     },
-    [addMessage, profile],
+    [addMessage, emitWithAck, profile],
   );
 
-  return { sendMessage, chatError };
+  /** 실패 표시된 메시지를 같은 id로 다시 보낸다 — 새 말풍선을 만들지 않는다. */
+  const retryMessage = useCallback(
+    (item: ChatFeedItem) => {
+      if (!item.mine || item.status !== 'failed') return;
+      setMessageStatus(item.id, 'sending');
+      emitWithAck(item.id, { text: item.text });
+    },
+    [emitWithAck, setMessageStatus],
+  );
+
+  return { sendMessage, retryMessage, chatError };
 }

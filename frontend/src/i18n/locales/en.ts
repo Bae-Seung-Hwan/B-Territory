@@ -111,6 +111,8 @@ export const en: Translations = {
     emptyState: 'No messages yet',
     inputPlaceholder: 'Type a message',
     send: 'Send',
+    messageFailed: 'Failed to send',
+    retry: 'Retry',
     errors: {
       connection: 'Chat connection failed. Retrying…',
       rateLimit: 'You sent messages too quickly. Please try again shortly',

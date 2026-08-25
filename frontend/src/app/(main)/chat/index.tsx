@@ -30,7 +30,7 @@ function chatErrorKey(error: ChatSocketError): string {
 export default function ChatScreen() {
   const { t } = useTranslation();
   const messages = useChatStore((s) => s.messages);
-  const { sendMessage, chatError } = useChatSocket();
+  const { sendMessage, retryMessage, chatError } = useChatSocket();
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<ChatFeedItem>>(null);
 
@@ -41,9 +41,18 @@ export default function ChatScreen() {
   };
 
   const renderItem = ({ item }: { item: ChatFeedItem }) => (
-    <View style={[styles.bubble, item.mine ? styles.mineBubble : styles.theirBubble]}>
-      {!item.mine && <Text style={styles.nickname}>{item.nickname}</Text>}
-      <Text style={styles.messageText}>{item.text}</Text>
+    <View style={item.mine ? styles.mineRow : styles.theirRow}>
+      <View style={[styles.bubble, item.mine ? styles.mineBubble : styles.theirBubble]}>
+        {!item.mine && <Text style={styles.nickname}>{item.nickname}</Text>}
+        <Text style={styles.messageText}>{item.text}</Text>
+      </View>
+      {item.status === 'failed' && (
+        <TouchableOpacity onPress={() => retryMessage(item)} hitSlop={6}>
+          <Text style={styles.failedText}>
+            {t('chat.messageFailed')} · {t('chat.retry')}
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 
@@ -104,9 +113,12 @@ const styles = StyleSheet.create({
   bannerText: { color: '#888', fontSize: 12, textAlign: 'center' },
   list: { padding: 16, gap: 8, flexGrow: 1 },
   emptyState: { color: '#555', fontSize: 14, textAlign: 'center', marginTop: 40 },
-  bubble: { maxWidth: '80%', padding: 10, borderRadius: 12, marginBottom: 4 },
+  mineRow: { alignItems: 'flex-end', marginBottom: 4 },
+  theirRow: { alignItems: 'flex-start', marginBottom: 4 },
+  bubble: { maxWidth: '80%', padding: 10, borderRadius: 12 },
   theirBubble: { backgroundColor: BrandColors.surface, alignSelf: 'flex-start' },
   mineBubble: { backgroundColor: BrandColors.accent, alignSelf: 'flex-end' },
+  failedText: { color: BrandColors.danger, fontSize: 11, marginTop: 2 },
   nickname: { color: '#999', fontSize: 11, marginBottom: 2 },
   messageText: { color: '#fff', fontSize: 15 },
   inputRow: {
