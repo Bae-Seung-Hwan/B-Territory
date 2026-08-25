@@ -56,7 +56,8 @@ const CAPITAL_FILL = withAlpha(CAPITAL_STROKE_COLOR, CAPITAL_FILL_ALPHA);
 // 값은 배열이다 — 부산 구 상당수가 섬·매립지 등으로 외곽 ring을 여러 개 갖는다(예:
 // 사하구 41개, 강서구 22개). 링 하나만 담으면 그 구가 수도가 됐을 때 조각 하나만
 // 금색으로 칠해지고 나머지는 그대로 남는다.
-const RINGS_BY_SIGUNGU_CODE = new Map<string, typeof DISTRICT_RINGS>();
+// export: 회귀 테스트가 코드 매핑이 어긋나지 않는지 직접 확인한다(DistrictPolygons.test.ts).
+export const RINGS_BY_SIGUNGU_CODE = new Map<string, typeof DISTRICT_RINGS>();
 for (const ring of DISTRICT_RINGS) {
   const code = toSigunguCode(ring.sigCd);
   if (!code) continue;

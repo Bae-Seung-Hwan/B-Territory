@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { BrandColors } from '@/constants/theme';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchSpotReviews } from '@/api/missions';
-import { useReviewMission } from '@/hooks/use-review-mission';
+import { useReviewMission, type MissionFeedback } from '@/hooks/use-review-mission';
 import { useTranslation } from '@/i18n';
 
 // BottomSheetTextInput의 blur 처리가 web에서 크래시 난다(register.tsx의 CountrySearchInput과
@@ -22,13 +22,14 @@ interface ReviewMissionSectionProps {
 
 /**
  * 리뷰 작성 미션 — 사전 체크인(GPS 50m) 후 별점+리뷰를 등록한다.
- * SpotDetailSheet가 `key={spot.id}`로 이 컴포넌트를 감싸 관광지가 바뀔 때마다 통째로
- * 새로 마운트한다 — 로컬 상태(체크인 여부·별점·본문)와 mutation 상태가 그걸로 함께
- * 초기화되므로 별도 reset 배선이 필요 없다.
+ * SpotDetailSheet가 시트를 닫을 때(spot → null)마다 이 컴포넌트를 통째로 언마운트한다 —
+ * 별점·본문 같은 로컬 입력 상태는 그걸로 함께 초기화되므로 별도 reset 배선이 필요 없다.
+ * 체크인 여부만은 예외로, 언마운트를 견디도록 useReviewMission이 기기에 따로 보존한다
+ * (그러지 않으면 체크인 후 시트를 닫고 자리를 옮기는 흐름 자체가 불가능해진다).
  */
 export function ReviewMissionSection({ spotId, coords }: ReviewMissionSectionProps) {
   const { t } = useTranslation();
-  const { checkin, review, checkinFeedback, reviewFeedback } = useReviewMission(spotId);
+  const { checkin, review, checkedIn, checkinFeedback, reviewFeedback } = useReviewMission(spotId);
   const [rating, setRating] = useState(0);
   const [content, setContent] = useState('');
 
@@ -36,8 +37,6 @@ export function ReviewMissionSection({ spotId, coords }: ReviewMissionSectionPro
     queryKey: queryKeys.missions.reviews(spotId),
     queryFn: () => fetchSpotReviews(spotId),
   });
-
-  const checkedIn = checkin.isSuccess;
   const submitted = review.isSuccess;
 
   return (
@@ -64,7 +63,9 @@ export function ReviewMissionSection({ spotId, coords }: ReviewMissionSectionPro
           />
           {!coords && <Text style={styles.hint}>{t('map.missions.GPS_VISIT.blocked')}</Text>}
           {checkinFeedback && (
-            <Text style={[styles.feedback, styles.feedbackError]}>{checkinFeedback.text}</Text>
+            <Text style={[styles.feedback, feedbackStyle(checkinFeedback.tone)]}>
+              {checkinFeedback.text}
+            </Text>
           )}
         </View>
       )}
@@ -94,7 +95,9 @@ export function ReviewMissionSection({ spotId, coords }: ReviewMissionSectionPro
             loading={review.isPending}
           />
           {reviewFeedback && (
-            <Text style={[styles.feedback, styles.feedbackError]}>{reviewFeedback.text}</Text>
+            <Text style={[styles.feedback, feedbackStyle(reviewFeedback.tone)]}>
+              {reviewFeedback.text}
+            </Text>
           )}
         </View>
       )}
@@ -104,6 +107,10 @@ export function ReviewMissionSection({ spotId, coords }: ReviewMissionSectionPro
       )}
     </View>
   );
+}
+
+function feedbackStyle(tone: MissionFeedback['tone']) {
+  return tone === 'success' ? styles.feedbackSuccess : styles.feedbackError;
 }
 
 const styles = StyleSheet.create({
