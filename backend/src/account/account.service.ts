@@ -50,8 +50,23 @@ export class AccountService {
    * 탈퇴자가 계속 "접속 중"으로 보여 결투 신청이 들어오고, 그 신청은 이미 사라진 유저를
    * 참조해 FK 위반으로 터진다. 소켓을 먼저 끊는 것도 같은 이유다 — 살아 있는 소켓이
    * location:update 한 번이면 방금 지운 geo 키를 되살린다.
+   *
+   * 다만 그 창은 Firebase 앞이 아니라 **커밋 직후**부터 열린다. requestDuel이 상대를
+   * 통과시키는 실질적 관문이 geo가 아니라 meta(getUserMeta)라, 커밋과 geo·meta 삭제
+   * 사이에 들어온 신청은 전부 FK 위반이 된다. 그 사이에 결투 뒷정리(락 해제·알림)가
+   * 끼어 있으면 창이 결투 수에 비례해 늘어나므로, geo·meta만 트랜잭션보다 **먼저**
+   * 걷어내 창 자체를 없앤다(아래 removeFromDiscovery).
    */
   async deleteAccount(user: User): Promise<void> {
+    // 탐지 대상에서 먼저 내린다. 이 시점부터 requestDuel이 이 유저를
+    // DUEL_TARGET_LOCATION_UNKNOWN으로 깔끔히 거절하므로, 아래 트랜잭션이 커밋되는
+    // 순간 생길 수 있는 "이미 사라진 유저를 참조하는 신청"이 원천 차단된다.
+    //
+    // 트랜잭션보다 먼저 지워도 손해가 없다 — 롤백되면 탈퇴자는 계정이 살아 있는 채로
+    // 잠시 오프라인으로 보일 뿐이고, 다음 location:update 한 번에 원상복구된다.
+    // (반대로 커밋 뒤에 지우면 그 사이 신청이 FK 위반 500으로 터진다.)
+    await this.removeFromDiscovery(user.id);
+
     // 진행 중인 결투 종료와 users 행 삭제를 한 트랜잭션에 묶는다. 종료 처리가
     // requestDuel과 같은 advisory lock을 잡으므로, 그 사이에 이 유저를 상대로 새 결투가
     // 만들어져 다시 참가자 한쪽이 NULL인 활성 행으로 남는 창이 닫힌다.
@@ -75,18 +90,52 @@ export class AccountService {
 
     // Redis 정리는 실패해도 탈퇴를 되돌리지 않는다 — 계정은 이미 사라졌고 남은 키는
     // 전부 TTL로 소멸한다. 다만 조용히 넘기지 않고 로그로 남긴다.
-    try {
-      await this.redis.purgeUserKeys(user.id);
-      // 개인 랭킹 캐시에는 닉네임이 박혀 있고 끝난 시즌은 TTL이 24시간이라, 지우지
-      // 않으면 "탈퇴 즉시 노출되지 않는다"는 약속이 하루 동안 깨진다.
-      await this.hallOfFame.invalidateUserRanking();
-    } catch (err) {
-      this.logger.warn(
-        `탈퇴 후 Redis 정리 실패 (userId=${user.id}): ${(err as Error).message}`,
-      );
-    }
+    //
+    // 둘은 서로 독립적이라 반드시 따로 처리한다. 직렬로 await하면 키 정리가 실패했을 때
+    // 랭킹 캐시 무효화가 통째로 건너뛰어지고, 그 캐시에는 닉네임이 박혀 있으며 끝난
+    // 시즌 TTL이 24시간이라 "탈퇴 즉시 노출되지 않는다"는 약속이 하루 동안 깨진다.
+    await this.settleQuietly(user.id, [
+      ['Redis 키 정리', this.redis.purgeUserKeys(user.id)],
+      ['개인 랭킹 캐시 무효화', this.hallOfFame.invalidateUserRanking()],
+    ]);
 
     await this.firebaseService.deleteUser(user.firebaseUid);
+  }
+
+  /**
+   * geo·meta에서 유저를 내려 결투 탐지 대상에서 제외한다.
+   *
+   * 실패해도 탈퇴를 막지 않는다 — 남은 키는 TTL로 사라지고, 그때까지의 결투 신청은
+   * FK 위반으로 거절될 뿐(상대에게 500) 탈퇴 자체는 유효하다. purgeUserKeys가 뒤에서
+   * 같은 키를 한 번 더 지우므로 여기서의 실패는 대개 그쪽에서 회수된다.
+   */
+  private async removeFromDiscovery(userId: string): Promise<void> {
+    try {
+      await this.redis.geoRemove(userId);
+    } catch (err) {
+      this.logger.warn(
+        `탈퇴 전 위치 정보 제거 실패 (userId=${userId}): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * 탈퇴 커밋 이후의 뒷정리들을 **서로 독립적으로** 실행하고, 실패는 로그로만 남긴다.
+   * 하나가 실패해도 나머지는 반드시 수행되어야 하므로 allSettled를 쓴다.
+   */
+  private async settleQuietly(
+    userId: string,
+    tasks: [string, Promise<unknown>][],
+  ): Promise<void> {
+    const results = await Promise.allSettled(tasks.map(([, task]) => task));
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        this.logger.warn(
+          `탈퇴 후 ${tasks[i][0]} 실패 (userId=${userId}): ` +
+            `${(result.reason as Error)?.message ?? String(result.reason)}`,
+        );
+      }
+    });
   }
 
   /**

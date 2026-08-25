@@ -29,7 +29,10 @@ describe('AccountService.deleteAccount', () => {
     const firebaseService = {
       deleteUser: jest.fn().mockResolvedValue(undefined),
     };
-    const redis = { purgeUserKeys: jest.fn().mockResolvedValue(undefined) };
+    const redis = {
+      purgeUserKeys: jest.fn().mockResolvedValue(undefined),
+      geoRemove: jest.fn().mockResolvedValue(undefined),
+    };
     const duelsService = {
       terminateActiveDuelsFor: jest.fn().mockResolvedValue([]),
       settleTerminatedDuels: jest.fn().mockResolvedValue(undefined),
@@ -92,6 +95,66 @@ describe('AccountService.deleteAccount', () => {
     redis.purgeUserKeys.mockRejectedValue(new Error('redis down'));
 
     await expect(service.deleteAccount(user)).resolves.toBeUndefined();
+  });
+
+  /**
+   * 키 정리와 랭킹 캐시 무효화는 서로 독립적이다. 직렬로 await하면 앞이 실패했을 때
+   * 뒤가 통째로 건너뛰어지는데, 그 캐시에는 닉네임이 박혀 있고 끝난 시즌 TTL이
+   * 24시간이라 "탈퇴 즉시 노출되지 않는다"는 약속이 하루 동안 깨진다.
+   */
+  it('Redis 키 정리가 실패해도 개인 랭킹 캐시는 무효화한다', async () => {
+    const { service, redis, hallOfFame } = make();
+    redis.purgeUserKeys.mockRejectedValue(new Error('redis down'));
+
+    await expect(service.deleteAccount(user)).resolves.toBeUndefined();
+    expect(hallOfFame.invalidateUserRanking).toHaveBeenCalled();
+  });
+
+  // 반대 방향도 같다 — 캐시 무효화가 실패해도 키 정리는 수행되어야 한다.
+  it('랭킹 캐시 무효화가 실패해도 Redis 키는 정리한다', async () => {
+    const { service, redis, hallOfFame } = make();
+    hallOfFame.invalidateUserRanking.mockRejectedValue(new Error('hof down'));
+
+    await expect(service.deleteAccount(user)).resolves.toBeUndefined();
+    expect(redis.purgeUserKeys).toHaveBeenCalledWith('user-1');
+  });
+
+  /**
+   * requestDuel이 상대를 통과시키는 관문은 geo가 아니라 meta(getUserMeta)다. 커밋과
+   * geo·meta 삭제 사이에 들어온 신청은 이미 사라진 유저를 참조해 FK 위반으로 터지므로,
+   * 그 창이 아예 생기지 않도록 트랜잭션보다 먼저 내린다.
+   */
+  it('결투 탐지에서 내리는 것을 users 행 삭제 트랜잭션보다 먼저 한다', async () => {
+    const { service, redis, duelsService, manager } = make();
+    const order: string[] = [];
+    redis.geoRemove.mockImplementation(() => {
+      order.push('geoRemove');
+      return Promise.resolve();
+    });
+    duelsService.terminateActiveDuelsFor.mockImplementation(() => {
+      order.push('terminate');
+      return Promise.resolve([]);
+    });
+    manager.delete.mockImplementation(() => {
+      order.push('delete');
+      return Promise.resolve({});
+    });
+
+    await service.deleteAccount(user);
+
+    expect(redis.geoRemove).toHaveBeenCalledWith('user-1');
+    expect(order).toEqual(['geoRemove', 'terminate', 'delete']);
+  });
+
+  // 위치 정보 제거가 실패한다고 탈퇴를 막으면, 남은 키는 어차피 TTL로 사라지는데
+  // 계정만 못 지우는 상태가 된다. purgeUserKeys가 뒤에서 같은 키를 한 번 더 지운다.
+  it('위치 정보 제거가 실패해도 탈퇴는 계속한다', async () => {
+    const { service, redis, manager, firebaseService } = make();
+    redis.geoRemove.mockRejectedValue(new Error('redis down'));
+
+    await expect(service.deleteAccount(user)).resolves.toBeUndefined();
+    expect(manager.delete).toHaveBeenCalledWith(User, { id: 'user-1' });
+    expect(firebaseService.deleteUser).toHaveBeenCalledWith('fuid-1');
   });
 
   /**
