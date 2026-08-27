@@ -1,5 +1,4 @@
 ﻿mission_id,title,address,map_x,map_y,image_url,content_type_id,content_type_name,sigungu_code,description,homepage,source,source_id,is_outdoor
-MISSION_0001,라메르호텔,부산광역시 동구 조방로34번길 9,129.062319709,35.1405246178,http://tong.visitkorea.or.kr/cms/resource/71/3592171_image2_1.jpg,32,숙박,5,,,kto_area_based,142861,0
 MISSION_0002,국청사(부산),부산광역시 금정구 북문로 42,129.0549922383,35.2538895578,http://tong.visitkorea.or.kr/cms/resource/82/3552382_image2_1.jpg,12,관광지,2,,,kto_area_based,298099,1
 MISSION_0003,광안리 M(Marvelous) 드론 라이트쇼,부산광역시 수영구 광안해변로 219 (광안동),129.1185477876,35.1538130576,http://tong.visitkorea.or.kr/cms/resource/12/3518612_image2_1.jpeg,15,축제공연행사,12,,,kto_area_based,2786391,1
 MISSION_0004,몽작,부산광역시 영도구 남항서로 36,129.0361429493,35.0848414795,,39,음식점,14,,,kto_area_based,2862337,0
@@ -9,7 +8,6 @@ MISSION_0007,송도스카이파크,부산광역시 서구 암남공원로 181 (�
 MISSION_0008,옥련선원,부산광역시 수영구 광남로257번길 58,129.1266024351,35.161379026,http://tong.visitkorea.or.kr/cms/resource/58/3589758_image2_1.jpg,12,관광지,12,,,kto_area_based,128134,1
 MISSION_0009,금련산,부산광역시 수영구 광안동,129.0974161159,35.1602230601,http://tong.visitkorea.or.kr/cms/resource/43/3589743_image2_1.jpg,12,관광지,12,,,kto_area_based,129140,1
 MISSION_0010,두도,부산광역시 서구 암남동,129.0148985467,35.0490923097,http://tong.visitkorea.or.kr/cms/resource/28/3589728_image2_1.jpg,12,관광지,11,,,kto_area_based,2614716,1
-MISSION_0011,비치모텔,부산광역시 영도구 하리해안길 10-9 비치모텔,129.0813283358,35.0692440569,http://tong.visitkorea.or.kr/cms/resource/64/2686464_image2_1.jpg,32,숙박,14,,,kto_area_based,2595879,0
 MISSION_0012,명지시장,부산광역시 강서구 신포길 13-10 (명지동),128.9317096042,35.1129197501,,38,쇼핑,1,,,kto_area_based,2742601,0
 MISSION_0013,탐복,부산광역시 기장군 일광면 문오성길 31,129.2577487848,35.2829039614,,39,음식점,3,,,kto_area_based,2775543,0
 MISSION_0014,온든해,부산광역시 강서구 공항로239번길 29,128.9419360073,35.1307346091,http://tong.visitkorea.or.kr/cms/resource/84/3587884_image2_1.jpg,39,음식점,1,,,kto_area_based,2855623,0
@@ -54,22 +52,10 @@ MISSION_0052,서동미로시장,부산광역시 금정구 서동로141번길 16 
 MISSION_0053,온천천 빛 축제,부산광역시 동래구 중앙대로 1324 (온천동),129.0785081817,35.2056537329,http://tong.visitkorea.or.kr/cms/resource/72/3574272_image2_1.jpg,15,축제공연행사,6,,,kto_area_based,3434800,1
 MISSION_0054,브라운피크닉,부산광역시 기장군 철마면 개좌로 763-25,129.1487058779,35.2691645819,http://tong.visitkorea.or.kr/cms/resource/15/2753515_image2_1.jpg,39,음식점,3,,,kto_area_based,2752996,0
 MISSION_0055,장기려기념 더 나눔센터,부산광역시 동구 영초윗길 48,129.0327117725,35.1185793062,http://tong.visitkorea.or.kr/cms/resource/67/3070867_image2_1.JPG,14,문화시설,5,,,kto_area_based,1945293,0
-MISSION_0056,아난티 앳 부산 코브,부산광역시 기장군 기장읍 기장해안로 268-32,129.2283259162,35.1979934802,http://tong.visitkorea.or.kr/cms/resource/21/3512521_image2_1.jpg,32,숙박,3,,,kto_area_based,2503780,1
 MISSION_0057,벡스코(BEXCO),부산광역시 해운대구 APEC로 55,129.1363347095,35.1691116738,http://tong.visitkorea.or.kr/cms/resource/55/3020355_image2_1.jpg,14,문화시설,16,,,kto_area_based,130668,0
 MISSION_0058,카페 만디,부산광역시 사하구 오작로 104-7 (괴정동),129.0047758093,35.1003836071,http://tong.visitkorea.or.kr/cms/resource/06/2852406_image2_1.jpg,39,음식점,10,,,kto_area_based,2852408,0
 MISSION_0059,더무빙 카라반,부산광역시 기장군 장안읍 해맞이로 290,129.2701216022,35.3226997305,http://tong.visitkorea.or.kr/cms/resource/81/2748081_image2_1.jpg,28,레포츠,3,,,kto_area_based,2747589,1
 MISSION_0060,제이스글램핑,부산광역시 기장군 일광읍 이천8길 132-20,129.2338482308,35.2777040982,http://tong.visitkorea.or.kr/cms/resource/98/2741698_image2_1.jpg,28,레포츠,3,,,kto_area_based,2741526,1
-MISSION_0061,블루스토리 호텔,부산광역시 해운대구 해운대해변로237번길 11 (우동),129.1575108976,35.1599464255,http://tong.visitkorea.or.kr/cms/resource/24/3016424_image2_1.jpg,32,숙박,16,,,kto_area_based,3016434,0
-MISSION_0062,엘시티 레지던스,"부산광역시 해운대구 달맞이길 30 (중동, 엘시티)",129.1683126815,35.1619491796,http://tong.visitkorea.or.kr/cms/resource/57/2928957_image2_1.jpg,32,숙박,16,,,kto_area_based,2925797,0
-MISSION_0063,호텔 프렌치코드,부산광역시 금정구 중앙대로1805번길 16 (구서동),129.0923197882,35.2449384744,http://tong.visitkorea.or.kr/cms/resource/32/2698332_image2_1.jpg,32,숙박,2,,,kto_area_based,2701011,0
-MISSION_0064,코모도 호텔 부산,부산광역시 중구 중구로 151 (영주동),129.03530348,35.108816558,http://tong.visitkorea.or.kr/cms/resource/49/2722649_image2_1.JPG,32,숙박,15,,,kto_area_based,142852,1
-MISSION_0065,브라운도트호텔 서면범천점,부산광역시 부산진구 황령대로7번길 20-11 (범천동),129.0606113054,35.1485125805,http://tong.visitkorea.or.kr/cms/resource/19/3084219_image2_1.jpg,32,숙박,7,,,kto_area_based,3083398,0
-MISSION_0066,브라운도트호텔 송정점,부산광역시 해운대구 송정광어골로 30 (송정동),129.19734025,35.1787978313,http://tong.visitkorea.or.kr/cms/resource/07/3083407_image2_1.jpg,32,숙박,16,,,kto_area_based,3083414,0
-MISSION_0067,크라운 하버 호텔 부산,부산광역시 중구 중앙대로 114 (중앙동4가),129.0368450457,35.1076056112,http://tong.visitkorea.or.kr/cms/resource/30/3054130_image2_1.jpg,32,숙박,15,,,kto_area_based,3044634,1
-MISSION_0068,마티에 오시리아,부산광역시 기장군 기장읍 동부산관광7로 17,129.2145134896,35.1884970648,http://tong.visitkorea.or.kr/cms/resource/44/3075344_image2_1.JPG,32,숙박,3,,,kto_area_based,3075356,0
-MISSION_0069,제이비디자인호텔,부산광역시 해운대구 구남로12번길 31 (우동),129.1580746892,35.1617295697,http://tong.visitkorea.or.kr/cms/resource/18/3083418_image2_1.jpg,32,숙박,16,,,kto_area_based,3083428,0
-MISSION_0070,토요코인호텔 부산서면,부산광역시 부산진구 서전로 39 (전포동),129.0640801887,35.1580060259,http://tong.visitkorea.or.kr/cms/resource/49/3476749_image2_1.jpg,32,숙박,7,,,kto_area_based,1162526,1
-MISSION_0071,브라운도트호텔 정관점,부산광역시 기장군 정관읍 산단1로 98-31,129.1817794758,35.3161515953,http://tong.visitkorea.or.kr/cms/resource/82/3028482_image2_1.JPG,32,숙박,3,,,kto_area_based,3028497,0
 MISSION_0072,야스마루,부산광역시 부산진구 중앙대로756번길 24 (부전동),129.0619942225,35.1593225066,http://tong.visitkorea.or.kr/cms/resource/14/2773614_image2_1.jpg,39,음식점,7,,,kto_area_based,2773623,0
 MISSION_0073,듀스포레,부산광역시 남구 황령대로319번가길 193 (대연동),129.0897781585,35.1504934531,http://tong.visitkorea.or.kr/cms/resource/40/2891740_image2_1.jpg,39,음식점,4,,,kto_area_based,2891745,0
 MISSION_0074,조현화랑,부산광역시 해운대구 달맞이길65번길 171,129.1795840631,35.1568860663,http://tong.visitkorea.or.kr/cms/resource/85/3568585_image2_1.jpg,14,문화시설,16,,,kto_area_based,130642,0
@@ -89,7 +75,6 @@ MISSION_0087,영남냉면밀면,부산광역시 서구 보수대로201번길 7,1
 MISSION_0088,서대시장족발,부산광역시 서구 대영로 43-2,129.016318996,35.1097049981,http://tong.visitkorea.or.kr/cms/resource/90/2867590_image2_1.JPG,39,음식점,11,,,kto_area_based,2867598,0
 MISSION_0089,양산국밥,부산광역시 해운대구 좌동로10번길 75,129.1727315789,35.1678735982,http://tong.visitkorea.or.kr/cms/resource/60/2867160_image2_1.JPG,39,음식점,16,,,kto_area_based,2867167,1
 MISSION_0090,부곡상가시장,부산광역시 금정구 부곡로 107,129.0914815074,35.2255211909,http://tong.visitkorea.or.kr/cms/resource/95/3561995_image2_1.jpg,38,쇼핑,2,,,kto_area_based,2763881,0
-MISSION_0091,더펫텔프리미엄스위트,부산광역시 해운대구 해운대해변로197번길 12,129.1531418525,35.1592408683,http://tong.visitkorea.or.kr/cms/resource/16/2754616_image2_1.jpg,32,숙박,16,,,kto_area_based,2754601,0
 MISSION_0092,부산 영화의 거리,"부산광역시 해운대구 마린시티1로 91 (우동, 마린시티두산위브포세이돈)",129.1444371716,35.1549495207,http://tong.visitkorea.or.kr/cms/resource/43/2947043_image2_1.jpg,12,관광지,16,,,kto_area_based,2946508,1
 MISSION_0093,조명의거리,부산광역시 중구 국제시장2길 5,129.0283348915,35.0996591215,http://tong.visitkorea.or.kr/cms/resource/33/3561933_image2_1.jpg,38,쇼핑,15,,,kto_area_based,1013721,0
 MISSION_0094,아리랑거리,부산광역시 중구 광복로35번길 11 (신창동3가),129.0287931674,35.100281283,http://tong.visitkorea.or.kr/cms/resource/26/3561926_image2_1.jpg,38,쇼핑,15,,,kto_area_based,1013709,0
@@ -101,16 +86,13 @@ MISSION_0099,해운대기와집대구탕,부산광역시 해운대구 달맞이�
 MISSION_0100,디저트시네마,부산광역시 연제구 쌍미천로 32-1 (연산동),129.0905190532,35.1763072423,http://tong.visitkorea.or.kr/cms/resource/10/2759810_image2_1.jpg,39,음식점,13,,,kto_area_based,2759629,0
 MISSION_0101,금수복국 해운대본점,부산광역시 해운대구 중동1로43번길 23,129.1645185529,35.1624573857,,39,음식점,16,,,kto_keyword_search,2778487,0
 MISSION_0102,싱싱뽈락회 해운대본점,부산광역시 해운대구 해운대해변로209번나길 64 (우동),129.1571359371,35.1597103343,http://tong.visitkorea.or.kr/cms/resource/50/2860850_image2_1.jpg,39,음식점,16,,,kto_keyword_search,2860851,0
-MISSION_0103,팝콘 호스텔 해운대점,부산광역시 해운대구 해운대해변로 321,129.165307371,35.1625407241,,32,숙박,16,,,kto_keyword_search,2613988,0
 MISSION_0104,하가원 해운대점,부산광역시 해운대구 좌동로91번길 28 (좌동),129.1742979566,35.1734396708,http://tong.visitkorea.or.kr/cms/resource/17/2875817_image2_1.JPG,39,음식점,16,,,kto_keyword_search,2875819,0
 MISSION_0105,해운대 관광특구,부산광역시 해운대구,129.1598690678,35.1584383046,http://tong.visitkorea.or.kr/cms/resource/68/3026468_image2_1.JPG,12,관광지,16,,,kto_keyword_search,127004,1
 MISSION_0106,해운대 그린레일웨이 (미포~송정 구간),부산광역시 해운대구 청사포로 116 (중동),129.1914273569,35.1612857933,http://tong.visitkorea.or.kr/cms/resource/37/2822337_image2_1.png,12,관광지,16,,,kto_keyword_search,2822343,1
 MISSION_0107,해운대 동백섬,부산광역시 해운대구 동백로 67,129.1521809693,35.153991438,http://tong.visitkorea.or.kr/cms/resource/47/3350847_image2_1.jpg,12,관광지,16,,,kto_keyword_search,987810,1
 MISSION_0108,해운대 로데오거리,부산광역시 해운대구 좌동순환로 473,129.1696430809,35.1634129289,http://tong.visitkorea.or.kr/cms/resource/95/3032195_image2_1.JPG,38,쇼핑,16,,,kto_keyword_search,1304431,0
-MISSION_0109,해운대 영무파라드호텔,부산광역시 해운대구 해운대해변로298번길 25 (중동),129.1665100882,35.1609381479,http://tong.visitkorea.or.kr/cms/resource/20/2705420_image2_1.jpg,32,숙박,16,,,kto_keyword_search,2705418,0
 MISSION_0110,해운대리버크루즈,부산광역시 해운대구 수영강변대로 85,129.1273244146,35.1679171964,http://tong.visitkorea.or.kr/cms/resource/26/3041326_image2_1.JPG,12,관광지,16,,,kto_keyword_search,2705325,1
 MISSION_0111,해운대문화회관,부산광역시 해운대구 양운로 97 해운대문화회관,129.1740313744,35.1711815853,http://tong.visitkorea.or.kr/cms/resource/27/3026627_image2_1.JPG,14,문화시설,16,,,kto_keyword_search,1748157,0
-MISSION_0112,해운대센텀호텔,부산광역시 해운대구 센텀3로 20 (우동),129.1328433813,35.1678506389,http://tong.visitkorea.or.kr/cms/resource/14/2719514_image2_1.jpg,32,숙박,16,,,kto_keyword_search,2663379,0
 MISSION_0113,해운대수목원,부산광역시 해운대구광역시 석대동 26,129.1326250124,35.2304408466,http://tong.visitkorea.or.kr/cms/resource/91/3353991_image2_1.jpg,12,관광지,16,,,kto_keyword_search,2782782,1
 MISSION_0114,해운대온천센터,부산광역시 해운대구 중동2로 16,129.1645768542,35.1634406103,http://tong.visitkorea.or.kr/cms/resource/17/3026517_image2_1.JPG,12,관광지,16,,,kto_keyword_search,126108,1
 MISSION_0115,해운대하얀오징어집,부산광역시 해운대구 달맞이길50번길 4,129.1700125548,35.1611742976,http://tong.visitkorea.or.kr/cms/resource/34/2858934_image2_1.jpg,39,음식점,16,,,kto_keyword_search,2858936,0
