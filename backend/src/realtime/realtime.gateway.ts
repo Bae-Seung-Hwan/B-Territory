@@ -25,7 +25,7 @@ import {
   userRoomOf,
   WsSessionsService,
 } from '../common/ws/ws-sessions.service';
-import { DuelsService } from '../duels/duels.service';
+import { DuelsService, duelPenaltyPayload } from '../duels/duels.service';
 import { LocationUpdateDto } from '../duels/dto/location-update.dto';
 import { DuelRequestDto } from '../duels/dto/duel-request.dto';
 import { DuelRespondDto } from '../duels/dto/duel-respond.dto';
@@ -270,7 +270,8 @@ export class RealtimeGateway
     try {
       const expired = await this.duelsService.expireDuel(duelId);
       if (!expired) return;
-      const payload = { duelId };
+      // 무응답도 거절과 같은 금액이 깎인다 — 응답하지 않은 쪽(opponentId)이 대상이다.
+      const payload = duelPenaltyPayload(expired);
       await Promise.all([
         this.notifyUser(challengerId, 'duel:expired', payload),
         this.notifyUser(opponentId, 'duel:expired', payload),
@@ -301,7 +302,11 @@ export class RealtimeGateway
     const duel = await this.duelsService.respondDuel(duelId, user.id, accept);
 
     const event = accept ? 'duel:accepted' : 'duel:rejected';
-    const payload = { duelId: duel.id };
+    // 거절 payload는 양쪽에 동일하다 — 누가 점수를 깎이고 보호막을 얻었는지는
+    // penalizedUserId로 실어보내고 클라이언트가 자기 id와 비교한다(duelPenaltyPayload 주석).
+    // shieldUntil은 클라이언트 타이머용 안내값이고, 재신청 가능 여부 판정은 언제나
+    // requestDuel이 Redis를 다시 읽어 내린다.
+    const payload = accept ? { duelId: duel.id } : duelPenaltyPayload(duel);
     client.emit(event, payload);
     await this.notifyUser(duel.challengerId, event, payload);
 

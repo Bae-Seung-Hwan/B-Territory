@@ -460,6 +460,42 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(`penalty:${userId}`);
   }
 
+  private duelShieldKey(userId: string): string {
+    return `duel:shield:${userId}`;
+  }
+
+  /**
+   * 결투 거절 보호막 — 이 키가 살아 있는 동안 이 유저에게는 결투를 걸 수 없다.
+   *
+   * 페널티(penalty:*)와 방향이 반대다. 페널티는 "너는 결투를 못 한다"이고 보호막은
+   * "남이 너에게 결투를 못 건다"라, 보호막 중에도 본인은 얼마든지 신청할 수 있다.
+   * 다만 신청하는 순간 clearDuelShield로 걷힌다(duels.service#requestDuel).
+   *
+   * 거절할 때마다 TTL을 새로 덮어쓴다 — 연속 거절이 보호 기간을 연장하는 건 의도된
+   * 동작이다. 그 대가로 거절마다 점수가 깎이므로 무한정 숨어 있을 수는 없다.
+   */
+  async setDuelShield(userId: string, ttlSeconds: number): Promise<void> {
+    await this.client.set(
+      this.duelShieldKey(userId),
+      '1',
+      'EX',
+      Math.max(1, Math.floor(ttlSeconds)),
+    );
+  }
+
+  /** 남은 보호 시간(초). 보호막이 없으면 0 — 호출측이 남은 시간을 안내 문구에 쓴다. */
+  async getDuelShieldTtl(userId: string): Promise<number> {
+    // TTL은 키가 없으면 -2, TTL이 없으면 -1을 준다. setDuelShield는 항상 EX를 걸므로
+    // 음수는 전부 "보호막 없음"으로 접는다.
+    const ttl = await this.client.ttl(this.duelShieldKey(userId));
+    return ttl > 0 ? ttl : 0;
+  }
+
+  /** 보호막 해제. 실제로 걷어낸 경우에만 true (호출측이 로그·알림 여부를 가른다). */
+  async clearDuelShield(userId: string): Promise<boolean> {
+    return (await this.client.del(this.duelShieldKey(userId))) > 0;
+  }
+
   /**
    * 탈퇴 시 해당 유저의 Redis 흔적을 모두 지운다.
    *
@@ -477,6 +513,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       this.client
         .pipeline()
         .del(`penalty:${userId}`)
+        .del(this.duelShieldKey(userId))
         .del(this.notifyKey(userId))
         .del(`report:rate:${userId}`)
         // "나를 차단한 사람" 캐시와 그 버전 키(moderation.service).

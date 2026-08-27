@@ -53,6 +53,13 @@ export class Duel {
   @Column({ type: 'uuid', nullable: true })
   loserId: string | null;
 
+  /**
+   * 확정된 점수 증감의 **크기**(항상 양수, 명목값).
+   * - COMPLETED: 승자 +scoreDelta, 패자 -scoreDelta
+   * - REJECTED / EXPIRED: 응답하지 않은 쪽(opponentId)에 -scoreDelta. 승자가 없으므로
+   *   winnerId/loserId는 null이다. 차감이 실제로 일어난 행에만 채워지므로, 상대가 이미
+   *   탈퇴해 깎을 대상이 없었던 만료나 탈퇴로 끝난 결투에서는 null로 남는다
+   */
   @Column({ type: 'int', nullable: true })
   scoreDelta: number | null;
 

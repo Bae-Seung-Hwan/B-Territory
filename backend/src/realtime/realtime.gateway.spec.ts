@@ -160,6 +160,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
       duelsService as unknown as DuelsService,
       minigameService as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
     const error = jest
       .spyOn(gateway['logger'], 'error')
@@ -260,6 +262,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
         discardSession: jest.fn(),
       } as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
 
     await gateway.handleDuelAccept(mockSocket() as never, { duelId: duel.id });
@@ -299,6 +303,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
         }),
       } as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
 
     const result = await gateway.handleGameSubmit(mockSocket() as never, {
