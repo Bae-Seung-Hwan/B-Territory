@@ -11,6 +11,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { fetchSpotDetail, type Spot } from '@/api/spots';
 import { availableMissions, missionButtonKey } from '@/constants/claimMissions';
 import { useClaimAttempt } from '@/hooks/use-claim-attempt';
+import { ReviewMissionSection } from '@/components/map/ReviewMissionSection';
 import { useTranslation } from '@/i18n';
 
 interface SpotDetailSheetProps {
@@ -110,6 +111,8 @@ export const SpotDetailSheet = forwardRef<BottomSheetModal, SpotDetailSheetProps
                   {attemptFeedback.text}
                 </Text>
               )}
+
+              <ReviewMissionSection key={spot.id} spotId={spot.id} coords={coords} />
 
               {isLoading && <ActivityIndicator style={styles.loading} color={BrandColors.accent} />}
 
