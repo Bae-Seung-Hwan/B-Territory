@@ -78,21 +78,7 @@ describe('AppleSignInButton', () => {
     expect(queryByTestId('apple-button')).toBeNull();
   });
 
-  it('동의를 거부하면(requestConsent가 false) Apple 로그인을 시작하지 않는다', async () => {
-    Platform.OS = 'ios';
-    mockedIsAvailable.mockResolvedValue(true);
-    const requestConsent = jest.fn().mockResolvedValue(false);
-    const { findByTestId } = await render(<AppleSignInButton requestConsent={requestConsent} />);
-
-    const button = await findByTestId('apple-button');
-    await fireEvent.press(button);
-
-    expect(requestConsent).toHaveBeenCalledTimes(1);
-    expect(mockedSignInAsync).not.toHaveBeenCalled();
-    expect(finishSocialLogin).not.toHaveBeenCalled();
-  });
-
-  it('동의하면(requestConsent가 true) Apple 로그인을 진행하고 성공 시 finishSocialLogin을 호출한다', async () => {
+  it('동의를 먼저 묻지 않고 곧장 Apple 로그인을 시작한다 (동의는 신규 유저로 판명된 뒤 useFinishSocialLogin 안에서 처리)', async () => {
     Platform.OS = 'ios';
     mockedIsAvailable.mockResolvedValue(true);
     const requestConsent = jest.fn().mockResolvedValue(true);
@@ -102,8 +88,18 @@ describe('AppleSignInButton', () => {
     await fireEvent.press(button);
 
     await waitFor(() => expect(finishSocialLogin).toHaveBeenCalledTimes(1));
+    expect(requestConsent).not.toHaveBeenCalled();
     expect(mockedSignInAsync).toHaveBeenCalledTimes(1);
     expect(mockedSignInWithCredential).toHaveBeenCalledWith({}, 'fake-firebase-credential');
     expect(handleAuthError).not.toHaveBeenCalled();
+  });
+
+  it('requestConsent를 그대로 useFinishSocialLogin에 넘긴다', async () => {
+    Platform.OS = 'ios';
+    mockedIsAvailable.mockResolvedValue(true);
+    const requestConsent = jest.fn().mockResolvedValue(true);
+    await render(<AppleSignInButton requestConsent={requestConsent} />);
+
+    expect(mockedUseFinishSocialLogin).toHaveBeenCalledWith(requestConsent);
   });
 });

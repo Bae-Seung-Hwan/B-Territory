@@ -75,7 +75,7 @@ export default function LoginScreen() {
   };
 
   const handleAuthError = useHandleAuthError();
-  const finishSocialLogin = useFinishSocialLogin();
+  const finishSocialLogin = useFinishSocialLogin(requestSocialConsent);
 
   const handleLogin = async () => {
     if (!canSubmit) return;
@@ -97,8 +97,6 @@ export default function LoginScreen() {
   });
 
   const handleGoogleLogin = async () => {
-    const agreed = await requestSocialConsent();
-    if (!agreed) return;
     setGoogleLoading(true);
     try {
       await promptGoogleLogin();

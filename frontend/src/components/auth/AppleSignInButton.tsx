@@ -16,14 +16,18 @@ import { useFinishSocialLogin } from '@/hooks/use-social-auth';
  * 소셜 로그인 자체가 iOS 전용 기능이라 Android에는 아예 노출하지 않는다.
  */
 interface AppleSignInButtonProps {
-  /** 약관 동의 시트를 띄우고, 사용자가 동의를 마치면 resolve(true), 취소하면 resolve(false). */
+  /**
+   * 약관 동의 시트를 띄우고, 사용자가 동의를 마치면 resolve(true), 취소하면 resolve(false).
+   * useFinishSocialLogin에 그대로 넘겨 신규 유저로 판명된 뒤에만 호출되게 한다 — 인증 전에
+   * 미리 부르지 않는다(이미 가입한 유저가 로그인할 때마다 재동의하게 되는 문제를 막기 위해).
+   */
   requestConsent: () => Promise<boolean>;
 }
 
 export function AppleSignInButton({ requestConsent }: AppleSignInButtonProps) {
   const [isAvailable, setIsAvailable] = useState(false);
   const handleAuthError = useHandleAuthError();
-  const finishSocialLogin = useFinishSocialLogin();
+  const finishSocialLogin = useFinishSocialLogin(requestConsent);
 
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
@@ -33,8 +37,6 @@ export function AppleSignInButton({ requestConsent }: AppleSignInButtonProps) {
   if (Platform.OS !== 'ios' || !isAvailable) return null;
 
   const handlePress = async () => {
-    const agreed = await requestConsent();
-    if (!agreed) return;
     try {
       // Firebase가 재전송 공격 방지를 위해 원문 nonce(rawNonce)를 요구하는데, Apple에는
       // 해시만 넘겨야 한다 — OAuthProvider.credential에 둘 다 실어 보내면 Firebase가
