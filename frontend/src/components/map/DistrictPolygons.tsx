@@ -3,6 +3,9 @@ import { Polygon } from 'react-native-maps';
 import busanSigGeoJson from '@/assets/geo/busan_sig.json';
 import { BUSAN_BOUNDS } from '@/constants/busan';
 import {
+  CAPITAL_FILL_ALPHA,
+  CAPITAL_STROKE_COLOR,
+  CAPITAL_STROKE_WIDTH,
   DISTRICT_STROKE_COLOR,
   DISTRICT_STROKE_WIDTH,
   OUTSIDE_MASK_ALPHA,
@@ -10,6 +13,8 @@ import {
   getDistrictFillColor,
 } from '@/utils/districtColors';
 import { withAlpha } from '@/constants/theme';
+import { useGameStore } from '@/store/useGameStore';
+import { toSigunguCode } from '@/constants/districts';
 
 interface GeoJsonFeature {
   properties: { SIG_CD: string };
@@ -41,6 +46,25 @@ const DISTRICT_RINGS = (busanSigGeoJson as { features: GeoJsonFeature[] }).featu
 );
 
 const STROKE_COLOR = withAlpha(DISTRICT_STROKE_COLOR, 0.9);
+const CAPITAL_STROKE = withAlpha(CAPITAL_STROKE_COLOR, 0.95);
+const CAPITAL_FILL = withAlpha(CAPITAL_STROKE_COLOR, CAPITAL_FILL_ALPHA);
+
+// DISTRICT_RINGS.sigCd는 GeoJSON의 통계청 5자리 코드인데, 수도는 백엔드가 KTO 1~16
+// 체계(sigunguCode)로 내려준다. 두 체계는 계산 규칙이 없어(toSigunguCode 주석 참고) 매
+// 렌더마다 변환하는 대신 모듈 로드 시 한 번만 KTO 코드 기준으로 다시 인덱싱해 둔다.
+//
+// 값은 배열이다 — 부산 구 상당수가 섬·매립지 등으로 외곽 ring을 여러 개 갖는다(예:
+// 사하구 41개, 강서구 22개). 링 하나만 담으면 그 구가 수도가 됐을 때 조각 하나만
+// 금색으로 칠해지고 나머지는 그대로 남는다.
+// export: 회귀 테스트가 코드 매핑이 어긋나지 않는지 직접 확인한다(DistrictPolygons.test.ts).
+export const RINGS_BY_SIGUNGU_CODE = new Map<string, typeof DISTRICT_RINGS>();
+for (const ring of DISTRICT_RINGS) {
+  const code = toSigunguCode(ring.sigCd);
+  if (!code) continue;
+  const group = RINGS_BY_SIGUNGU_CODE.get(code);
+  if (group) group.push(ring);
+  else RINGS_BY_SIGUNGU_CODE.set(code, [ring]);
+}
 
 // 부산 바깥을 덮는 마스크. 지도를 넉넉히 덮는 사각형 하나에서 각 구의 외곽 ring을 구멍으로
 // 뚫어, 구 경계 안쪽만 원래 지도 밝기로 남긴다. 구가 서로 맞닿아 있어도 구멍끼리 겹치지
@@ -73,6 +97,13 @@ export const DistrictPolygons = memo(function DistrictPolygons({
   tappable = false,
   onDistrictPress,
 }: DistrictPolygonsProps) {
+  // 이번 주 수도는 매주 한 번만 바뀌므로, 이 selector로 인한 리렌더는 무시할 만하다
+  // (팬/줌·GPS 5초 갱신과 달리 store 변경 자체가 드물다).
+  const capitalSigunguCode = useGameStore((s) => s.capitalDistrict?.sigunguCode ?? null);
+  const capitalRings = capitalSigunguCode
+    ? (RINGS_BY_SIGUNGU_CODE.get(capitalSigunguCode) ?? [])
+    : [];
+
   return (
     <>
       {/* 구 폴리곤보다 먼저 그려 경계선이 마스크 위에 오게 한다. 테두리(strokeWidth 0)를 그리지
@@ -92,6 +123,19 @@ export const DistrictPolygons = memo(function DistrictPolygons({
           fillColor={fillColor}
           tappable={tappable}
           onPress={tappable ? () => onDistrictPress?.(sigCd) : undefined}
+        />
+      ))}
+      {/* 나머지 구와 같은 위치에 덧그려 금색 테두리+옅은 채움으로 수도만 도드라지게 한다.
+          섬·매립지로 나뉜 조각까지 전부 그려야 구 전체가 강조된다(위 그룹핑 주석 참고). */}
+      {capitalRings.map((ring) => (
+        <Polygon
+          key={`capital-${ring.key}`}
+          coordinates={ring.coordinates}
+          strokeWidth={CAPITAL_STROKE_WIDTH}
+          strokeColor={CAPITAL_STROKE}
+          fillColor={CAPITAL_FILL}
+          tappable={tappable}
+          onPress={tappable ? () => onDistrictPress?.(ring.sigCd) : undefined}
         />
       ))}
     </>

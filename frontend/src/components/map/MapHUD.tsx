@@ -8,7 +8,9 @@ export function MapHUD() {
   const insets = useSafeAreaInsets();
   const topTeam = useGameStore((s) => getTopTeam(s.teamScores));
   const capitalDistrict = useGameStore((s) => s.capitalDistrict);
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+
+  const capitalName = capitalDistrict && (locale === 'ko' ? capitalDistrict.nameKo : capitalDistrict.nameEn);
 
   return (
     <View style={[styles.container, { top: insets.top + 8 }]}>
@@ -18,7 +20,11 @@ export function MapHUD() {
       </View>
       <View style={styles.pill}>
         <Text style={styles.label}>{t('map.hud.capitalDistrict')}</Text>
-        <Text style={styles.value}>{capitalDistrict ?? '—'}</Text>
+        <Text style={styles.value}>
+          {capitalDistrict
+            ? `${capitalName} ×${capitalDistrict.multiplier}`
+            : '—'}
+        </Text>
       </View>
     </View>
   );
