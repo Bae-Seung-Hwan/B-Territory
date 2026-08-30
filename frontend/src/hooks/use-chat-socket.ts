@@ -19,8 +19,9 @@ const MAX_MESSAGE_LENGTH = 500;
 
 // ack 대기 상한(ms). 핸들러가 throw로 끝나면(레이트리밋 등) NestJS는 ack 콜백 자체를
 // 호출하지 않으므로, 서버 변경 없이 클라이언트가 스스로 타임아웃을 걸어 "ack가 이
-// 시간 안에 안 왔다 = 거부됐다"로 판정한다. 레이트리밋 윈도우(5초)보다 여유 있게 잡되
-// 사용자가 실패를 너무 오래 기다리지 않게 한다.
+// 시간 안에 안 왔다 = 거부됐다"로 판정한다. 백엔드 레이트리밋 윈도우(MSG_WINDOW_SEC,
+// chat.gateway.ts)와 정확히 같은 5초로 맞춰, 정상적으로 윈도우가 갱신되는 순간까지는
+// 기다리되 그 이상은 실패로 본다.
 const ACK_TIMEOUT_MS = 5_000;
 
 /**
@@ -130,10 +131,16 @@ export function useChatSocket() {
     [setMessageStatus],
   );
 
+  /**
+   * 실제로 낙관적 메시지를 추가했는지를 boolean으로 돌려준다. 호출부(ChatScreen)가
+   * 이 값을 보고 성공했을 때만 입력창을 비우게 하기 위함 — 그렇지 않으면 profile이
+   * 세션 갱신 중 잠깐 비어 아무 일도 안 일어났는데도 사용자가 쓴 내용이 조용히
+   * 사라진다(PR #50 리뷰 지적 1번).
+   */
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string): boolean => {
       const trimmed = text.trim();
-      if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || !profile) return;
+      if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || !profile) return false;
       const id = makeId();
       // 서버가 발신자를 제외하고 릴레이하므로(PR #34), 내 메시지는 낙관적으로 직접
       // 추가한다. ack 결과가 오기 전까지는 'sending'으로 표시된다.
@@ -148,6 +155,7 @@ export function useChatSocket() {
         status: 'sending',
       });
       emitWithAck(id, { text: trimmed });
+      return true;
     },
     [addMessage, emitWithAck, profile],
   );

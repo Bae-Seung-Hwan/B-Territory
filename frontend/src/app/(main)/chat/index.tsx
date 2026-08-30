@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   StyleSheet,
   Text,
@@ -21,6 +23,10 @@ import {
 } from '@/components/chat/MessageActionSheet';
 import { useBlockedUsers } from '@/hooks/use-moderation';
 
+// 이 거리(px) 안에 있으면 "바닥 근처"로 보고 새 메시지 도착 시 자동 스크롤한다.
+// 그 밖(지난 대화를 올려서 읽는 중)이면 화면을 억지로 바닥까지 끌어내리지 않는다.
+const NEAR_BOTTOM_THRESHOLD_PX = 80;
+
 function chatErrorKey(error: ChatSocketError): string {
   switch (error) {
     case 'connection':
@@ -38,6 +44,8 @@ export default function ChatScreen() {
   const { sendMessage, retryMessage, chatError } = useChatSocket();
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<ChatFeedItem>>(null);
+  // onScroll로 갱신되는, 리렌더를 유발할 필요 없는 스크롤 위치 힌트(PR #50 리뷰 지적 2번).
+  const isNearBottomRef = useRef(true);
   // 롱프레스로 연 신고/차단 대상. null이면 시트가 닫혀 있다(MessageActionSheet 참고).
   const [actionTarget, setActionTarget] = useState<MessageActionTarget | null>(null);
 
@@ -58,8 +66,19 @@ export default function ChatScreen() {
 
   const handleSend = () => {
     if (!text.trim()) return;
-    sendMessage(text);
+    // sendMessage가 profile 미준비 등으로 조용히 아무 일도 안 할 수 있다 — 그 경우
+    // 입력을 지우면 사용자가 쓴 내용이 흔적 없이 사라진다(PR #50 리뷰 지적 1번).
+    if (!sendMessage(text)) return;
     setText('');
+    // 내가 보낸 메시지는 지난 대화를 올려보던 중이었어도 바로 확인할 수 있어야 한다.
+    isNearBottomRef.current = true;
+    listRef.current?.scrollToEnd({ animated: true });
+  };
+
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+    isNearBottomRef.current = distanceFromBottom <= NEAR_BOTTOM_THRESHOLD_PX;
   };
 
   const renderItem = ({ item }: { item: ChatFeedItem }) => (
@@ -108,7 +127,13 @@ export default function ChatScreen() {
           renderItem={renderItem}
           contentContainerStyle={styles.list}
           ListEmptyComponent={<Text style={styles.emptyState}>{t('chat.emptyState')}</Text>}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+          // 위로 올려 지난 대화를 읽는 중에 팀원 메시지가 오면 화면을 바닥으로 끌어내리지
+          // 않는다 — 이미 바닥 근처였을 때만 자동으로 따라간다(PR #50 리뷰 지적 2번).
+          onContentSizeChange={() => {
+            if (isNearBottomRef.current) listRef.current?.scrollToEnd({ animated: true });
+          }}
+          onScroll={handleScroll}
+          scrollEventThrottle={100}
         />
         <View style={styles.inputRow}>
           <TextInput

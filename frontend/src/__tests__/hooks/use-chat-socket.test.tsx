@@ -110,15 +110,46 @@ describe('useChatSocket', () => {
     await act(async () => unmount());
   });
 
-  it('500자를 넘는 메시지는 아예 전송하지 않는다', async () => {
+  it('500자를 넘는 메시지는 아예 전송하지 않고 false를 돌려준다', async () => {
     const { result, unmount } = await renderHook(() => useChatSocket());
 
+    let sent = true;
     await act(async () => {
-      result.current.sendMessage('a'.repeat(501));
+      sent = result.current.sendMessage('a'.repeat(501));
     });
 
+    expect(sent).toBe(false);
     expect(useChatStore.getState().messages).toHaveLength(0);
     expect(fakeSocket.__emitWithAck).not.toHaveBeenCalled();
+    await act(async () => unmount());
+  });
+
+  it('profile이 없으면 전송하지 않고 false를 돌려준다 (PR #50 리뷰 지적 1번)', async () => {
+    // 세션 갱신·캐시 무효화 순간 profile이 잠깐 undefined가 되는 창을 재현한다.
+    // 호출부(ChatScreen)가 이 반환값으로 입력을 지울지 말지 판단한다.
+    mockedUseAuth.mockReturnValue({ profile: undefined, isAuthenticated: true });
+    const { result, unmount } = await renderHook(() => useChatSocket());
+
+    let sent = true;
+    await act(async () => {
+      sent = result.current.sendMessage('안녕');
+    });
+
+    expect(sent).toBe(false);
+    expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(fakeSocket.__emitWithAck).not.toHaveBeenCalled();
+    await act(async () => unmount());
+  });
+
+  it('정상 전송 시 true를 돌려준다', async () => {
+    const { result, unmount } = await renderHook(() => useChatSocket());
+
+    let sent = false;
+    await act(async () => {
+      sent = result.current.sendMessage('안녕');
+    });
+
+    expect(sent).toBe(true);
     await act(async () => unmount());
   });
 });

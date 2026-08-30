@@ -26,19 +26,3 @@ const TILE_SIZE = 256;
 export function zoomFromLongitudeDelta(longitudeDelta: number, viewportWidth: number): number {
   return Math.log2((360 * viewportWidth) / (TILE_SIZE * longitudeDelta));
 }
-
-const EARTH_RADIUS_M = 6_371_000;
-
-/** 두 좌표 사이의 대권거리(미터). 소규모 지역(부산 시내) 근접 판정에만 쓴다. */
-export function haversineDistanceMeters(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number },
-): number {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const sinLat = Math.sin(dLat / 2);
-  const sinLng = Math.sin(dLng / 2);
-  const h = sinLat * sinLat + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
-  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
-}
