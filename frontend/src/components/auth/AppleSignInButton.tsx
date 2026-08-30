@@ -22,9 +22,21 @@ interface AppleSignInButtonProps {
    * 미리 부르지 않는다(이미 가입한 유저가 로그인할 때마다 재동의하게 되는 문제를 막기 위해).
    */
   requestConsent: () => Promise<boolean>;
+  /**
+   * login.tsx가 Google 버튼과 공유하는 진행 중 가드. Google/Apple을 교차로 빠르게 눌러도
+   * (present 애니메이션이 뜨기 전 프레임 등) 두 네이티브 플로우가 동시에 시작돼
+   * finishSocialLogin()이 두 번 도는 일을 막는다. false를 반환하면 이미 다른 소셜
+   * 로그인이 진행 중이라는 뜻이므로 이번 탭은 무시한다.
+   */
+  beginSocialAuth: () => boolean;
+  endSocialAuth: () => void;
 }
 
-export function AppleSignInButton({ requestConsent }: AppleSignInButtonProps) {
+export function AppleSignInButton({
+  requestConsent,
+  beginSocialAuth,
+  endSocialAuth,
+}: AppleSignInButtonProps) {
   const [isAvailable, setIsAvailable] = useState(false);
   const handleAuthError = useHandleAuthError();
   const finishSocialLogin = useFinishSocialLogin(requestConsent);
@@ -37,6 +49,7 @@ export function AppleSignInButton({ requestConsent }: AppleSignInButtonProps) {
   if (Platform.OS !== 'ios' || !isAvailable) return null;
 
   const handlePress = async () => {
+    if (!beginSocialAuth()) return;
     try {
       // Firebase가 재전송 공격 방지를 위해 원문 nonce(rawNonce)를 요구하는데, Apple에는
       // 해시만 넘겨야 한다 — OAuthProvider.credential에 둘 다 실어 보내면 Firebase가
@@ -67,8 +80,11 @@ export function AppleSignInButton({ requestConsent }: AppleSignInButtonProps) {
       await signInWithCredential(auth, firebaseCredential);
       await finishSocialLogin();
     } catch (err) {
-      if ((err as { code?: string } | null)?.code === 'ERR_REQUEST_CANCELED') return;
-      handleAuthError(err, 'auth.errors.loginFailed');
+      if ((err as { code?: string } | null)?.code !== 'ERR_REQUEST_CANCELED') {
+        handleAuthError(err, 'auth.errors.loginFailed');
+      }
+    } finally {
+      endSocialAuth();
     }
   };
 

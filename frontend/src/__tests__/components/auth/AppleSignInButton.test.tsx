@@ -50,6 +50,20 @@ describe('AppleSignInButton', () => {
   const handleAuthError = jest.fn();
   const finishSocialLogin = jest.fn();
 
+  function renderButton(overrides: {
+    requestConsent?: jest.Mock;
+    beginSocialAuth?: jest.Mock;
+    endSocialAuth?: jest.Mock;
+  } = {}) {
+    return render(
+      <AppleSignInButton
+        requestConsent={overrides.requestConsent ?? jest.fn()}
+        beginSocialAuth={overrides.beginSocialAuth ?? jest.fn().mockReturnValue(true)}
+        endSocialAuth={overrides.endSocialAuth ?? jest.fn()}
+      />,
+    );
+  }
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockedUseHandleAuthError.mockReturnValue(handleAuthError);
@@ -60,9 +74,7 @@ describe('AppleSignInButton', () => {
 
   it('Android에서는 아무것도 렌더링하지 않는다', async () => {
     Platform.OS = 'android';
-    const { queryByTestId } = await render(
-      <AppleSignInButton requestConsent={jest.fn()} />,
-    );
+    const { queryByTestId } = await renderButton();
 
     expect(queryByTestId('apple-button')).toBeNull();
   });
@@ -70,9 +82,7 @@ describe('AppleSignInButton', () => {
   it('iOS라도 기기에서 Apple 로그인을 지원하지 않으면 렌더링하지 않는다', async () => {
     Platform.OS = 'ios';
     mockedIsAvailable.mockResolvedValue(false);
-    const { queryByTestId } = await render(
-      <AppleSignInButton requestConsent={jest.fn()} />,
-    );
+    const { queryByTestId } = await renderButton();
 
     await waitFor(() => expect(mockedIsAvailable).toHaveBeenCalled());
     expect(queryByTestId('apple-button')).toBeNull();
@@ -82,7 +92,7 @@ describe('AppleSignInButton', () => {
     Platform.OS = 'ios';
     mockedIsAvailable.mockResolvedValue(true);
     const requestConsent = jest.fn().mockResolvedValue(true);
-    const { findByTestId } = await render(<AppleSignInButton requestConsent={requestConsent} />);
+    const { findByTestId } = await renderButton({ requestConsent });
 
     const button = await findByTestId('apple-button');
     await fireEvent.press(button);
@@ -98,8 +108,52 @@ describe('AppleSignInButton', () => {
     Platform.OS = 'ios';
     mockedIsAvailable.mockResolvedValue(true);
     const requestConsent = jest.fn().mockResolvedValue(true);
-    await render(<AppleSignInButton requestConsent={requestConsent} />);
+    await renderButton({ requestConsent });
 
     expect(mockedUseFinishSocialLogin).toHaveBeenCalledWith(requestConsent);
+  });
+
+  describe('다른 소셜 로그인이 이미 진행 중일 때(Google/Apple 교차 탭)', () => {
+    it('beginSocialAuth가 false를 반환하면 Apple 로그인을 시작하지 않는다', async () => {
+      Platform.OS = 'ios';
+      mockedIsAvailable.mockResolvedValue(true);
+      const beginSocialAuth = jest.fn().mockReturnValue(false);
+      const endSocialAuth = jest.fn();
+      const { findByTestId } = await renderButton({ beginSocialAuth, endSocialAuth });
+
+      const button = await findByTestId('apple-button');
+      await fireEvent.press(button);
+
+      expect(mockedSignInAsync).not.toHaveBeenCalled();
+      expect(finishSocialLogin).not.toHaveBeenCalled();
+      expect(endSocialAuth).not.toHaveBeenCalled();
+    });
+
+    it('성공하면 endSocialAuth로 가드를 풀어준다', async () => {
+      Platform.OS = 'ios';
+      mockedIsAvailable.mockResolvedValue(true);
+      const endSocialAuth = jest.fn();
+      const { findByTestId } = await renderButton({ endSocialAuth });
+
+      const button = await findByTestId('apple-button');
+      await fireEvent.press(button);
+
+      await waitFor(() => expect(finishSocialLogin).toHaveBeenCalledTimes(1));
+      expect(endSocialAuth).toHaveBeenCalledTimes(1);
+    });
+
+    it('취소되거나 실패해도 endSocialAuth로 가드를 풀어준다', async () => {
+      Platform.OS = 'ios';
+      mockedIsAvailable.mockResolvedValue(true);
+      mockedSignInAsync.mockRejectedValue({ code: 'ERR_REQUEST_CANCELED' });
+      const endSocialAuth = jest.fn();
+      const { findByTestId } = await renderButton({ endSocialAuth });
+
+      const button = await findByTestId('apple-button');
+      await fireEvent.press(button);
+
+      await waitFor(() => expect(endSocialAuth).toHaveBeenCalledTimes(1));
+      expect(handleAuthError).not.toHaveBeenCalled();
+    });
   });
 });

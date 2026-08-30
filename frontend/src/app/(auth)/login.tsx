@@ -90,6 +90,25 @@ export default function LoginScreen() {
     }
   };
 
+  // Google/Apple 버튼을 동시에(또는 한쪽 present 애니메이션 중 다른 쪽을) 누르면 양쪽
+  // 네이티브 로그인 플로우가 함께 시작돼 signInWithCredential이 두 번 성공하고
+  // finishSocialLogin()도 두 번 돌아 네비게이션이 겹칠 수 있다. state만으로 막으면 두
+  // 탭이 리렌더 전에 들어올 때 둘 다 통과하므로, ref로 동기적으로 막는다.
+  const socialAuthBusyRef = useRef(false);
+  const [socialAuthBusy, setSocialAuthBusy] = useState(false);
+
+  const beginSocialAuth = () => {
+    if (socialAuthBusyRef.current) return false;
+    socialAuthBusyRef.current = true;
+    setSocialAuthBusy(true);
+    return true;
+  };
+
+  const endSocialAuth = () => {
+    socialAuthBusyRef.current = false;
+    setSocialAuthBusy(false);
+  };
+
   const [googleLoading, setGoogleLoading] = useState(false);
   const { isConfigured: isGoogleConfigured, promptGoogleLogin } = useGoogleLogin({
     onSuccess: finishSocialLogin,
@@ -97,11 +116,13 @@ export default function LoginScreen() {
   });
 
   const handleGoogleLogin = async () => {
+    if (!beginSocialAuth()) return;
     setGoogleLoading(true);
     try {
       await promptGoogleLogin();
     } finally {
       setGoogleLoading(false);
+      endSocialAuth();
     }
   };
 
@@ -180,11 +201,15 @@ export default function LoginScreen() {
         title={t('auth.login.google')}
         onPress={handleGoogleLogin}
         variant="secondary"
-        disabled={!isGoogleConfigured}
+        disabled={!isGoogleConfigured || socialAuthBusy}
         loading={googleLoading}
       />
 
-      <AppleSignInButton requestConsent={requestSocialConsent} />
+      <AppleSignInButton
+        requestConsent={requestSocialConsent}
+        beginSocialAuth={beginSocialAuth}
+        endSocialAuth={endSocialAuth}
+      />
 
       <TouchableOpacity style={styles.registerLink} onPress={openTermsSheet}>
         <Text style={styles.registerLinkText}>

@@ -3,11 +3,11 @@ import { Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 're
 import { Redirect, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useRegisterMutation } from '@/hooks/use-auth';
+import { useAuthSession } from '@/providers/AuthProvider';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { Button } from '@/components/ui/Button';
@@ -25,6 +25,7 @@ export default function CompleteProfileScreen() {
   const { t } = useTranslation();
   const handleAuthError = useHandleAuthError();
   const registerMutation = useRegisterMutation();
+  const { firebaseUser } = useAuthSession();
 
   const [nickname, setNickname] = useState('');
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
@@ -55,8 +56,12 @@ export default function CompleteProfileScreen() {
   };
 
   // 이 화면은 Google/Apple 로그인 직후에만 의미가 있다 — Firebase 세션 없이 직접
-  // 진입했다면(딥링크 등) 로그인 화면으로 되돌린다.
-  if (!auth.currentUser) {
+  // 진입했다면(딥링크 등) 로그인 화면으로 되돌린다. auth.currentUser를 직접 보지 않고
+  // AuthProvider의 firebaseUser를 쓰는 이유는, 세션 복원 전(콜드 스타트 직후)의 "초기화
+  // 중" 상태와 "로그인 안 됨" 상태를 앱 전체가 쓰는 것과 같은 기준으로 구분하기 위해서다
+  // — AuthProvider는 세션이 확정되기(sessionResolved) 전까지 children을 아예 마운트하지
+  // 않으므로, 이 화면이 렌더된 시점엔 firebaseUser가 이미 확정된 값이다.
+  if (!firebaseUser) {
     return <Redirect href="/(auth)/login" />;
   }
 
