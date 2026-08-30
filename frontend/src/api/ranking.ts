@@ -16,7 +16,7 @@ export interface UserRankEntry extends RankedEntry {
   score: number;
 }
 
-type SeasonStatus = 'upcoming' | 'ongoing' | 'ended';
+export type SeasonStatus = 'upcoming' | 'ongoing' | 'ended';
 
 export interface RankingResult<T> {
   season: number;

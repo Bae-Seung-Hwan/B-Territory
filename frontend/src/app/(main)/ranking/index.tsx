@@ -1,24 +1,14 @@
 import { useMemo, useState } from 'react';
 import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery } from '@tanstack/react-query';
-import {
-  fetchTeamRanking,
-  fetchUserRanking,
-  type TeamRankEntry,
-  type UserRankEntry,
-} from '@/api/ranking';
-import { queryKeys } from '@/lib/query-keys';
+import type { TeamRankEntry, UserRankEntry } from '@/api/ranking';
+import { useSeasonRanking, type RankingScope } from '@/hooks/use-season-ranking';
 import { useTranslation } from '@/i18n';
 import { getCountryList } from '@/constants/countries';
 import { Card } from '@/components/ui/Card';
 import { BrandColors, Spacing } from '@/constants/theme';
 
-// 시즌 랭킹 캐시 TTL(진행 중 60초, hall-of-fame.service.ts LIVE_TTL_SEC)에 맞춘 폴링 주기.
-// 이보다 짧게 돌려도 백엔드가 같은 캐시 값을 돌려주므로 의미가 없다.
-const SEASON_POLL_MS = 60_000;
-
-type Scope = 'teams' | 'users';
+type Scope = RankingScope;
 
 export default function RankingScreen() {
   const { t, locale } = useTranslation();
@@ -64,34 +54,16 @@ function SeasonRankingView({
   flagByTeam: Map<string, string>;
 }) {
   const { t } = useTranslation();
-  // null = 서버 기본값(현재 시즌). 과거 시즌을 탐색하면 명시적인 번호로 바뀐다.
-  const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
-
-  // "진행 중"인 시즌이 곧 현재 시즌이다 — 이 판정만으로 폴링 여부와 "다음 시즌" 이동
-  // 가능 여부를 모두 결정하면, 선택된 시즌 번호가 현재 시즌과 우연히 같아져도(예: 이전
-  // 시즌들을 거쳐 다시 돌아온 경우) 별도 상태 없이 자연히 맞아떨어진다. status는 아직
-  // 응답이 없으면 undefined라 selectedSeason이 null일 때만 우선 폴링을 켠다.
-  const teamQuery = useQuery({
-    queryKey: queryKeys.ranking.teams(selectedSeason ?? undefined),
-    queryFn: () => fetchTeamRanking(selectedSeason ?? undefined),
-    enabled: scope === 'teams',
-    refetchInterval: (query) =>
-      selectedSeason === null || query.state.data?.status === 'ongoing' ? SEASON_POLL_MS : false,
-  });
-  const userQuery = useQuery({
-    queryKey: queryKeys.ranking.users(selectedSeason ?? undefined),
-    queryFn: () => fetchUserRanking(selectedSeason ?? undefined),
-    enabled: scope === 'users',
-    refetchInterval: (query) =>
-      selectedSeason === null || query.state.data?.status === 'ongoing' ? SEASON_POLL_MS : false,
-  });
-
-  const query = scope === 'teams' ? teamQuery : userQuery;
-  const resolvedSeason = query.data?.season ?? null;
-  const status = query.data?.status;
-  const isLiveSeason = selectedSeason === null || status === 'ongoing';
-  const canGoPrevious = resolvedSeason !== null && resolvedSeason > 1;
-  const canGoNext = status === 'ended';
+  const {
+    query,
+    displaySeason,
+    isLiveSeason,
+    canGoPrevious,
+    canGoNext,
+    goToPrevious,
+    goToNext,
+    backToCurrent,
+  } = useSeasonRanking(scope);
 
   return (
     <>
@@ -109,25 +81,17 @@ function SeasonRankingView({
       </View>
 
       <View style={styles.seasonNav}>
-        <Pressable
-          onPress={() => resolvedSeason !== null && setSelectedSeason(resolvedSeason - 1)}
-          disabled={!canGoPrevious}
-          hitSlop={8}
-        >
+        <Pressable onPress={goToPrevious} disabled={!canGoPrevious} hitSlop={8}>
           <Text style={[styles.seasonNavArrow, !canGoPrevious && styles.seasonNavArrowDisabled]}>
             {'◀ ' + t('ranking.seasonNav.previous')}
           </Text>
         </Pressable>
         <Text style={styles.seasonLabel}>
-          {resolvedSeason !== null
-            ? t('ranking.seasonNav.seasonLabel', { season: resolvedSeason })
+          {displaySeason !== null
+            ? t('ranking.seasonNav.seasonLabel', { season: displaySeason })
             : '—'}
         </Text>
-        <Pressable
-          onPress={() => resolvedSeason !== null && setSelectedSeason(resolvedSeason + 1)}
-          disabled={!canGoNext}
-          hitSlop={8}
-        >
+        <Pressable onPress={goToNext} disabled={!canGoNext} hitSlop={8}>
           <Text style={[styles.seasonNavArrow, !canGoNext && styles.seasonNavArrowDisabled]}>
             {t('ranking.seasonNav.next') + ' ▶'}
           </Text>
@@ -135,7 +99,7 @@ function SeasonRankingView({
       </View>
 
       {!isLiveSeason && (
-        <Pressable onPress={() => setSelectedSeason(null)}>
+        <Pressable onPress={backToCurrent}>
           <Text style={styles.backToCurrentText}>{t('ranking.seasonNav.backToCurrent')}</Text>
         </Pressable>
       )}
