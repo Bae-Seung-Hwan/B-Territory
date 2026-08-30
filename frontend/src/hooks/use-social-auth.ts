@@ -1,7 +1,26 @@
 import { useRouter } from 'expo-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, isCancelledError, type QueryClient } from '@tanstack/react-query';
+import { signOut } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
+
+/**
+ * 계정 전환(다른 Google/Apple 계정으로 재로그인) 시 AuthProvider의 onAuthStateChanged가
+ * uid 변경을 감지하고 queryKeys.auth.me 캐시를 removeQueries로 비우는데, 그 시점이 이
+ * fetchQuery와 겹치면 react-query가 in-flight 쿼리를 CancelledError로 reject한다. 로그인
+ * 자체는 성공했으므로 실패로 취급하지 않고 캐시가 정리된 뒤 다시 한번 조회한다.
+ */
+async function fetchProfile(queryClient: QueryClient) {
+  try {
+    return await queryClient.fetchQuery({ queryKey: queryKeys.auth.me, queryFn: getMe });
+  } catch (err) {
+    if (isCancelledError(err)) {
+      return queryClient.fetchQuery({ queryKey: queryKeys.auth.me, queryFn: getMe });
+    }
+    throw err;
+  }
+}
 
 /**
  * Google/Apple 로그인처럼 Firebase 자격증명 교환까지 끝난 직후 공통으로 필요한 후처리.
@@ -15,15 +34,17 @@ import { queryKeys } from '@/lib/query-keys';
  * 약관 동의(requestConsent)는 인증 전이 아니라 여기, 신규 유저로 판명된 뒤에만 요청한다.
  * 인증 전에는 신규/기존을 구분할 수 없어 무조건 물으면, 이미 동의를 마친 기존 유저도
  * Google/Apple로 로그인할 때마다 체크박스를 다시 눌러야 한다(PR #48 리뷰 지적). 동의를
- * 거부해도 Firebase 세션 자체는 남지만, 가입(registerUser)까지는 진행하지 않고 그대로
- * 둔다 — 다음에 로그인 버튼을 다시 누르면 같은 분기로 재진입한다.
+ * 거부하면 Firebase 세션도 함께 정리한다 — 남겨두면 로그인 화면의 "회원가입 하기"가
+ * use-registration-flow.ts의 auth.currentUser 기반 초기 판단 때문에 register.tsx를
+ * 폼이 아니라 "인증 메일을 확인하세요" 단계로 잘못 열어버린다(PR #48 리뷰 지적). 이메일
+ * 경로(login.tsx의 finishLogin)가 "세션은 있는데 미가입"일 때 signOut하는 것과 동일하다.
  */
 export function useFinishSocialLogin(requestConsent: () => Promise<boolean>) {
   const router = useRouter();
   const queryClient = useQueryClient();
 
   return async () => {
-    const profile = await queryClient.fetchQuery({ queryKey: queryKeys.auth.me, queryFn: getMe });
+    const profile = await fetchProfile(queryClient);
 
     if (profile) {
       // (main)은 가드되어 있어 인증 상태가 리렌더에 반영되기 전까진 열리지 않으므로,
@@ -33,7 +54,13 @@ export function useFinishSocialLogin(requestConsent: () => Promise<boolean>) {
     }
 
     const agreed = await requestConsent();
-    if (!agreed) return;
-    router.push('/(auth)/complete-profile');
+    if (!agreed) {
+      await signOut(auth);
+      return;
+    }
+    // push가 아니라 replace다 — push라면 하드웨어 백/스와이프로 login 화면에 돌아갈 수
+    // 있고, 그 순간 "Firebase 세션은 있는데 가입은 안 된" 상태가 되어 위와 같은 문제가
+    // 재현된다(PR #48 리뷰 지적).
+    router.replace('/(auth)/complete-profile');
   };
 }

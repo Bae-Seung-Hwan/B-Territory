@@ -43,7 +43,15 @@ export function AppleSignInButton({
 
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
-    AppleAuthentication.isAvailableAsync().then(setIsAvailable);
+    let isMounted = true;
+    AppleAuthentication.isAvailableAsync()
+      .then((available) => {
+        if (isMounted) setIsAvailable(available);
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   if (Platform.OS !== 'ios' || !isAvailable) return null;

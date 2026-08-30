@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { Platform } from 'react-native';
 import {
   GoogleSignin,
   isErrorWithCode,
@@ -22,6 +23,21 @@ GoogleSignin.configure({
 interface UseGoogleLoginOptions {
   onSuccess: () => void | Promise<void>;
   onError: (err: unknown) => void;
+}
+
+/**
+ * 웹은 @react-native-google-signin/google-signin이 스텁만 제공한다 — signIn()이 항상
+ * PLAY_SERVICES_NOT_AVAILABLE로 실패하므로(PR #48 리뷰 지적) 버튼 자체를 숨긴다.
+ * iOS는 webClientId만으로는 부족하고 iosClientId도 있어야 하는데, 이를 보지 않으면
+ * 미설정 상태에서도 버튼이 활성화된 채 렌더된다(PR #48 리뷰 지적). 순수 함수로 뽑아둔
+ * 이유는 React 렌더링 없이 플랫폼·환경변수 조합을 직접 테스트하기 위해서다.
+ */
+export function isGoogleLoginConfigured(
+  platformOS: string,
+  webClientId: string | undefined,
+  iosClientId: string | undefined,
+): boolean {
+  return !!webClientId && platformOS !== 'web' && (platformOS !== 'ios' || !!iosClientId);
 }
 
 /**
@@ -62,7 +78,7 @@ export function useGoogleLogin({ onSuccess, onError }: UseGoogleLoginOptions) {
   }, [onSuccess, onError]);
 
   return {
-    isConfigured: !!WEB_CLIENT_ID,
+    isConfigured: isGoogleLoginConfigured(Platform.OS, WEB_CLIENT_ID, IOS_CLIENT_ID),
     promptGoogleLogin,
   };
 }

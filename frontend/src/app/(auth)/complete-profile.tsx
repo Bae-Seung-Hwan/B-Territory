@@ -47,8 +47,25 @@ export default function CompleteProfileScreen() {
         // 그 낡은 null을 보고 isAuthenticated:false로 판단해 온보딩 화면으로 되돌려 보낸다
         // (registerMutation의 정상 성공 경로는 onSuccess가 캐시를 즉시 채우므로 이 문제가
         // 없다). 실제로 가입이 끝난 상태이므로 다시 조회해 캐시를 바로잡은 뒤 이동한다.
-        await queryClient.fetchQuery({ queryKey: queryKeys.auth.me, queryFn: getMe });
-        router.replace('/');
+        //
+        // 이 409는 항상 "다른 기기에서 동시 가입" 레이스인 것은 아니다 — 백엔드가
+        // unique(firebaseUid|email) 위반도 같은 409로 매핑하므로, 다른 firebaseUid가
+        // 이미 이 이메일로 가입한 경우(PR #48 리뷰 지적)에는 현재 uid의 getMe가 계속
+        // null이다. 그 경우와 조회 자체가 실패하는 경우(오프라인/5xx) 모두 unhandled
+        // rejection이나 온보딩 오탈출로 새지 않도록 에러 처리·반환값 검사를 둔다.
+        try {
+          const profile = await queryClient.fetchQuery({
+            queryKey: queryKeys.auth.me,
+            queryFn: getMe,
+          });
+          if (!profile) {
+            handleAuthError(err, 'auth.errors.registerFailed');
+            return;
+          }
+          router.replace('/');
+        } catch (refetchErr) {
+          handleAuthError(refetchErr, 'auth.errors.registerFailed');
+        }
         return;
       }
       handleAuthError(err, 'auth.errors.registerFailed');
