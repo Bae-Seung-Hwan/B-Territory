@@ -22,6 +22,10 @@ import {
   wsValidationPipe,
 } from '../common/ws/ws-auth';
 import {
+  SOCKET_PING_INTERVAL_MS,
+  SOCKET_PING_TIMEOUT_MS,
+} from '../common/ws/socket-options';
+import {
   userRoomOf,
   WsSessionsService,
 } from '../common/ws/ws-sessions.service';
@@ -52,7 +56,12 @@ import { LocationLogsService } from '../location-logs/location-logs.service';
 import { LocationServiceCode } from '../location-logs/constants';
 
 @UseFilters(WsExceptionsFilter)
-@WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
+@WebSocketGateway({
+  namespace: '/realtime',
+  cors: { origin: '*' },
+  pingInterval: SOCKET_PING_INTERVAL_MS,
+  pingTimeout: SOCKET_PING_TIMEOUT_MS,
+})
 export class RealtimeGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
@@ -83,6 +92,19 @@ export class RealtimeGateway
    * 순간적 재접속 등) Redis 큐에 쌓아둔다 — DB에는 이미 반영된 결투 상태/점수를 클라이언트가
    * 영영 못 받는 일이 없도록, 다음 접속 시 drainNotifications로 재생한다.
    */
+  /**
+   * 메타의 socketId가 가리키는 소켓이 실제로 살아있을 때만 돌려준다.
+   *
+   * 네트워크 단절 후 ping 타임아웃으로 disconnect가 발화하기 전까지 메타는 죽은 소켓을
+   * 가리킨다. 이 확인 없이 emit하면 알림이 큐잉조차 되지 않고 소실되고, 만료 판정에서는
+   * 접속한 적 없는 유저를 접속 중으로 오인한다. (단일 인스턴스 전제 — 스케일아웃 시 어댑터 필요)
+   */
+  private async getLiveSocket(userId: string): Promise<Socket | undefined> {
+    const meta = await this.redis.getUserMeta(userId);
+    const socket = meta ? this.server.sockets.get(meta.socketId) : undefined;
+    return socket?.connected ? socket : undefined;
+  }
+
   private async notifyUser(
     userId: string,
     event: string,
@@ -96,12 +118,8 @@ export class RealtimeGateway
      */
     ephemeral = false,
   ): Promise<void> {
-    // 메타의 socketId가 살아있는 소켓인지 확인한다 — 네트워크 단절 후 ping 타임아웃으로
-    // disconnect가 발화하기 전까지 메타는 죽은 소켓을 가리키므로, 무조건 emit하면
-    // 알림이 큐잉조차 되지 않고 소실된다. (단일 인스턴스 전제 — 스케일아웃 시 어댑터 필요)
-    const meta = await this.redis.getUserMeta(userId);
-    const socket = meta ? this.server.sockets.get(meta.socketId) : undefined;
-    if (socket?.connected) {
+    const socket = await this.getLiveSocket(userId);
+    if (socket) {
       socket.emit(event, payload);
       return;
     }
@@ -268,7 +286,18 @@ export class RealtimeGateway
     opponentId: string,
   ): Promise<void> {
     try {
-      const expired = await this.duelsService.expireDuel(duelId);
+      // 응답하지 않은 쪽이 만료 시점에도 붙어 있을 때만 점수를 문다. 끊긴 유저는
+      // duel:requested를 아예 받지 못했을 수 있는데(notifyUser가 큐에 넣어 두고, 재접속
+      // 전까지는 화면에 뜨지 않는다), 받은 적 없는 초대에 무응답 페널티를 물릴 수는 없다.
+      // 터널·백그라운드 전환처럼 흔한 단절에서 30분마다 반복 청구되던 경로다.
+      //
+      // 이 판정이 의미가 있으려면 끊김이 만료(30초) 전에 드러나야 한다 — 그래서 핑 주기를
+      // 기본값보다 촘촘히 잡는다(socket-options.ts). 반대로 만료 시점까지 붙어 있었다면
+      // 알림은 도달했다고 보고 평소대로 청구한다.
+      const opponentLive = (await this.getLiveSocket(opponentId)) !== undefined;
+      const expired = await this.duelsService.expireDuel(duelId, {
+        chargePenalty: opponentLive,
+      });
       if (!expired) return;
       // 무응답도 거절과 같은 금액이 깎인다 — 응답하지 않은 쪽(opponentId)이 대상이다.
       const payload = duelPenaltyPayload(expired);

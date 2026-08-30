@@ -554,6 +554,11 @@ export class DuelsService {
       } catch (err) {
         if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
         await manager.query('ROLLBACK TO SAVEPOINT duel_penalty_ledger');
+        // ROLLBACK만으로는 세이브포인트가 사라지지 않는다. 이 루프는 charges 수만큼 돌고
+        // charges는 sweepStaleDuels가 훑은 행 수에 비례하므로, RELEASE하지 않으면 같은 이름의
+        // 세이브포인트가 계속 쌓인다. 서브트랜잭션이 64개를 넘는 순간 Postgres가 pg_subtrans로
+        // 스필해 트랜잭션 전체가 급격히 느려진다.
+        await manager.query('RELEASE SAVEPOINT duel_penalty_ledger');
         this.logger.warn(
           `결투 페널티 원장 append 생략 — 유저가 사라짐 duelId=${charge.duelId} userId=${charge.userId}`,
         );
@@ -675,14 +680,27 @@ export class DuelsService {
     return duel;
   }
 
-  /** PENDING 상태로 DUEL_REQUEST_TTL이 지나도 응답 없으면 게이트웨이 타이머가 호출 */
-  async expireDuel(duelId: number): Promise<Duel | null> {
+  /**
+   * PENDING 상태로 DUEL_REQUEST_TTL이 지나도 응답 없으면 게이트웨이 타이머가 호출.
+   *
+   * chargePenalty=false면 상태만 EXPIRED로 넘기고 점수도 보호막도 건드리지 않는다.
+   * 게이트웨이가 "응답자가 만료 시점에 접속돼 있지 않다"고 판단한 경우로, 초대 자체가
+   * 닿지 않았을 수 있어 무응답으로 볼 수 없다(realtime.gateway의 expireAndNotify 주석).
+   * 보호막도 함께 건너뛴다 — 보호막은 차감의 짝이라, 깎지 않았는데 주면 아무 대가 없이
+   * 30분간 결투를 피하는 수단이 된다.
+   */
+  async expireDuel(
+    duelId: number,
+    opts: { chargePenalty?: boolean } = {},
+  ): Promise<Duel | null> {
+    const { chargePenalty = true } = opts;
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
     if (!duel) return null;
 
     // 무응답도 거절과 같은 금액을 깎는다 — 그렇지 않으면 "무시가 더 싸다"가 되어
-    // 거절 페널티를 회피하는 지배 전략이 생긴다(constants.ts 참고). 대신 보호 기간은
-    // 주지 않아, 같은 값을 내고도 거절 버튼을 누르는 쪽이 항상 유리하다.
+    // 거절 페널티를 회피하는 지배 전략이 생긴다(constants.ts 참고). 보호 기간도 거절과
+    // 똑같이 준다(아래 grantShields) — 주지 않으면 만료 직후 같은 신청자가 30초마다 다시
+    // 걸 수 있어, 자리를 비운 유저가 방어도 못 한 채 계속 깎인다(DUEL_SHIELD_TTL 주석 참고).
     //
     // 상태 전이와 차감을 한 트랜잭션으로 묶는 이유는 rejectDuel과 같다.
     const charges = await this.dataSource.transaction(async (manager) => {
@@ -699,10 +717,12 @@ export class DuelsService {
         .execute();
       if (updateResult.affected === 0) return null;
 
-      const applied = await this.buildNoResponseCharges(
-        manager,
-        updateResult.raw as SweptDuelRow[],
-      );
+      const applied = chargePenalty
+        ? await this.buildNoResponseCharges(
+            manager,
+            updateResult.raw as SweptDuelRow[],
+          )
+        : [];
       await this.chargeDuelPenalties(manager, applied);
       return applied;
     });
@@ -948,6 +968,10 @@ export class DuelsService {
           } catch (err) {
             if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
             await manager.query('ROLLBACK TO SAVEPOINT duel_ledger');
+            // ROLLBACK은 세이브포인트를 파괴하지 않으므로 명시적으로 RELEASE한다.
+            // 여기서는 루프가 2회뿐이라 누적이 문제되지 않지만, chargeDuelPenalties와
+            // 같은 패턴을 복사해 갈 때 누수가 따라가지 않도록 양쪽을 맞춰 둔다.
+            await manager.query('RELEASE SAVEPOINT duel_ledger');
             this.logger.warn(
               `결투 원장 append 생략 — 참가자가 사라짐 duelId=${duel.id} userId=${userId}`,
             );

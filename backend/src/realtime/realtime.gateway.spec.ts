@@ -372,3 +372,69 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
     }
   });
 });
+
+/**
+ * 무응답 페널티는 "초대를 받고도 응답하지 않았다"에 대한 청구다. 만료 시점에 상대가
+ * 끊겨 있으면 duel:requested가 큐에만 쌓였을 수 있어 그 전제가 서지 않는다.
+ */
+describe('expireAndNotify 무응답 페널티 청구 조건', () => {
+  const duelId = 11;
+  const challengerId = 'user-1';
+  const opponentId = 'user-2';
+
+  function make(opponentSocket: { connected: boolean } | undefined) {
+    // 살아있는 소켓으로 판정되면 duel:expired가 그리로 emit된다.
+    const socket = opponentSocket && { ...opponentSocket, emit: jest.fn() };
+    const expireDuel = jest.fn().mockResolvedValue({
+      id: duelId,
+      opponentId,
+      status: 'EXPIRED',
+      scoreDelta: null,
+    });
+    const gateway = new RealtimeGateway(
+      {} as unknown as FirebaseService,
+      {} as unknown as UsersService,
+      {
+        getUserMeta: jest.fn().mockResolvedValue({
+          team: 'JP',
+          socketId: 'sock-opponent',
+        }),
+        queueNotification: jest.fn().mockResolvedValue(undefined),
+      } as unknown as RedisService,
+      { setNotifier: jest.fn(), expireDuel } as unknown as DuelsService,
+      { start: jest.fn(), discardSession: jest.fn() } as never,
+      { record: jest.fn() } as never,
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
+    );
+    gateway.server = {
+      sockets: new Map(socket ? [['sock-opponent', socket]] : []),
+    } as never;
+    return { gateway, expireDuel };
+  }
+
+  it('상대가 만료 시점에 붙어 있으면 페널티를 청구한다', async () => {
+    const { gateway, expireDuel } = make({ connected: true });
+
+    await gateway['expireAndNotify'](duelId, challengerId, opponentId);
+
+    expect(expireDuel).toHaveBeenCalledWith(duelId, { chargePenalty: true });
+  });
+
+  // 메타 TTL(120초)이 남아 있어 신청 자체는 통과했지만, 정작 알림은 큐로 갔을 케이스다.
+  it('상대 소켓이 사라졌으면 페널티 없이 만료만 시킨다', async () => {
+    const { gateway, expireDuel } = make(undefined);
+
+    await gateway['expireAndNotify'](duelId, challengerId, opponentId);
+
+    expect(expireDuel).toHaveBeenCalledWith(duelId, { chargePenalty: false });
+  });
+
+  // ping 타임아웃 전이라 Map에는 남아 있지만 connected가 내려간 소켓.
+  it('소켓이 남아 있어도 connected가 아니면 청구하지 않는다', async () => {
+    const { gateway, expireDuel } = make({ connected: false });
+
+    await gateway['expireAndNotify'](duelId, challengerId, opponentId);
+
+    expect(expireDuel).toHaveBeenCalledWith(duelId, { chargePenalty: false });
+  });
+});

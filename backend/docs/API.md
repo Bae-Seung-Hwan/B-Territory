@@ -325,6 +325,16 @@ curl http://localhost:3000/api/spots/930
 | 원장 기록 | `score_events`에 한 줄 — 거절은 `DUEL_REJECT`, 무응답은 `DUEL_NO_RESPONSE` (둘 다 `personalPoints: -2`, `teamPoints: 0`) |
 | 수락(`duel:accept`) | 차감도 보호막도 **없습니다** |
 | 탈퇴로 끝난 결투 | 차감도 보호막도 **없습니다** — 아무도 응답을 회피한 것이 아닙니다 |
+| 만료 시점에 끊겨 있던 상대 | 차감도 보호막도 **없습니다** (아래 참고) |
+
+무응답 차감은 **만료 시점에 상대 소켓이 살아 있을 때만** 청구합니다. 끊긴 상대에게는
+`duel:requested`가 전달되지 못하고 Redis 큐에 쌓이는데, 화면에 뜬 적도 없는 초대에 무응답
+페널티를 물릴 수는 없기 때문입니다. 이 경우 결투는 `EXPIRED`로 넘어가고 `duel:expired`의
+`scorePenalty`는 `0`, `penalizedUserId`와 `shieldUntil`은 `null`로 나갑니다.
+
+> 판정이 성립하려면 끊김이 30초(만료) 안에 드러나야 하므로, socket.io 핑을 기본값보다
+> 촘촘히(`pingInterval` 10초 / `pingTimeout` 10초) 잡아 최악 20초 안에 감지합니다.
+> 클라이언트가 별도로 맞출 설정은 없습니다.
 
 **`duel:rejected` / `duel:expired` payload** (양쪽 참가자에게 동일하게 갑니다)
 

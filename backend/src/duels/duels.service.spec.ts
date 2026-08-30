@@ -931,6 +931,24 @@ describe('DuelsService', () => {
       expect(redis.setDuelShield).not.toHaveBeenCalled();
     });
 
+    // 초대가 닿지 않았을 수 있는 상대에게 무응답 페널티를 물리지 않는다.
+    it('chargePenalty=false면 EXPIRED로만 넘기고 점수·원장·보호막을 건드리지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+
+      const duel = await service.expireDuel(1, { chargePenalty: false });
+
+      expect(duel?.status).toBe(DuelStatus.EXPIRED);
+      expect(duel?.scoreDelta).toBeNull();
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(scoresService.record).not.toHaveBeenCalled();
+      // 보호막은 차감의 짝이다 — 깎지 않았으면 주지도 않는다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
     // 만료는 이미 커밋됐다. 여기서 던지면 아무도 duel:expired를 못 보내 양쪽이 갇힌다.
     it('락 해제가 실패해도 만료 결과를 돌려준다', async () => {
       duelRepo.findOne.mockResolvedValue(buildPendingDuel());
