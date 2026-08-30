@@ -931,6 +931,41 @@ describe('DuelsService', () => {
       expect(redis.setDuelShield).not.toHaveBeenCalled();
     });
 
+    /**
+     * 원장 insert가 FK 위반으로 롤백되면 그 charge는 아무것도 반영되지 않은 것이다.
+     * 사라진 유저에 대한 applyScoreDelta는 0행 매칭이라 실제 차감도 없으므로,
+     * duels.scoreDelta나 보호막이 남으면 일어나지 않은 차감을 주장하게 된다.
+     */
+    it('원장 append가 FK 위반으로 롤백되면 차감을 주장하지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message:
+            'insert or update on table "score_events" violates foreign key constraint',
+          code: '23503',
+        } as unknown as Error),
+      );
+
+      const duel = await service.expireDuel(1);
+
+      expect(duel?.status).toBe(DuelStatus.EXPIRED);
+      expect(duel?.scoreDelta).toBeNull();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+      // scoreDelta 쓰기까지 되돌아가도록 세이브포인트가 charge 전체를 감싼다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'ROLLBACK TO SAVEPOINT duel_penalty_ledger',
+      );
+      // 롤백은 세이브포인트를 파괴하지 않는다 — 루프 누적을 막으려면 RELEASE가 따라야 한다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'RELEASE SAVEPOINT duel_penalty_ledger',
+      );
+    });
+
     // 초대가 닿지 않았을 수 있는 상대에게 무응답 페널티를 물리지 않는다.
     it('chargePenalty=false면 EXPIRED로만 넘기고 점수·원장·보호막을 건드리지 않는다', async () => {
       duelRepo.findOne.mockResolvedValue(buildPendingDuel());

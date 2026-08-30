@@ -520,28 +520,39 @@ export class DuelsService {
    * insert에서 외부 상태에 달린 FK는 userId뿐이다 — duelId는 같은 트랜잭션이 방금 갱신한
    * 행이라 반드시 존재하고 spotId는 넘기지 않는다. 그래서 23503을 "유저가 사라짐"으로
    * 읽어도 다른 원인을 삼키지 않는다.
+   *
+   * **실제로 반영된 charge만 돌려준다.** 호출부는 인자로 넘긴 배열이 아니라 이 반환값으로
+   * 보호막·scoreDelta·알림 payload를 만들어야 한다 — 건너뛴 charge를 그대로 쓰면 일어나지
+   * 않은 차감을 알리게 된다.
    */
   private async chargeDuelPenalties(
     manager: EntityManager,
     charges: DuelPenaltyCharge[],
-  ): Promise<void> {
+  ): Promise<DuelPenaltyCharge[]> {
+    const applied: DuelPenaltyCharge[] = [];
     for (const charge of charges) {
-      // 실제로 깎인 결투에만 scoreDelta를 남긴다. 전이 UPDATE에서 일괄로 세팅하면, 상대가
-      // 이미 탈퇴해 charge가 만들어지지 않은 행에도 "2점 깎임"이 박혀 DB와 알림 payload가
-      // 일어나지 않은 차감을 주장하게 된다.
-      await manager.update(Duel, charge.duelId, { scoreDelta: charge.points });
-
-      await this.usersService.applyScoreDelta(
-        charge.userId,
-        -charge.points,
-        manager,
-      );
-
-      // 개인 랭킹은 users.score가 아니라 SUM(score_events.personalPoints)로 산출되므로
-      // 원장에도 남겨야 두 값이 어긋나지 않는다. teamPoints는 다른 결투 이벤트와 같이 0 —
-      // 결투 페널티가 팀 점수를 깎는 일은 없다(기획 확정).
+      // 세이브포인트는 원장 insert만이 아니라 이 charge의 쓰기 **전체**를 감싼다. insert만
+      // 감싸면 FK 위반으로 원장이 롤백된 뒤에도 duels.scoreDelta = 2가 남는데, 사라진 유저에
+      // 대한 applyScoreDelta는 0행 매칭이라 실제 차감은 없다 — 그 행이 일어나지 않은 차감을
+      // 주장하게 되고, duel.entity.ts가 약속한 "차감이 실제로 일어난 행에만 채워진다"가 깨진다.
       await manager.query('SAVEPOINT duel_penalty_ledger');
       try {
+        // 실제로 깎인 결투에만 scoreDelta를 남긴다. 전이 UPDATE에서 일괄로 세팅하면, 상대가
+        // 이미 탈퇴해 charge가 만들어지지 않은 행에도 "2점 깎임"이 박혀 DB와 알림 payload가
+        // 일어나지 않은 차감을 주장하게 된다.
+        await manager.update(Duel, charge.duelId, {
+          scoreDelta: charge.points,
+        });
+
+        await this.usersService.applyScoreDelta(
+          charge.userId,
+          -charge.points,
+          manager,
+        );
+
+        // 개인 랭킹은 users.score가 아니라 SUM(score_events.personalPoints)로 산출되므로
+        // 원장에도 남겨야 두 값이 어긋나지 않는다. teamPoints는 다른 결투 이벤트와 같이 0 —
+        // 결투 페널티가 팀 점수를 깎는 일은 없다(기획 확정).
         await this.scoresService.record(manager, {
           userId: charge.userId,
           team: charge.team,
@@ -551,6 +562,7 @@ export class DuelsService {
           duelId: charge.duelId,
         });
         await manager.query('RELEASE SAVEPOINT duel_penalty_ledger');
+        applied.push(charge);
       } catch (err) {
         if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
         await manager.query('ROLLBACK TO SAVEPOINT duel_penalty_ledger');
@@ -560,10 +572,11 @@ export class DuelsService {
         // 스필해 트랜잭션 전체가 급격히 느려진다.
         await manager.query('RELEASE SAVEPOINT duel_penalty_ledger');
         this.logger.warn(
-          `결투 페널티 원장 append 생략 — 유저가 사라짐 duelId=${charge.duelId} userId=${charge.userId}`,
+          `결투 페널티 생략 — 유저가 사라짐 duelId=${charge.duelId} userId=${charge.userId}`,
         );
       }
     }
+    return applied;
   }
 
   /**
@@ -641,7 +654,8 @@ export class DuelsService {
         ]
       : [];
 
-    const claimed = await this.dataSource.transaction(async (manager) => {
+    // null이면 CAS에서 밀린 것(이미 처리된 결투), 배열이면 실제로 반영된 차감 목록이다.
+    const applied = await this.dataSource.transaction(async (manager) => {
       const updateResult = await manager
         .createQueryBuilder()
         .update(Duel)
@@ -654,13 +668,12 @@ export class DuelsService {
           pending: DuelStatus.PENDING,
         })
         .execute();
-      if (updateResult.affected === 0) return false;
+      if (updateResult.affected === 0) return null;
 
-      await this.chargeDuelPenalties(manager, charges);
-      return true;
+      return this.chargeDuelPenalties(manager, charges);
     });
 
-    if (!claimed) {
+    if (applied === null) {
       throw new ConflictException(
         errBody(ErrorCode.DUEL_ALREADY_HANDLED, '이미 처리된 결투입니다.'),
       );
@@ -671,11 +684,11 @@ export class DuelsService {
     // 여기서 던지면 응답자는 에러 ack만 받고 duel:rejected를 못 받으며, 신청자에게도
     // 알림이 가지 않는다. 재시도는 409고 30초 타이머의 expireDuel도 PENDING이 아니라
     // null을 돌려주므로, 두 사람 다 종료 이벤트를 영영 못 받고 대기 화면에 갇힌다.
-    await this.grantShields(charges.map((c) => c.userId));
+    await this.grantShields(applied.map((c) => c.userId));
     await this.releasePairLockQuietly(duel);
 
     duel.status = DuelStatus.REJECTED;
-    duel.scoreDelta = charges[0]?.points ?? null;
+    duel.scoreDelta = applied[0]?.points ?? null;
     duel.respondedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
     return duel;
   }
@@ -717,14 +730,13 @@ export class DuelsService {
         .execute();
       if (updateResult.affected === 0) return null;
 
-      const applied = chargePenalty
+      const built = chargePenalty
         ? await this.buildNoResponseCharges(
             manager,
             updateResult.raw as SweptDuelRow[],
           )
         : [];
-      await this.chargeDuelPenalties(manager, applied);
-      return applied;
+      return this.chargeDuelPenalties(manager, built);
     });
     if (charges === null) return null;
 
@@ -1169,8 +1181,10 @@ export class DuelsService {
         .execute();
 
       const rows = result.raw as SweptDuelRow[];
-      const charges = await this.buildNoResponseCharges(manager, rows);
-      await this.chargeDuelPenalties(manager, charges);
+      const charges = await this.chargeDuelPenalties(
+        manager,
+        await this.buildNoResponseCharges(manager, rows),
+      );
 
       // RETURNING은 차감 전 스냅샷이라 scoreDelta가 비어 있다. 실제로 깎인 행에만
       // 채워 넣어야 알림 payload가 DB와 같은 얘기를 한다.
