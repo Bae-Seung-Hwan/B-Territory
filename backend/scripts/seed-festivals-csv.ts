@@ -20,10 +20,11 @@ const REQUIRED_DB_VARS = [
 ] as const;
 
 const AREA_CODE = '6'; // 부산
-const CSV_PATH = path.join(__dirname, '../../data/festivals_fix.csv');
+const CSV_PATH = path.join(__dirname, '../../data/festivals.csv');
 
-// data/festivals_fix.csv — TourAPI(kto_festival)와 부산시 API(busan_festival)를 합쳐
-// sigungu_code를 사람이 보강한 시딩용 파일 (data/DATA_README.md 참고).
+// data/festivals.csv — TourAPI(kto_festival), 부산시 API(busan_festival), 구·군별
+// 문화축제 CSV를 합쳐 날짜·sigungu_code를 보강한 최종 시딩용 파일
+// (data/DATA_README.md 참고).
 //
 // 이 스크립트는 초기 시딩만 담당하고, 이후 최신화는 FestivalsService.syncFromApi()의
 // TourAPI 동기화가 이어받는다(DATA_README "축제 데이터는 초기 시딩용으로 사용하고,
@@ -272,8 +273,8 @@ async function main() {
     );
   }
 
-  // 날짜 없는 행은 이 CSV의 알려진 상태다(busan_festival 전 건). 조용히 넘기면 "왜 40건이
-  // 안 들어왔는지"를 매번 다시 조사하게 되므로 출처별로 명시한다.
+  // 날짜 없는 행은 시딩할 수 없다. 최종 festivals.csv는 날짜 보정/제외 처리를 거친
+  // 파일이므로 이 경고가 뜨면 데이터 회귀로 보고 CSV를 먼저 확인한다.
   const noDateTotal = Object.values(built.skippedNoDate).reduce(
     (a, b) => a + b,
     0,
@@ -285,7 +286,7 @@ async function main() {
     console.warn(
       `날짜(start_date/end_date)가 없어 스킵한 행 ${noDateTotal}건: ${breakdown}\n` +
         `  eventStartDate/eventEndDate는 NOT NULL이며 진행 상태 판정의 유일한 근거라 날짜 없는 행은 넣을 수 없습니다.\n` +
-        `  부산시 API 원본 날짜는 자유 서식 문자열이라 CSV 작성 단계에서 비워진 상태입니다 — 이 행들을 살리려면 날짜 파서가 필요합니다.`,
+        `  날짜 미확정 행은 data/festivals_removed_missing_dates.csv로 분리되어야 합니다.`,
     );
   }
   if (built.skippedNoKey > 0) {

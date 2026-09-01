@@ -73,6 +73,7 @@
     "preset": "jest-expo",
     "moduleNameMapper": {
       "\\.css$": "<rootDir>/__mocks__/fileMock.js",
+      "^@/assets/(.*)$": "<rootDir>/assets/$1",
       "^@/(.*)$": "<rootDir>/src/$1"
     }
   },

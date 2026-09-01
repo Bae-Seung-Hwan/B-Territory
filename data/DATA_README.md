@@ -1,6 +1,6 @@
 # 부산 관광 앱 데이터 설명서
 
-- 갱신일: 2026-07-23 16:30:02
+- 갱신일: 2026-08-25
 - 프로젝트: B-Territory
 - 목적: 부산 관광 전략 게임 앱 개발을 위한 전처리 데이터 납품
 - 저장 위치: data/
@@ -12,26 +12,44 @@
 
 | 파일명 | 설명 | 건수/상태 |
 | --- | --- | ---: |
-| mission_places_final.csv | 앱 미션/GPS 인증용 최종 관광지 데이터 | 215 |
+| mission_places_final.csv | 앱 미션/GPS 인증용 최종 관광지 데이터. 숙박 제외 완료 | 197 |
+| mission_places_removed_stays.csv | mission_places_final.csv에서 제거한 숙박 데이터 | 18 |
 | busan_districts.csv | 부산 16개 구·군 마스터 데이터 | 16 |
-| busan_district_foreign_visitor_share.csv | 구·군 외국인 방문 비율 계산 결과 | 16 |
+| busan_district_foreign_visitor_share.csv | 구·군 외국인 방문 비율 계산 중간 산출물 | 16 |
 | visitor_stats_long.csv | 관광 통계 long-format 데이터 | 962 |
-| festivals_fix.csv | 축제/행사 데이터와 sigungu_code 보강 파일 | 45 |
+| festivals.csv | 앱/백엔드 초기 시딩용 최종 축제 데이터 | 20 |
+| festivals_removed_missing_dates.csv | 날짜가 없어 최종 축제 데이터에서 제외한 항목 | 20 |
+| festivals_removed_review_issues.csv | 리뷰에서 확인된 날짜 오매칭·중복 제거 항목 | 5 |
+| festival_manual_fixes_report.csv | 축제 날짜·주소·장소·구 코드 수동 보정 근거 리포트 | 15 |
 | busan_districts_boundary.geojson | 부산 16개 구·군 경계 GeoJSON | 16 |
 | code_tables.csv | 지역코드/분류코드 참고표 | 50 |
-| missing_detail_report.csv | 누락값 상세 리포트 | 15 |
-| mission_duplicate_report.csv | 미션 장소 중복 제거 리포트 | 4 |
 
 ## 2. 핵심 변경 사항
 
 ### mission_places_final.csv
 
-- 최종 미션 장소 데이터는 215건입니다.
+- 최종 미션 장소 데이터는 197건입니다.
+- 숙박 데이터(content_type_id=32, content_type_name=숙박) 18건을 제거했습니다.
+- 제거된 숙박 목록은 mission_places_removed_stays.csv에 별도 기록했습니다.
 - sigungu_code는 KTO areaCode=6 기준 숫자 코드 1~16으로 통일했습니다.
-- 한글 구명과 숫자 코드가 섞여 있던 문제를 수정했습니다.
-- is_outdoor 컬럼을 추가했습니다.
-- is_outdoor 값은 0 또는 1만 사용합니다.
+- is_outdoor 컬럼을 추가했으며 값은 0 또는 1만 사용합니다.
 - source_id는 원본 API 조인 키로 유지했습니다.
+
+주의:
+
+- 이미 시딩된 DB에서는 CSV에서 제거된 숙박 18건이 자동 삭제되지 않을 수 있습니다.
+- 기존 spots 데이터 정리는 서비스 기록(spot_claims, mission_photos, reviews 등)과의 관계를 확인한 뒤 별도 마이그레이션 또는 운영 스크립트로 처리해야 합니다.
+
+### festivals.csv
+
+- 최종 축제 데이터는 20건입니다.
+- 기존 festivals_fix.csv 45건을 아래처럼 분할했습니다.
+  - festivals.csv: 20건
+  - festivals_removed_missing_dates.csv: 20건
+  - festivals_removed_review_issues.csv: 5건
+- 날짜가 없거나 날짜 오매칭이 확인된 축제는 최종 시딩 파일에서 제외했습니다.
+- 수동 보정한 날짜·주소·장소·구 코드 근거는 festival_manual_fixes_report.csv에 기록했습니다.
+- 2026-08-25 기준 종료된 축제도 일부 포함되어 있습니다. 백엔드 조회 API에서 end_date 기준으로 노출 여부를 필터링합니다.
 
 ### busan_districts.csv
 
@@ -49,6 +67,7 @@ foreign_visitor_share 정의:
 
 - 한국관광공사 DataLabService의 이동통신 기반 방문자 수 데이터를 사용했습니다.
 - 이 값은 순수 관광 목적 관광객 수와 완전히 동일한 개념은 아니므로, 발표 자료에서는 "외국인 방문자 수 기반 비율"로 표현하는 것을 권장합니다.
+- 백엔드 시딩 기준 source of truth는 busan_districts.csv입니다.
 
 ### visitor_stats_long.csv
 
@@ -57,20 +76,6 @@ foreign_visitor_share 정의:
 - sigungu_code 누락 건수: 0건
 - 여러 구에 걸치는 클러스터는 대표 관광지 위치 기준으로 구 1개를 지정했습니다.
 - 이 데이터는 점령 점수 가중치 보조 근거와 공모전 발표 자료용으로 사용합니다.
-
-### festivals_fix.csv
-
-- 총 45건입니다.
-- 주소 또는 장소명으로 판별 가능한 축제는 sigungu_code를 보강했습니다.
-- sigungu_code 누락 건수: 1건
-- 현재 미매핑으로 남긴 데이터는 원본상 장소가 불명확한 축제입니다.
-- 장소 미정 데이터에는 임시 sigungu_code를 넣지 않았습니다.
-
-현재 미매핑 유지 사유:
-
-| title | 사유 |
-| --- | --- |
-| 2026 원아시아페스티벌(BOF) | 원본 address가 장소 미정 |
 
 ## 3. 주요 컬럼 설명
 
@@ -86,9 +91,32 @@ foreign_visitor_share 정의:
 | map_x | 경도 |
 | map_y | 위도 |
 | image_url | 대표 이미지 URL |
-| content_type | 장소 유형 |
+| content_type_id | KTO contenttypeid 기반 장소 유형 ID |
+| content_type_name | 장소 유형명 |
 | sigungu_code | KTO areaCode=6 기준 부산 시군구 코드 |
+| description | 장소 설명 |
+| homepage | 홈페이지 |
 | is_outdoor | 야외 미션 여부, 0 또는 1 |
+
+### festivals.csv
+
+| 컬럼 | 설명 |
+| --- | --- |
+| source | 원본 출처 |
+| source_id | 원본 API 고유 ID |
+| title | 축제명 |
+| address | 주소 |
+| place | 개최 장소 |
+| map_x | 경도 |
+| map_y | 위도 |
+| image_url | 대표 이미지 URL |
+| start_date | 시작일, YYYYMMDD |
+| end_date | 종료일, YYYYMMDD |
+| usage_time | 원본 운영/행사 기간 문구 |
+| tel | 문의 전화 |
+| description | 축제 설명 |
+| homepage | 홈페이지 |
+| sigungu_code | 대표 구·군 코드 |
 
 ### busan_districts.csv
 
@@ -113,21 +141,6 @@ foreign_visitor_share 정의:
 | spot | 관광 통계상 관광지/클러스터명 |
 | metric | 통계 항목 |
 | value | 통계 값 |
-| sigungu_code | 대표 구·군 코드 |
-
-### festivals_fix.csv
-
-| 컬럼 | 설명 |
-| --- | --- |
-| source | 원본 출처 |
-| source_id | 원본 API 고유 ID |
-| title | 축제명 |
-| address | 주소 |
-| place | 개최 장소 |
-| map_x | 경도 |
-| map_y | 위도 |
-| start_date | 시작일 |
-| end_date | 종료일 |
 | sigungu_code | 대표 구·군 코드 |
 
 ## 4. 부산 시군구 코드 기준
@@ -155,11 +168,12 @@ foreign_visitor_share 정의:
 
 | API/데이터 | 활용 |
 | --- | --- |
-| 한국관광공사 국문 관광정보 서비스GW | 관광지, 숙박, 축제, 지역코드, 분류코드 |
+| 한국관광공사 국문 관광정보 서비스GW | 관광지, 축제, 지역코드, 분류코드 |
 | 부산광역시 부산명소정보 서비스 | 부산 명소 데이터 보강 |
 | 부산광역시 부산축제정보 서비스 | 부산 축제 데이터 보강 |
 | 부산광역시 관광실태조사 통계정보 서비스 | 관광 통계 long-format 변환 |
 | 한국관광공사 DataLabService 지역별 방문자수_GW | 구·군 외국인 방문 비율 계산 |
+| 구·군별 문화축제 CSV | 축제 날짜 보강 |
 | 행정안전부/SGIS 계열 행정경계 데이터 | 부산 구·군 경계 GeoJSON 생성 |
 
 ## 6. 백엔드 사용 기준
@@ -167,33 +181,30 @@ foreign_visitor_share 정의:
 - 구 단위 점령 집계는 mission_places_final.csv의 sigungu_code 기준으로 GROUP BY 합니다.
 - 날씨 API 연동 시 우천 버프는 is_outdoor = 1인 미션에만 적용합니다.
 - 관광지별 외국인 방문 비율이 없는 경우 관광지는 소속 구의 foreign_visitor_share를 상속해서 사용할 수 있습니다.
-- 축제 데이터는 초기 시딩용으로 사용하고, 이후 KTO searchFestival2 API 동기화로 전환할 수 있습니다.
+- 축제 초기 시딩 기준 파일은 festivals.csv입니다.
+- 날짜가 없거나 오매칭으로 제외한 축제는 festivals_removed_missing_dates.csv와 festivals_removed_review_issues.csv에서 확인합니다.
 - busan_districts_boundary.geojson은 구 단위 점령 지도 색칠 렌더링에 사용합니다.
-
-> **`sigungu_code` 혼재 형식 안내 (시딩 정규화)**: mission_places_final.csv의 `sigungu_code`는 소스에 따라 KTO 숫자 코드(`kto_*` 소스)와 한글 구 이름(`busan_attraction` 소스)이 혼재되어 있습니다. 백엔드 시딩 스크립트(`backend/scripts/seed-spots-csv.ts`)가 DB 삽입 시 KTO 표준 부산 구 코드(가나다순 `1` 강서구 ~ `16` 해운대구)로 정규화하므로 DB에는 숫자 코드만 존재합니다. 매핑할 수 없는 새 값이나 빈 값이 CSV에 들어오면 시딩이 실패합니다 (빈 값은 구 집계에서 조용히 누락되는 것을 막기 위해, 매핑 불가 값은 스크립트의 매핑 테이블 갱신이 필요하다는 것을 알리기 위해 각각 실패시킵니다). CSV를 새로 받을 때는 `sigungu_code` 결측 여부를 품질 검수 항목에 포함하세요.
 
 ## 7. 검증 요약
 
 | 항목 | 결과 |
 | --- | --- |
+| mission_places_final.csv 행 수 | 197건 |
+| mission_places_final.csv 숙박 잔존 | 0건 |
 | mission_places_final.csv sigungu_code 통일 | 완료 |
 | mission_places_final.csv is_outdoor 0/1 | 완료 |
+| mission_places_removed_stays.csv 행 수 | 18건 |
+| festivals.csv 행 수 | 20건 |
+| festivals.csv 필수 필드 누락 | 0건 |
+| festivals.csv end_date < start_date | 0건 |
+| festival_manual_fixes_report.csv 행 수 | 15건 |
+| 축제 데이터 분할 합계 | 20 + 20 + 5 = 45건 |
 | visitor_stats_long.csv sigungu_code 누락 | 0건 |
-| festivals_fix.csv sigungu_code 누락 | 1건 |
 | busan_districts.csv 외국인 방문 비율 | 반영 |
 | busan_districts_boundary.geojson | 완료 |
-| mission_places_final.csv sigungu_code 결측(빈 값) | 0건 |
-| 주소↔sigungu_code 불일치(원본 오류) | 3건 (아래) |
-
-> **주소↔`sigungu_code` 불일치 (원본 데이터 오류, 코드로 자동 정정 불가)**: 아래 3건은 `sigungu_code` 값 자체는 유효한 숫자 코드라 시딩 정규화(`normalizeSigunguCode`)를 통과하지만, 주소의 구/군과 어긋나 해당 장소의 점령이 엉뚱한 구로 집계되거나 두 장소가 한 행에 병합돼 있습니다. 시딩 스크립트가 주소와 코드를 교차검증해 **경고**로 출력하니(`seed:spots` 로그 확인), CSV 갱신 시 함께 점검하세요.
->
-> | mission_id | 내용 |
-> |---|---|
-> | MISSION_0031 | 주소는 `수영구 광남로 96`인데 `sigungu_code`가 `16`(해운대구) — 코드 오류 |
-> | MISSION_0183 | address에 주소 2개 병합 (`서구 ...` + `중구 ...`), 코드는 `15`(중구) |
-> | MISSION_0201 | `동래향교`(동래구)+`기장향교`(기장군)가 한 행에 병합, 주소 2개 / 코드는 `6`(동래구) |
 
 ## 8. 남은 협의 사항
 
-- 원아시아페스티벌처럼 장소 미정인 축제는 확정 장소 공개 후 sigungu_code를 반영합니다.
+- 이미 시딩된 DB에서 숙박 18건을 삭제할지, 비활성 처리할지는 백엔드 데이터 보존 정책에 따라 결정해야 합니다.
+- 축제 데이터 중 종료된 행사는 백엔드 조회 API에서 end_date 기준으로 노출 여부를 필터링합니다.
 - 외국인 방문 비율은 이동통신 기반 방문자 수이므로, 발표 자료에서는 데이터 정의를 함께 설명해야 합니다.

@@ -1,13 +1,21 @@
 import { create } from 'zustand';
 
+/** 이번 주 수도 — MapHUD와 DistrictPolygons가 같은 값을 구독해 표시/강조에 함께 쓴다. */
+export interface CapitalDistrict {
+  sigunguCode: string;
+  nameKo: string;
+  nameEn: string;
+  multiplier: number;
+}
+
 interface GameStore {
   // districtId → nationality (e.g. 'KR', 'JP')
   occupiedDistricts: Record<string, string>;
   teamScores: Record<string, number>;
-  capitalDistrict: string | null;
+  capitalDistrict: CapitalDistrict | null;
   setOccupiedDistricts: (d: Record<string, string>) => void;
   setTeamScores: (s: Record<string, number>) => void;
-  setCapitalDistrict: (d: string | null) => void;
+  setCapitalDistrict: (d: CapitalDistrict | null) => void;
 }
 
 export const useGameStore = create<GameStore>((set) => ({
