@@ -120,11 +120,17 @@ export class RealtimeGateway
     event: string,
     payload: unknown,
     /**
-     * 라운드가 살아 있는 동안에만 의미가 있는 이벤트(game:start·game:go)는 큐에 넣지
-     * 않는다. 큐 보관은 30분(NOTIFICATION_QUEUE_TTL = PENALTY_TTL)인데 라운드는 45초라,
-     * 수락 시점에 잠깐 끊겼던 참가자가 한참 뒤 재접속해서 이미 지난 deadlineAt을 가진
-     * game:start를 재생받고 끝난 결투의 게임 화면을 연다. 못 받으면 미제출로 기권패인데,
-     * 그건 원래 정의된 결과다.
+     * 수명이 짧아 큐에 넣으면 안 되는 이벤트를 위한 플래그. 큐 보관은 30분
+     * (NOTIFICATION_QUEUE_TTL = PENALTY_TTL)이라, 그보다 훨씬 빨리 의미를 잃는 이벤트를
+     * 큐잉하면 한참 뒤 재접속한 클라이언트가 이미 끝난 일에 대한 화면을 연다.
+     *
+     * - game:start·game:go — 라운드가 45초다. 수락 시점에 잠깐 끊겼던 참가자가 한참 뒤
+     *   재접속해 이미 지난 deadlineAt을 가진 game:start를 재생받고 끝난 결투의 게임 화면을
+     *   연다. 못 받으면 미제출로 기권패인데, 그건 원래 정의된 결과다.
+     * - duel:requested — 초대가 30초(DUEL_REQUEST_TTL)라 격차가 가장 크다. 큐잉하면 20분 뒤
+     *   접속한 유저가 이미 EXPIRED된 결투의 초대 모달을 받고, 곧이어 재생되는 duel:expired에
+     *   그 모달이 사라진다. 큐잉하지 않으면 "전달 안 됨 = 큐잉 안 함 = 무응답으로 청구하지
+     *   않음"이 한 줄로 맞아떨어진다(duel.entity.ts#inviteDeliveredAt).
      */
     ephemeral = false,
   ): Promise<boolean> {
@@ -290,12 +296,18 @@ export class RealtimeGateway
         fromUserId: user.id,
         fromNickname: user.nickname,
       },
+      // 초대는 30초짜리라 큐에 넣지 않는다 (notifyUser의 ephemeral 주석 참고).
+      true,
     );
-    if (delivered) await this.duelsService.markInviteDelivered(duel.id);
 
+    // 타이머를 전달 기록보다 **먼저** 건다. markInviteDelivered는 실패해도 삼키는 부수적
+    // 쓰기인데 그걸 await한 뒤에 타이머를 걸면, DB가 느린 만큼 만료가 30초보다 늦게
+    // 발화한다. startGameRound가 같은 이유로 emit보다 타이머를 먼저 건다.
     setTimeout(() => {
       void this.expireAndNotify(duel.id, user.id, dto.targetUserId);
     }, DUEL_REQUEST_TTL * 1000);
+
+    if (delivered) await this.duelsService.markInviteDelivered(duel.id);
 
     return { status: 'ok', duelId: duel.id };
   }

@@ -343,6 +343,45 @@ describe('DuelsService', () => {
     });
   });
 
+  /**
+   * 이 스탬프가 무응답 청구의 유일한 근거다(duel.entity.ts#inviteDeliveredAt) —
+   * 게이트웨이가 duel:requested를 살아 있는 소켓으로 emit한 직후에만 호출한다.
+   */
+  describe('markInviteDelivered', () => {
+    it('PENDING인 결투에만 전달 시각을 찍는다', async () => {
+      const qb = createQueryBuilderMock(1);
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(qb);
+
+      await service.markInviteDelivered(7);
+
+      // 앱 시계가 아니라 DB 시계로 찍어야 requestedAt(@CreateDateColumn)과 같은 기준이
+      // 된다 — 앱과 DB의 타임존이 다르면 두 값이 수 시간 어긋난다(sweepStaleDuels 주석).
+      const setArg = (
+        qb.set.mock.calls[0] as [{ inviteDeliveredAt: () => string }]
+      )[0];
+      expect(setArg.inviteDeliveredAt()).toBe('CURRENT_TIMESTAMP');
+      // emit과 이 UPDATE 사이에 상대가 이미 응답했다면 무응답 판정 대상이 아니다 —
+      // status 조건이 빠지면 REJECTED/ACCEPTED 행에도 스탬프가 찍힌다.
+      expect(qb.where).toHaveBeenCalledWith(
+        expect.stringContaining('status = :pending'),
+        { id: 7, pending: DuelStatus.PENDING },
+      );
+    });
+
+    /**
+     * 초대는 이미 상대 화면에 떴고 결투도 살아 있는데 여기서 던지면 신청자만 에러 ack를
+     * 받는다. 기록을 놓친 대가는 "이번 무응답을 청구하지 못한다"로, 반대 방향의 오류
+     * (받은 적 없는 초대에 청구)보다 훨씬 가볍다.
+     */
+    it('기록에 실패해도 예외를 올리지 않는다', async () => {
+      (duelRepo.createQueryBuilder as jest.Mock).mockImplementationOnce(() => {
+        throw new Error('db down');
+      });
+
+      await expect(service.markInviteDelivered(7)).resolves.toBeUndefined();
+    });
+  });
+
   describe('respondDuel', () => {
     const buildPendingDuel = (): Duel =>
       ({

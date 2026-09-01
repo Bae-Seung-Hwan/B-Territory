@@ -438,28 +438,59 @@ describe('duel:requested 전달 기록', () => {
     expect(markInviteDelivered).toHaveBeenCalledWith(duelId);
   });
 
-  // 메타 TTL(120초)이 남아 있어 신청 자체는 통과했지만, 정작 알림은 큐로 갔을 케이스다.
-  it('상대 소켓이 사라져 큐로 가면 전달로 기록하지 않는다', async () => {
+  // 메타 TTL(120초)이 남아 있어 신청 자체는 통과했지만, 정작 소켓은 사라진 케이스다.
+  it('상대 소켓이 사라지면 전달로 기록하지 않는다', async () => {
     jest.useFakeTimers();
-    const { gateway, client, markInviteDelivered, queueNotification } =
-      make(undefined);
+    const { gateway, client, markInviteDelivered } = make(undefined);
 
     await gateway.handleDuelRequest(client, { targetUserId });
 
-    expect(queueNotification).toHaveBeenCalled();
     expect(markInviteDelivered).not.toHaveBeenCalled();
   });
 
   // ping 타임아웃 전이라 Map에는 남아 있지만 connected가 내려간 소켓.
   it('소켓이 남아 있어도 connected가 아니면 전달로 기록하지 않는다', async () => {
     jest.useFakeTimers();
-    const { gateway, client, markInviteDelivered, queueNotification } = make({
-      connected: false,
+    const { gateway, client, markInviteDelivered } = make({ connected: false });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 초대는 30초(DUEL_REQUEST_TTL)짜리인데 알림 큐는 30분(NOTIFICATION_QUEUE_TTL)을 보관한다.
+   * 큐에 넣으면 20분 뒤 접속한 유저가 이미 EXPIRED된 결투의 초대 모달을 받고, 곧이어
+   * 재생되는 duel:expired에 그 모달이 사라진다.
+   */
+  it('전달하지 못한 초대는 큐에 쌓지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, queueNotification } = make(undefined);
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(queueNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * markInviteDelivered는 실패해도 삼키는 부수적 쓰기다 — 그걸 await한 뒤에 타이머를 걸면
+   * DB가 느린 만큼 만료가 30초보다 늦게 발화한다(startGameRound가 같은 이유로 emit보다
+   * 타이머를 먼저 건다).
+   */
+  it('만료 타이머를 전달 기록보다 먼저 건다', async () => {
+    jest.useFakeTimers();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const { gateway, client, markInviteDelivered } = make({ connected: true });
+    let timerArmedWhenMarked: boolean | null = null;
+    markInviteDelivered.mockImplementation(() => {
+      timerArmedWhenMarked = setTimeoutSpy.mock.calls.length > 0;
+      return Promise.resolve();
     });
 
     await gateway.handleDuelRequest(client, { targetUserId });
 
-    expect(queueNotification).toHaveBeenCalled();
-    expect(markInviteDelivered).not.toHaveBeenCalled();
+    expect(markInviteDelivered).toHaveBeenCalled();
+    expect(timerArmedWhenMarked).toBe(true);
+    setTimeoutSpy.mockRestore();
   });
 });
