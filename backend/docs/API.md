@@ -325,18 +325,20 @@ curl http://localhost:3000/api/spots/930
 | 원장 기록 | `score_events`에 한 줄 — 거절은 `DUEL_REJECT`, 무응답은 `DUEL_NO_RESPONSE` (둘 다 `personalPoints: -2`, `teamPoints: 0`) |
 | 수락(`duel:accept`) | 차감도 보호막도 **없습니다** |
 | 탈퇴로 끝난 결투 | 차감도 보호막도 **없습니다** — 아무도 응답을 회피한 것이 아닙니다 |
-| 만료 시점에 끊겨 있던 상대 | 차감도 보호막도 **없습니다** (아래 참고) |
+| 초대가 전달되지 않은 상대 | 차감도 보호막도 **없습니다** (아래 참고) |
 
-무응답 차감은 **만료 시점에 상대 소켓이 살아 있을 때만** 청구합니다. 끊긴 상대에게는
-`duel:requested`가 전달되지 못하고 Redis 큐에 쌓이는데, 화면에 뜬 적도 없는 초대에 무응답
-페널티를 물릴 수는 없기 때문입니다. 이 경우 결투는 `EXPIRED`로 넘어가고 `duel:expired`의
-`scorePenalty`는 `0`, `penalizedUserId`와 `shieldUntil`은 `null`로 나갑니다.
+무응답 차감은 **`duel:requested`가 상대에게 실제로 전달됐을 때만** 청구합니다. 상대가
+접속해 있지 않으면 초대는 전달되지 못하고 Redis 큐에 쌓이는데, 화면에 뜬 적도 없는 초대에
+무응답 페널티를 물릴 수는 없기 때문입니다. 이 경우 결투는 `EXPIRED`로 넘어가고
+`duel:expired`의 `scorePenalty`는 `0`, `penalizedUserId`와 `shieldUntil`은 `null`로 나갑니다.
 
-> 판정이 성립하려면 끊김이 30초(만료) 안에 드러나야 하므로, socket.io 핑을 기본값보다
-> 촘촘히(`pingInterval` 10초 / `pingTimeout` 10초) 잡아 최악 20초 안에 감지합니다.
-> 클라이언트가 별도로 맞출 설정은 없습니다.
+> 전달 여부는 **초대를 보내는 순간** 확정해 기록합니다(`duels.inviteDeliveredAt`). 만료
+> 시점(30초 뒤)에 소켓 생존을 다시 확인하는 방식이 아닙니다 — 끊김은 ping timeout만큼
+> 늦게 드러나 30초 창의 후반부를 덮지 못하고, 서버 재시작으로 만료 타이머가 유실되면
+> 확인할 방법조차 없기 때문입니다. socket.io 핑은 기본값(`pingInterval` 25초 /
+> `pingTimeout` 20초)을 씁니다. 클라이언트가 별도로 맞출 설정은 없습니다.
 
-**`duel:rejected` / `duel:expired` payload** (양쪽 참가자에게 동일하게 갑니다)
+**`duel:rejected` / `duel:expired` / `duel:voided` payload** (양쪽 참가자에게 동일하게 갑니다)
 
 ```json
 {
@@ -356,6 +358,11 @@ curl http://localhost:3000/api/spots/930
 > `shieldUntil`이 남은 초가 아니라 절대 시각인 이유: 상대가 오프라인이면 이 알림이 최대 30분
 > 큐에 있다가 재접속 시 재생됩니다. 남은 초를 보내면 이미 끝난 보호막에 대해 카운트다운을
 > 새로 시작하게 됩니다. 재신청 가능 여부의 실제 판정은 언제나 서버가 다시 내립니다.
+
+> `duel:voided`(무효 종료 — 미니게임 시작 실패, 라운드 미제출, 스윕)도 **같은 형태**로
+> 갑니다. VOID는 누구의 책임도 아닌 종료라 `scorePenalty`는 항상 `0`,
+> `penalizedUserId`와 `shieldUntil`은 `null`입니다. 라운드 결과가 있는 경우에만
+> `scores` 필드가 추가로 붙습니다.
 
 **`duel:request` 에러 케이스 (추가)**
 

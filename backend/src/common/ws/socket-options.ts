@@ -5,15 +5,15 @@
  * 초기화된 게이트웨이의 옵션으로 만들어진다. 어느 쪽이 먼저 뜨든 값이 같도록 양쪽에서
  * 이 상수를 쓴다.
  *
- * 핑을 기본값(pingInterval 25s / pingTimeout 20s)보다 촘촘히 잡는 이유는 결투 무응답
- * 페널티 때문이다. 기본값이면 끊긴 연결이 최대 45초(25+20) 뒤에야 disconnect로 드러나는데
- * 결투 신청은 30초(DUEL_REQUEST_TTL)에 만료된다. 그 사이 socket.connected가 계속 true라
- * 게이트웨이는 죽은 소켓에 duel:requested를 흘려보내고, 초대를 받은 적도 없는 유저가
- * "무응답"으로 점수를 물었다. 10s + 10s면 최악 20초 안에 끊김이 드러나, 만료 시점의
- * 생존 판정을 신뢰할 수 있다.
+ * 값은 socket.io 기본값(25s/20s)이다. 한때 결투 무응답 페널티 때문에 10s/10s로 조였던
+ * 적이 있는데, 만료(30초) 시점에 소켓 생존을 읽어 청구 여부를 가르느라 끊김이 그 전에
+ * 드러나야 했기 때문이다. 그 방식은 두 가지가 어긋났다 — 10s+10s로 조여도 감지 지연이
+ * 최대 20초라 창 후반부(T+10s 이후)의 단절은 여전히 놓쳤고, 판정 근거가 전송 계층의
+ * 타이밍에 묶여 있었다.
  *
- * DUEL_REQUEST_TTL을 줄인다면 이 합(20초)도 함께 줄여야 한다 — 감지 지연이 만료보다
- * 길어지는 순간 위 전제가 깨진다.
+ * 지금은 초대 전달 여부를 emit 시점에 duels.inviteDeliveredAt으로 기록해서 판단하므로
+ * (duel.entity.ts 참고) 핑 주기와 무관하다. 하트비트를 2.5배로 늘려 전 클라이언트의
+ * 트래픽과 불안정한 회선의 재연결을 감수할 이유가 없어져 기본값으로 되돌린다.
  */
-export const SOCKET_PING_INTERVAL_MS = 10_000;
-export const SOCKET_PING_TIMEOUT_MS = 10_000;
+export const SOCKET_PING_INTERVAL_MS = 25_000;
+export const SOCKET_PING_TIMEOUT_MS = 20_000;

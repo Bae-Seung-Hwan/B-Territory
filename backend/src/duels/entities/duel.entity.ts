@@ -69,6 +69,17 @@ export class Duel {
   @CreateDateColumn()
   requestedAt: Date;
 
+  /**
+   * duel:requested를 상대의 살아 있는 소켓으로 실제 emit한 시각. 큐에만 쌓였으면 NULL이다.
+   *
+   * 무응답 페널티의 유일한 근거다 — 받은 적 없는 초대에 "무응답"을 물릴 수는 없다.
+   * 전달 여부는 emit 시점에 확정되는 사실이라 여기에 남긴다. 만료 시점(T+30s)에 소켓
+   * 생존을 다시 확인하는 방식은 ping timeout만큼의 감지 지연이 있어 창 후반부의 단절을
+   * 놓쳤고, 타이머가 유실돼 sweepStaleDuels로 넘어간 신청은 아예 확인할 방법이 없었다.
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  inviteDeliveredAt: Date | null;
+
   @Column({ type: 'timestamp', nullable: true })
   respondedAt: Date | null;
 

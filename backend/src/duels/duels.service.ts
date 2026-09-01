@@ -89,6 +89,20 @@ export function duelPenaltyPayload(row: {
   };
 }
 
+/**
+ * duel:voided의 공통 payload.
+ *
+ * VOID는 누구의 책임도 아닌 종료(미니게임 시작 실패, 라운드 미제출, 스윕)라 차감이 없다 —
+ * 그래도 duel:expired/duel:rejected와 **같은 형태**로 내려보낸다. 같은 이벤트명인데 트리거
+ * 경로마다 필드가 다르면 클라이언트가 경로를 알 수 없는 채 undefined를 만난다. 스윕 경로는
+ * 이미 duelPenaltyPayload를 쓰고 있어, 나머지 경로를 여기에 맞춘다.
+ */
+export function duelVoidPayload(
+  duelId: number,
+): ReturnType<typeof duelPenaltyPayload> {
+  return duelPenaltyPayload({ id: duelId, opponentId: null });
+}
+
 const ACTIVE_STATUSES = [DuelStatus.PENDING, DuelStatus.ACCEPTED];
 
 // 참가자 id는 DB가 nullable이다(탈퇴 시 SET NULL). 엔티티 쪽은 진행 중인 결투만 읽는다는
@@ -105,6 +119,55 @@ type SweptDuelRow = {
   // 탈퇴 종료 경로에서만 채운다 — EXPIRED/VOID를 한 배열로 넘기고 알림 때 다시 가른다.
   event?: string;
 };
+
+/**
+ * 무응답 만료(PENDING→EXPIRED) 경로의 RETURNING 행.
+ *
+ * `inviteDeliveredAt`을 **필수**로 둔 이유는, 이 값이 청구 여부를 가르는 유일한 근거라서다.
+ * 옵셔널로 두면 RETURNING에서 빠뜨렸을 때 전부 "미전달"로 읽혀 페널티가 조용히 사라진다.
+ */
+type ExpiredDuelRow = SweptDuelRow & {
+  inviteDeliveredAt: Date | string | null;
+};
+
+/**
+ * SAVEPOINT로 감싼 부분 쓰기. body가 실패하면 그 안의 쓰기만 되돌리고 트랜잭션은 살려둔다
+ * — Postgres는 실패한 문 하나가 트랜잭션 전체를 abort시키므로, 배치의 한 행 때문에 나머지가
+ * 함께 날아가는 것을 막으려면 SAVEPOINT가 필요하다.
+ *
+ * `shouldSkip`이 false를 주는 오류는 되돌린 뒤 그대로 던진다 — 건너뛸 수 없는 실패까지
+ * 삼키면 부분 반영이 조용히 커밋된다. 건너뛴 경우에는 원인을 로그로 가릴 수 있도록
+ * 삼킨 오류를 함께 돌려준다.
+ *
+ * ROLLBACK만으로는 세이브포인트가 사라지지 않는다. 같은 이름을 반복해 쓰는 루프에서
+ * RELEASE를 빠뜨리면 서브트랜잭션이 쌓이고, 64개를 넘는 순간 Postgres가 pg_subtrans로
+ * 스필해 트랜잭션 전체가 급격히 느려진다. 그래서 성공·실패 양쪽에서 반드시 RELEASE한다.
+ *
+ * `name`은 SQL에 그대로 박히므로 호출부가 반드시 리터럴을 넘겨야 한다(외부 입력 금지).
+ */
+async function runInSavepoint(
+  manager: EntityManager,
+  name: string,
+  body: () => Promise<void>,
+  shouldSkip: (err: unknown) => boolean,
+): Promise<{ applied: true } | { applied: false; error: unknown }> {
+  await manager.query(`SAVEPOINT ${name}`);
+  try {
+    await body();
+    await manager.query(`RELEASE SAVEPOINT ${name}`);
+    return { applied: true };
+  } catch (err) {
+    await manager.query(`ROLLBACK TO SAVEPOINT ${name}`);
+    await manager.query(`RELEASE SAVEPOINT ${name}`);
+    if (!shouldSkip(err)) throw err;
+    return { applied: false, error: err };
+  }
+}
+
+/** 결투 참가자가 이미 탈퇴해 원장 FK가 깨지는 경우 — 그 행만 건너뛴다. */
+function isMissingUser(err: unknown): boolean {
+  return pgErrorCode(err) === PG_FOREIGN_KEY_VIOLATION;
+}
 
 /** 결투를 성립시키지 못한 쪽에 물리는 개인 점수 차감 1건 (거절·무응답 공통). */
 type DuelPenaltyCharge = {
@@ -425,6 +488,37 @@ export class DuelsService {
     return duel;
   }
 
+  /**
+   * duel:requested가 상대의 살아 있는 소켓으로 실제 emit됐음을 기록한다 (게이트웨이가 emit
+   * 직후 호출).
+   *
+   * 이 스탬프가 무응답 페널티의 유일한 근거다 — 비어 있으면 만료·스윕 어느 쪽으로 끝나든
+   * 청구하지 않는다(buildNoResponseCharges).
+   *
+   * 실패해도 예외를 올리지 않는다. 초대는 이미 상대 화면에 떴고 결투도 살아 있는데 여기서
+   * 던지면 신청자만 에러 ack를 받는다. 기록을 놓친 대가는 "이번 무응답을 청구하지 못한다"로,
+   * 반대 방향의 오류(받은 적 없는 초대에 청구)보다 훨씬 가볍다.
+   */
+  async markInviteDelivered(duelId: number): Promise<void> {
+    try {
+      // status 조건을 함께 건다 — emit과 이 UPDATE 사이에 상대가 이미 응답했다면 그 결투는
+      // 더 이상 무응답 판정 대상이 아니라, 스탬프를 남길 이유도 없다.
+      await this.duelRepo
+        .createQueryBuilder()
+        .update(Duel)
+        .set({ inviteDeliveredAt: () => 'CURRENT_TIMESTAMP' })
+        .where('id = :id AND status = :pending', {
+          id: duelId,
+          pending: DuelStatus.PENDING,
+        })
+        .execute();
+    } catch (err) {
+      this.logger.warn(
+        `결투 초대 전달 기록 실패 duelId=${duelId} — 이 건은 무응답으로 청구하지 않는다: ${(err as Error).message}`,
+      );
+    }
+  }
+
   async respondDuel(
     duelId: number,
     responderId: string,
@@ -512,14 +606,11 @@ export class DuelsService {
    * **반드시 상태 전이 CAS와 같은 트랜잭션(manager)에서 호출할 것** — 상태만 넘어가고
    * 차감이 빠지거나 그 반대인 부분 반영을 만들지 않기 위해서다.
    *
-   * 원장 insert는 resolveDuel과 같은 이유로 SAVEPOINT로 감싼다. 대상 유저가 이 사이에
-   * 탈퇴하면 FK 위반(23503)이 나는데, Postgres는 실패한 문이 트랜잭션 전체를 abort시켜
-   * 스윕 배치라면 한 명 때문에 그 회차 전부가 날아간다. 그 한 행만 건너뛰고 나머지는
-   * 그대로 커밋한다.
-   *
-   * insert에서 외부 상태에 달린 FK는 userId뿐이다 — duelId는 같은 트랜잭션이 방금 갱신한
-   * 행이라 반드시 존재하고 spotId는 넘기지 않는다. 그래서 23503을 "유저가 사라짐"으로
-   * 읽어도 다른 원인을 삼키지 않는다.
+   * charge 하나하나를 SAVEPOINT로 감싼다(runInSavepoint). Postgres는 실패한 문이 트랜잭션
+   * 전체를 abort시키므로, 감싸지 않으면 한 건의 실패가 스윕 배치 회차 전부(그 회차의
+   * PENDING→EXPIRED 전환 포함)를 되돌린다. 여기서는 **어떤 오류든** 그 charge만 건너뛴다 —
+   * 흔한 원인은 대상 유저의 탈퇴(FK 위반 23503)지만, 일시적 DB 오류나 직렬화 실패도
+   * 마찬가지로 배치를 통째로 날릴 이유가 되지 않는다.
    *
    * **실제로 반영된 charge만 돌려준다.** 호출부는 인자로 넘긴 배열이 아니라 이 반환값으로
    * 보호막·scoreDelta·알림 payload를 만들어야 한다 — 건너뛴 charge를 그대로 쓰면 일어나지
@@ -535,44 +626,57 @@ export class DuelsService {
       // 감싸면 FK 위반으로 원장이 롤백된 뒤에도 duels.scoreDelta = 2가 남는데, 사라진 유저에
       // 대한 applyScoreDelta는 0행 매칭이라 실제 차감은 없다 — 그 행이 일어나지 않은 차감을
       // 주장하게 되고, duel.entity.ts가 약속한 "차감이 실제로 일어난 행에만 채워진다"가 깨진다.
-      await manager.query('SAVEPOINT duel_penalty_ledger');
-      try {
-        // 실제로 깎인 결투에만 scoreDelta를 남긴다. 전이 UPDATE에서 일괄로 세팅하면, 상대가
-        // 이미 탈퇴해 charge가 만들어지지 않은 행에도 "2점 깎임"이 박혀 DB와 알림 payload가
-        // 일어나지 않은 차감을 주장하게 된다.
-        await manager.update(Duel, charge.duelId, {
-          scoreDelta: charge.points,
-        });
+      const outcome = await runInSavepoint(
+        manager,
+        'duel_penalty_ledger',
+        async () => {
+          // 실제로 깎인 결투에만 scoreDelta를 남긴다. 전이 UPDATE에서 일괄로 세팅하면, 상대가
+          // 이미 탈퇴해 charge가 만들어지지 않은 행에도 "2점 깎임"이 박혀 DB와 알림 payload가
+          // 일어나지 않은 차감을 주장하게 된다.
+          await manager.update(Duel, charge.duelId, {
+            scoreDelta: charge.points,
+          });
 
-        await this.usersService.applyScoreDelta(
-          charge.userId,
-          -charge.points,
-          manager,
-        );
+          await this.usersService.applyScoreDelta(
+            charge.userId,
+            -charge.points,
+            manager,
+          );
 
-        // 개인 랭킹은 users.score가 아니라 SUM(score_events.personalPoints)로 산출되므로
-        // 원장에도 남겨야 두 값이 어긋나지 않는다. teamPoints는 다른 결투 이벤트와 같이 0 —
-        // 결투 페널티가 팀 점수를 깎는 일은 없다(기획 확정).
-        await this.scoresService.record(manager, {
-          userId: charge.userId,
-          team: charge.team,
-          type: charge.type,
-          personalPoints: -charge.points,
-          teamPoints: 0,
-          duelId: charge.duelId,
-        });
-        await manager.query('RELEASE SAVEPOINT duel_penalty_ledger');
+          // 개인 랭킹은 users.score가 아니라 SUM(score_events.personalPoints)로 산출되므로
+          // 원장에도 남겨야 두 값이 어긋나지 않는다. teamPoints는 다른 결투 이벤트와 같이 0 —
+          // 결투 페널티가 팀 점수를 깎는 일은 없다(기획 확정).
+          await this.scoresService.record(manager, {
+            userId: charge.userId,
+            team: charge.team,
+            type: charge.type,
+            personalPoints: -charge.points,
+            teamPoints: 0,
+            duelId: charge.duelId,
+          });
+        },
+        // 여기서는 **어떤 오류든** 그 charge 하나만 건너뛴다. FK 위반만 걸러내면 나머지
+        // (일시적 DB 오류, 직렬화 실패 등)가 sweepStaleDuels의 트랜잭션 전체를 되돌려,
+        // 무관한 결투들의 PENDING→EXPIRED 전환까지 함께 취소된다. 그러면 그 결투들은 다음
+        // 회차에 다시 걸리고, 장애로 백로그가 쌓인 상황에서는 한 행이 배치를 계속 막는다.
+        // 페널티 한 건을 놓치는 쪽이 상태 전이 전체를 잃는 것보다 낫다.
+        () => true,
+      );
+      if (outcome.applied) {
         applied.push(charge);
-      } catch (err) {
-        if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
-        await manager.query('ROLLBACK TO SAVEPOINT duel_penalty_ledger');
-        // ROLLBACK만으로는 세이브포인트가 사라지지 않는다. 이 루프는 charges 수만큼 돌고
-        // charges는 sweepStaleDuels가 훑은 행 수에 비례하므로, RELEASE하지 않으면 같은 이름의
-        // 세이브포인트가 계속 쌓인다. 서브트랜잭션이 64개를 넘는 순간 Postgres가 pg_subtrans로
-        // 스필해 트랜잭션 전체가 급격히 느려진다.
-        await manager.query('RELEASE SAVEPOINT duel_penalty_ledger');
+        continue;
+      }
+      // 탈퇴는 정상적으로 예상되는 경로라 warn으로 조용히 넘기고, 그 외는 원인을 남겨야
+      // 하므로 스택과 함께 error로 올린다 — 배치가 계속 도는 만큼 여기서 안 남기면 페널티가
+      // 반복해서 조용히 사라진다.
+      if (isMissingUser(outcome.error)) {
         this.logger.warn(
           `결투 페널티 생략 — 유저가 사라짐 duelId=${charge.duelId} userId=${charge.userId}`,
+        );
+      } else {
+        this.logger.error(
+          `결투 페널티 생략 — 예상치 못한 오류 duelId=${charge.duelId} userId=${charge.userId}`,
+          outcome.error,
         );
       }
     }
@@ -582,6 +686,12 @@ export class DuelsService {
   /**
    * 응답 없이 만료된 신청에서, 응답하지 않은 쪽(opponentId)의 차감 목록을 만든다.
    *
+   * **초대가 실제로 전달된 행만 대상으로 삼는다**(inviteDeliveredAt IS NOT NULL). 상대가
+   * 접속해 있지 않아 duel:requested가 큐에만 쌓였다면 초대는 화면에 뜬 적이 없고, 받은 적
+   * 없는 초대에 "무응답"을 물릴 수는 없다. 이 필터를 게이트웨이가 아니라 여기에 두는 이유는
+   * 만료 경로가 둘(게이트웨이 타이머 expireDuel, 백스톱 sweepStaleDuels)이기 때문이다 —
+   * 한쪽에만 두면 서버 재시작으로 타이머가 유실된 신청이 스윕에서 무조건 청구된다.
+   *
    * 팀은 원장에 남길 "이벤트 시점의 팀"이다. 이 조회는 상태 전이 CAS와 **같은 트랜잭션**
    * 안에서 일어나므로 manager를 반드시 넘긴다 — 기본 리포지토리로 읽으면 트랜잭션이
    * 커넥션을 쥔 채 풀에서 두 번째 커넥션을 잡아, 만료 타이머가 풀 크기만큼 동시에
@@ -589,8 +699,11 @@ export class DuelsService {
    */
   private async buildNoResponseCharges(
     manager: EntityManager,
-    rows: SweptDuelRow[],
+    allRows: ExpiredDuelRow[],
   ): Promise<DuelPenaltyCharge[]> {
+    // `!= null`로 undefined까지 잡는다 — 타입이 RETURNING 누락을 컴파일 타임에 막지만,
+    // 뚫렸을 때 "전부 청구"가 아니라 "전부 미청구"로 넘어지는 쪽이 안전하다.
+    const rows = allRows.filter((row) => row.inviteDeliveredAt != null);
     const responderIds = [
       ...new Set(
         rows
@@ -696,17 +809,12 @@ export class DuelsService {
   /**
    * PENDING 상태로 DUEL_REQUEST_TTL이 지나도 응답 없으면 게이트웨이 타이머가 호출.
    *
-   * chargePenalty=false면 상태만 EXPIRED로 넘기고 점수도 보호막도 건드리지 않는다.
-   * 게이트웨이가 "응답자가 만료 시점에 접속돼 있지 않다"고 판단한 경우로, 초대 자체가
-   * 닿지 않았을 수 있어 무응답으로 볼 수 없다(realtime.gateway의 expireAndNotify 주석).
-   * 보호막도 함께 건너뛴다 — 보호막은 차감의 짝이라, 깎지 않았는데 주면 아무 대가 없이
-   * 30분간 결투를 피하는 수단이 된다.
+   * 청구 여부는 호출자가 정하지 않는다 — `inviteDeliveredAt`이 비어 있으면(초대가 상대에게
+   * 전달되지 않고 큐에만 쌓임) buildNoResponseCharges가 걸러내 상태만 EXPIRED로 넘어가고
+   * 점수도 보호막도 건드리지 않는다. 보호막이 차감을 따라가는 이유는 그것이 차감의 짝이라서다
+   * — 깎지 않았는데 주면 아무 대가 없이 30분간 결투를 피하는 수단이 된다.
    */
-  async expireDuel(
-    duelId: number,
-    opts: { chargePenalty?: boolean } = {},
-  ): Promise<Duel | null> {
-    const { chargePenalty = true } = opts;
+  async expireDuel(duelId: number): Promise<Duel | null> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
     if (!duel) return null;
 
@@ -716,7 +824,7 @@ export class DuelsService {
     // 걸 수 있어, 자리를 비운 유저가 방어도 못 한 채 계속 깎인다(DUEL_SHIELD_TTL 주석 참고).
     //
     // 상태 전이와 차감을 한 트랜잭션으로 묶는 이유는 rejectDuel과 같다.
-    const charges = await this.dataSource.transaction(async (manager) => {
+    const applied = await this.dataSource.transaction(async (manager) => {
       // respondDuel과 동일하게 조건부 UPDATE로 처리해, accept가 동시에 들어와도 둘 중 하나만 반영된다.
       const updateResult = await manager
         .createQueryBuilder()
@@ -726,27 +834,27 @@ export class DuelsService {
           id: duelId,
           pending: DuelStatus.PENDING,
         })
-        .returning('id, "challengerId", "opponentId"')
+        .returning('id, "challengerId", "opponentId", "inviteDeliveredAt"')
         .execute();
       if (updateResult.affected === 0) return null;
 
-      const built = chargePenalty
-        ? await this.buildNoResponseCharges(
-            manager,
-            updateResult.raw as SweptDuelRow[],
-          )
-        : [];
-      return this.chargeDuelPenalties(manager, built);
+      return this.chargeDuelPenalties(
+        manager,
+        await this.buildNoResponseCharges(
+          manager,
+          updateResult.raw as ExpiredDuelRow[],
+        ),
+      );
     });
-    if (charges === null) return null;
+    if (applied === null) return null;
 
     // 여기부터는 커밋 뒤다 — 락 해제로 예외를 올리면 만료가 이미 확정된 결투의 종료
     // 알림을 아무도 못 보내 두 클라이언트가 대기 화면에 갇힌다(releasePairLockQuietly 주석).
-    await this.grantShields(charges.map((c) => c.userId));
+    await this.grantShields(applied.map((c) => c.userId));
     await this.releasePairLockQuietly(duel);
 
     duel.status = DuelStatus.EXPIRED;
-    duel.scoreDelta = charges[0]?.points ?? null;
+    duel.scoreDelta = applied[0]?.points ?? null;
     return duel;
   }
 
@@ -960,30 +1068,31 @@ export class DuelsService {
           // 트랜잭션 전체를 abort시키므로 catch만으로는 결투 확정까지 함께 날아간다. SAVEPOINT로
           // 이 insert만 되돌려, 사라진 참가자의 원장 행만 건너뛰고 나머지는 그대로 커밋한다.
           //
+          // 여기서는 chargeDuelPenalties와 달리 FK 위반만 건너뛴다. 이 트랜잭션은 결투 하나를
+          // 확정하는 단위라, 다른 원인의 실패는 되돌리고 재시도하게 두는 편이 맞다 — 원장만
+          // 빠진 채 확정된 결투를 남기지 않는다.
+          //
           // 이 insert에서 외부 상태에 달린 FK는 userId뿐이다 — duelId는 바로 위에서 이 트랜잭션이
           // 갱신한 행이라 반드시 존재하고 spotId는 넘기지 않는다. 그래서 23503을 "참가자가 사라짐"
           // 으로 읽어도 다른 원인을 삼키지 않는다.
-          await manager.query('SAVEPOINT duel_ledger');
-          try {
-            await this.scoresService.record(manager, {
-              userId,
-              team,
-              type:
-                userId === winnerId
-                  ? ScoreEventType.DUEL_WIN
-                  : ScoreEventType.DUEL_LOSS,
-              personalPoints: points,
-              teamPoints: 0,
-              duelId: duel.id,
-            });
-            await manager.query('RELEASE SAVEPOINT duel_ledger');
-          } catch (err) {
-            if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
-            await manager.query('ROLLBACK TO SAVEPOINT duel_ledger');
-            // ROLLBACK은 세이브포인트를 파괴하지 않으므로 명시적으로 RELEASE한다.
-            // 여기서는 루프가 2회뿐이라 누적이 문제되지 않지만, chargeDuelPenalties와
-            // 같은 패턴을 복사해 갈 때 누수가 따라가지 않도록 양쪽을 맞춰 둔다.
-            await manager.query('RELEASE SAVEPOINT duel_ledger');
+          const outcome = await runInSavepoint(
+            manager,
+            'duel_ledger',
+            () =>
+              this.scoresService.record(manager, {
+                userId,
+                team,
+                type:
+                  userId === winnerId
+                    ? ScoreEventType.DUEL_WIN
+                    : ScoreEventType.DUEL_LOSS,
+                personalPoints: points,
+                teamPoints: 0,
+                duelId: duel.id,
+              }),
+            isMissingUser,
+          );
+          if (!outcome.applied) {
             this.logger.warn(
               `결투 원장 append 생략 — 참가자가 사라짐 duelId=${duel.id} userId=${userId}`,
             );
@@ -1165,6 +1274,9 @@ export class DuelsService {
     // 게이트웨이 타이머(expireDuel)와 같은 페널티를 여기서도 적용한다 — 서버 재시작 등으로
     // 타이머가 유실된 신청만 이 경로로 오므로, 여기서 빠뜨리면 "재시작 중에 무시하면 공짜"가
     // 된다. 상태 전이와 차감은 한 트랜잭션이라 둘 중 하나만 반영되는 일이 없다.
+    //
+    // "전달된 초대만 청구한다"는 판정도 여기서 동일하게 적용된다 — 근거를 소켓 생존이 아니라
+    // duels.inviteDeliveredAt에 두었기 때문에, 타이머가 사라진 뒤에도 같은 답이 나온다.
     const expired = await this.dataSource.transaction(async (manager) => {
       const result = await manager
         .createQueryBuilder()
@@ -1177,10 +1289,10 @@ export class DuelsService {
             sec: DUEL_REQUEST_TTL + DUEL_SWEEP_GRACE,
           },
         )
-        .returning('id, "challengerId", "opponentId"')
+        .returning('id, "challengerId", "opponentId", "inviteDeliveredAt"')
         .execute();
 
-      const rows = result.raw as SweptDuelRow[];
+      const rows = result.raw as ExpiredDuelRow[];
       const charges = await this.chargeDuelPenalties(
         manager,
         await this.buildNoResponseCharges(manager, rows),

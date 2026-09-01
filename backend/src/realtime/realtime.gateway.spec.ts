@@ -374,23 +374,23 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
 });
 
 /**
- * 무응답 페널티는 "초대를 받고도 응답하지 않았다"에 대한 청구다. 만료 시점에 상대가
- * 끊겨 있으면 duel:requested가 큐에만 쌓였을 수 있어 그 전제가 서지 않는다.
+ * 무응답 페널티는 "초대를 받고도 응답하지 않았다"에 대한 청구다.
+ *
+ * 그 전제는 **emit 시점에** 확정된다 — duel:requested가 살아 있는 소켓으로 나갔으면
+ * 초대는 화면에 떴고, 큐로 갔으면 뜬 적이 없다. 예전에는 만료 시점(T+30s)에 소켓 생존을
+ * 다시 읽어 판단했는데, 끊김은 ping timeout만큼 늦게 드러나므로 창 후반부의 단절을
+ * 놓쳤고 타이머가 유실되면 확인할 방법조차 없었다. 이제 게이트웨이는 전달 여부만
+ * 기록하고(markInviteDelivered), 청구 판단은 DB 값을 보는 expireDuel이 한다.
  */
-describe('expireAndNotify 무응답 페널티 청구 조건', () => {
+describe('duel:requested 전달 기록', () => {
   const duelId = 11;
-  const challengerId = 'user-1';
-  const opponentId = 'user-2';
+  const targetUserId = 'user-2';
 
   function make(opponentSocket: { connected: boolean } | undefined) {
-    // 살아있는 소켓으로 판정되면 duel:expired가 그리로 emit된다.
     const socket = opponentSocket && { ...opponentSocket, emit: jest.fn() };
-    const expireDuel = jest.fn().mockResolvedValue({
-      id: duelId,
-      opponentId,
-      status: 'EXPIRED',
-      scoreDelta: null,
-    });
+    const queueNotification = jest.fn().mockResolvedValue(undefined);
+    const markInviteDelivered = jest.fn().mockResolvedValue(undefined);
+    const requestDuel = jest.fn().mockResolvedValue({ id: duelId });
     const gateway = new RealtimeGateway(
       {} as unknown as FirebaseService,
       {} as unknown as UsersService,
@@ -399,9 +399,13 @@ describe('expireAndNotify 무응답 페널티 청구 조건', () => {
           team: 'JP',
           socketId: 'sock-opponent',
         }),
-        queueNotification: jest.fn().mockResolvedValue(undefined),
+        queueNotification,
       } as unknown as RedisService,
-      { setNotifier: jest.fn(), expireDuel } as unknown as DuelsService,
+      {
+        setNotifier: jest.fn(),
+        requestDuel,
+        markInviteDelivered,
+      } as unknown as DuelsService,
       { start: jest.fn(), discardSession: jest.fn() } as never,
       { record: jest.fn() } as never,
       { register: jest.fn(), disconnectUser: jest.fn() } as never,
@@ -409,32 +413,53 @@ describe('expireAndNotify 무응답 페널티 청구 조건', () => {
     gateway.server = {
       sockets: new Map(socket ? [['sock-opponent', socket]] : []),
     } as never;
-    return { gateway, expireDuel };
+    const client = {
+      data: { user: { id: 'user-1', team: 'KR', nickname: 'me' } },
+    } as never;
+    return { gateway, client, markInviteDelivered, queueNotification, socket };
   }
 
-  it('상대가 만료 시점에 붙어 있으면 페널티를 청구한다', async () => {
-    const { gateway, expireDuel } = make({ connected: true });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
 
-    await gateway['expireAndNotify'](duelId, challengerId, opponentId);
+  it('살아 있는 소켓으로 초대가 나가면 전달로 기록한다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered, socket } = make({
+      connected: true,
+    });
 
-    expect(expireDuel).toHaveBeenCalledWith(duelId, { chargePenalty: true });
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(socket!.emit).toHaveBeenCalledWith(
+      'duel:requested',
+      expect.objectContaining({ duelId }),
+    );
+    expect(markInviteDelivered).toHaveBeenCalledWith(duelId);
   });
 
   // 메타 TTL(120초)이 남아 있어 신청 자체는 통과했지만, 정작 알림은 큐로 갔을 케이스다.
-  it('상대 소켓이 사라졌으면 페널티 없이 만료만 시킨다', async () => {
-    const { gateway, expireDuel } = make(undefined);
+  it('상대 소켓이 사라져 큐로 가면 전달로 기록하지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered, queueNotification } =
+      make(undefined);
 
-    await gateway['expireAndNotify'](duelId, challengerId, opponentId);
+    await gateway.handleDuelRequest(client, { targetUserId });
 
-    expect(expireDuel).toHaveBeenCalledWith(duelId, { chargePenalty: false });
+    expect(queueNotification).toHaveBeenCalled();
+    expect(markInviteDelivered).not.toHaveBeenCalled();
   });
 
   // ping 타임아웃 전이라 Map에는 남아 있지만 connected가 내려간 소켓.
-  it('소켓이 남아 있어도 connected가 아니면 청구하지 않는다', async () => {
-    const { gateway, expireDuel } = make({ connected: false });
+  it('소켓이 남아 있어도 connected가 아니면 전달로 기록하지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered, queueNotification } = make({
+      connected: false,
+    });
 
-    await gateway['expireAndNotify'](duelId, challengerId, opponentId);
+    await gateway.handleDuelRequest(client, { targetUserId });
 
-    expect(expireDuel).toHaveBeenCalledWith(duelId, { chargePenalty: false });
+    expect(queueNotification).toHaveBeenCalled();
+    expect(markInviteDelivered).not.toHaveBeenCalled();
   });
 });
