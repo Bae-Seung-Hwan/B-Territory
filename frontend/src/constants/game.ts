@@ -15,9 +15,6 @@ export const ENCOUNTER_RADIUS_M = 100;
  */
 export const LOCATION_HEARTBEAT_MS = 60_000;
 
-/** 위치 공유 시 "이 관광지 공략 중"으로 표시할 최대 거리(m). 이보다 멀면 관광지명을 붙이지 않는다. */
-export const SPOT_PROXIMITY_M = 500;
-
 /**
  * 배틀 탭 근처 상대 리스트에서 한 항목이 갱신 없이 남아있을 수 있는 최대 시간(ms).
  * 서버는 같은 쌍에 대해 ENCOUNTER_COOLDOWN_TTL(60초, backend/src/duels/constants.ts)
