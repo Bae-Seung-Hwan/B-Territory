@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useTranslation } from '@/i18n';
 import { BrandColors, Spacing } from '@/constants/theme';
 import { getCountryList } from '@/constants/countries';
+import { CONTACT_EMAIL } from '@/constants/contact';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -27,9 +28,8 @@ export default function ProfileScreen() {
     [countries, profile?.nationality],
   );
 
-  const contactEmail = t('profile.contactEmail');
   const handleContact = () => {
-    Linking.openURL(`mailto:${contactEmail}`).catch(() => {
+    Linking.openURL(`mailto:${CONTACT_EMAIL}`).catch(() => {
       // 메일 앱이 없는 환경(에뮬레이터 등) — 이메일 자체는 화면에 항상 텍스트로도 보이므로
       // 여기서 실패해도 문의처 확인 자체는 가능하다.
     });
@@ -93,7 +93,7 @@ export default function ProfileScreen() {
         <TouchableOpacity style={styles.menuRow} onPress={handleContact}>
           <View>
             <Text style={styles.menuLabel}>{t('profile.contactTitle')}</Text>
-            <Text style={styles.menuSubLabel}>{contactEmail}</Text>
+            <Text style={styles.menuSubLabel}>{CONTACT_EMAIL}</Text>
           </View>
           <Ionicons name="mail-outline" size={18} color="#666" />
         </TouchableOpacity>

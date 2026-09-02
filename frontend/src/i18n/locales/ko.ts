@@ -106,6 +106,7 @@ export const ko = {
     emptyState: '아직 메시지가 없습니다',
     inputPlaceholder: '메시지를 입력하세요',
     send: '전송',
+    sending: '전송 중…',
     messageFailed: '전송 실패',
     retry: '재전송',
     errors: {
@@ -149,7 +150,6 @@ export const ko = {
     logoutConfirmMessage: '정말 로그아웃하시겠어요?',
     blockedUsersLink: '차단 관리',
     contactTitle: '문의하기',
-    contactEmail: 'B.territory123@gmail.com',
   },
   map: {
     hud: {

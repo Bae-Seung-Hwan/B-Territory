@@ -65,9 +65,10 @@ export default function ChatScreen() {
   );
 
   const handleSend = () => {
-    if (!text.trim()) return;
-    // sendMessage가 profile 미준비 등으로 조용히 아무 일도 안 할 수 있다 — 그 경우
-    // 입력을 지우면 사용자가 쓴 내용이 흔적 없이 사라진다(PR #50 리뷰 지적 1번).
+    // 빈 문자열·500자 초과·profile 미준비 검증은 sendMessage 안에 이미 있다 — 여기서
+    // 다시 text.trim()을 확인하지 않는다(PR #50 2차 리뷰 지적, 검증 중복 방지). 실패하면
+    // 조용히 반환되므로, 그 값으로만 입력을 지울지 판단한다 — 그러지 않으면 사용자가
+    // 쓴 내용이 흔적 없이 사라진다(PR #50 1차 리뷰 지적 1번).
     if (!sendMessage(text)) return;
     setText('');
     // 내가 보낸 메시지는 지난 대화를 올려보던 중이었어도 바로 확인할 수 있어야 한다.
@@ -92,11 +93,21 @@ export default function ChatScreen() {
             : () =>
                 setActionTarget({ userId: item.userId, nickname: item.nickname, text: item.text })
         }
-        style={[styles.bubble, item.mine ? styles.mineBubble : styles.theirBubble]}
+        style={[
+          styles.bubble,
+          item.mine ? styles.mineBubble : styles.theirBubble,
+          // ack 대기 중임을 시각적으로 구분한다 — useChatStore 주석은 'sending'을
+          // "ack 대기 중"이라는 별도 표시 상태로 설명하는데, 실제로는 전송 완료와
+          // 구별되지 않았다(PR #50 2차 리뷰 지적).
+          item.status === 'sending' && styles.sendingBubble,
+        ]}
       >
         {!item.mine && <Text style={styles.nickname}>{item.nickname}</Text>}
         <Text style={styles.messageText}>{item.text}</Text>
       </TouchableOpacity>
+      {item.status === 'sending' && (
+        <Text style={styles.sendingText}>{t('chat.sending')}</Text>
+      )}
       {item.status === 'failed' && (
         <TouchableOpacity onPress={() => retryMessage(item)} hitSlop={6}>
           <Text style={styles.failedText}>
@@ -176,6 +187,8 @@ const styles = StyleSheet.create({
   bubble: { maxWidth: '80%', padding: 10, borderRadius: 12 },
   theirBubble: { backgroundColor: BrandColors.surface, alignSelf: 'flex-start' },
   mineBubble: { backgroundColor: BrandColors.accent, alignSelf: 'flex-end' },
+  sendingBubble: { opacity: 0.6 },
+  sendingText: { color: '#888', fontSize: 11, marginTop: 2 },
   failedText: { color: BrandColors.danger, fontSize: 11, marginTop: 2 },
   nickname: { color: '#999', fontSize: 11, marginBottom: 2 },
   messageText: { color: '#fff', fontSize: 15 },

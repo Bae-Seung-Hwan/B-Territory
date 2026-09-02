@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useIsFocused } from 'expo-router';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/lib/api-client';
 import { auth } from '@/lib/firebase';
@@ -33,9 +34,13 @@ const ACK_TIMEOUT_MS = 5_000;
 export type ChatSocketError = 'connection' | 'rateLimit' | 'unknown';
 
 /**
- * `/chat` 네임스페이스(PR #34, 아직 develop 미merge) 전용 소켓. 채팅 탭이 마운트된
- * 동안에만 connect하고, 언마운트되면 disconnect한다(전역 SocketProvider와 분리된
- * 독립 생명주기 — realtime 소켓 작업과 서로 간섭하지 않는다).
+ * `/chat` 네임스페이스(PR #34, 아직 develop 미merge) 전용 소켓. 채팅 탭이 포커스를
+ * 갖고 있는 동안에만 connect하고, 포커스를 잃으면(다른 탭으로 이동) disconnect한다
+ * (전역 SocketProvider와 분리된 독립 생명주기 — realtime 소켓 작업과 서로 간섭하지
+ * 않는다). expo-router의 Tabs는 방문한 화면을 언마운트하지 않으므로 "언마운트되면"이
+ * 아니라 `useIsFocused()`로 판정해야 한다 — 그러지 않으면 채팅 탭을 한 번만 열어도
+ * 앱 세션 내내 소켓이 연결된 채 남아 다른 탭에 있는 동안에도 모든 팀 메시지를 계속
+ * 받아 스토어에 쌓는다(PR #50 2차 리뷰 지적 2번, PR #49의 랭킹 폴링과 같은 원인).
  *
  * CHAT_ENABLED가 false인 동안은 소켓 인스턴스 자체를 만들지 않는다 — 백엔드에
  * `/chat` 게이트웨이가 없는 상태에서 연결을 시도해 콘솔에 재연결 에러를 반복 출력하지
@@ -44,16 +49,23 @@ export type ChatSocketError = 'connection' | 'rateLimit' | 'unknown';
  */
 export function useChatSocket() {
   const socketRef = useRef<Socket | null>(null);
+  // exception이 어떤 emit을 거부한 것인지 서버가 알려주지 않는다({ code }만 온다) —
+  // 레이트리밋은 그 순간 보낸 메시지가 임계값을 넘겨서 걸리므로, 가장 최근에 보낸
+  // ack 대기 중 메시지가 거부 대상이라고 본다. 두 메시지가 동시에 대기 중인 드문
+  // 경우엔 더 이전 메시지를 잘못 짚을 수 있지만, 그래도 ACK_TIMEOUT_MS 시점에는
+  // 결국 failed로 정리된다.
+  const pendingIdRef = useRef<string | null>(null);
   const addMessage = useChatStore((s) => s.addMessage);
   const setMessageStatus = useChatStore((s) => s.setMessageStatus);
   const { profile, isAuthenticated } = useAuth();
   const [chatError, setChatError] = useState<ChatSocketError | null>(null);
+  const isFocused = useIsFocused();
 
   // isAuthenticated에 의존해야 한다 — 마운트 시점에 Firebase 세션 복원이 아직 끝나지
   // 않았으면 auth.currentUser가 null이라 토큰을 못 읽는데, 이 값을 안 보면 세션이
   // 도착해도 effect가 다시 돌지 않아 영영 연결되지 않는다.
   useEffect(() => {
-    if (!CHAT_ENABLED || !isAuthenticated) return;
+    if (!CHAT_ENABLED || !isAuthenticated || !isFocused) return;
 
     const socket: Socket = io(`${API_BASE_URL}/chat`, {
       autoConnect: false,
@@ -83,6 +95,14 @@ export function useChatSocket() {
     // 보낸 것처럼 그대로 남아 조용히 유실된다.
     socket.on('exception', (payload: { code?: string }) => {
       setChatError(payload?.code === 'CHAT_RATE_LIMIT' ? 'rateLimit' : 'unknown');
+      // exception은 ack 콜백과 달리 즉시 도착한다 — ACK_TIMEOUT_MS(5초)까지 기다리지
+      // 않고 바로 failed로 넘겨야, 배너(4초 뒤 자동 소거)가 사라지고도 1초 뒤에야
+      // 말풍선이 이유 없이 실패로 바뀌는 일이 없다(PR #50 2차 리뷰 지적 1번).
+      const pendingId = pendingIdRef.current;
+      if (pendingId) {
+        pendingIdRef.current = null;
+        setMessageStatus(pendingId, 'failed');
+      }
     });
 
     socket.on('chat:message', (payload: ChatMessageIncoming) => {
@@ -95,7 +115,7 @@ export function useChatSocket() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [addMessage, isAuthenticated]);
+  }, [addMessage, isAuthenticated, isFocused, setMessageStatus]);
 
   // 'rateLimit'/'unknown'은 그 순간의 전송 1건이 실패했다는 일시적 신호일 뿐이라(레이트리밋은
   // 몇 초 후 자연히 풀린다), 배너로 영구히 남기지 않고 잠깐 보여준 뒤 스스로 지운다.
@@ -122,9 +142,11 @@ export function useChatSocket() {
         setMessageStatus(id, undefined);
         return;
       }
+      pendingIdRef.current = id;
       socket
         .timeout(ACK_TIMEOUT_MS)
         .emit('chat:message', payload, (err: Error | null) => {
+          if (pendingIdRef.current === id) pendingIdRef.current = null;
           setMessageStatus(id, err ? 'failed' : undefined);
         });
     },

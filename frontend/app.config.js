@@ -35,11 +35,12 @@ module.exports = {
     },
     android: {
       package: 'com.bterritory.app',
-      // 기본값(resize)이 Bottom Tab 내비게이터와 함께 쓰이면 키보드가 뜰 때 탭바가
-      // 키보드 위로 밀려 올라가면서 그 사이의 입력창을 가린다(Expo 공식 keyboard-handling
-      // 가이드에 명시된 현상). pan으로 바꾸면 화면 리사이즈 대신 포커스된 입력이 보이도록
-      // 전체 레이아웃을 밀어올려서 이 문제가 없다.
-      softwareKeyboardLayoutMode: 'pan',
+      // 키보드가 뜰 때 Bottom Tab 내비게이터의 탭바가 밀려 올라가 입력창을 가리는
+      // 문제는 (main)/_layout.tsx의 tabBarHideOnKeyboard로 해결한다. 한때 이 값을
+      // softwareKeyboardLayoutMode: 'pan'으로도 바꿨었지만, 그러면 기본값(resize)의
+      // 화면 리사이즈에 기대는 다른 화면(register.tsx의 ScrollView 등)의 키보드 동작이
+      // 앱 전역에서 달라진다 — 한 화면 문제를 앱 전체 설정으로 풀면서 생긴 광범위한
+      // 부작용이라(PR #50 2차 리뷰 지적) tabBarHideOnKeyboard만 남겼다.
       adaptiveIcon: {
         backgroundColor: '#E6F4FE',
         foregroundImage: './assets/images/android-icon-foreground.png',

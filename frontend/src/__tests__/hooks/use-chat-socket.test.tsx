@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react-native';
+import { useIsFocused } from 'expo-router';
 import { io } from 'socket.io-client';
 import { useChatSocket } from '@/hooks/use-chat-socket';
 import { useChatStore } from '@/store/useChatStore';
@@ -9,6 +10,7 @@ jest.mock('@/lib/firebase', () => ({
   auth: { currentUser: { getIdToken: jest.fn().mockResolvedValue('token') } },
 }));
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
+jest.mock('expo-router', () => ({ useIsFocused: jest.fn(() => true) }));
 
 type AckCallback = (err: Error | null, response?: { status: string }) => void;
 
@@ -24,6 +26,8 @@ function createFakeSocket() {
     timeout: jest.fn(() => ({ emit: emitWithAck })),
     // 테스트에서 emit(event, payload, ack) 호출을 검사/트리거하기 위한 헬퍼
     __emitWithAck: emitWithAck,
+    // 테스트에서 'exception' 등 서버 emit을 직접 트리거하기 위한 헬퍼
+    __handlers: handlers,
   };
 }
 
@@ -31,6 +35,7 @@ jest.mock('socket.io-client', () => ({ io: jest.fn() }));
 
 const mockedUseAuth = useAuth as jest.Mock;
 const mockedIo = io as unknown as jest.Mock;
+const mockedUseIsFocused = useIsFocused as jest.Mock;
 
 const profile = { id: 'u1', email: 'a@b.com', nickname: 'nick', nationality: 'KR', team: 'KR' };
 
@@ -42,6 +47,7 @@ describe('useChatSocket', () => {
     fakeSocket = createFakeSocket();
     mockedIo.mockReturnValue(fakeSocket);
     mockedUseAuth.mockReturnValue({ profile, isAuthenticated: true });
+    mockedUseIsFocused.mockReturnValue(true);
     useChatStore.getState().clear();
   });
 
@@ -150,6 +156,42 @@ describe('useChatSocket', () => {
     });
 
     expect(sent).toBe(true);
+    await act(async () => unmount());
+  });
+
+  it('exception이 오면 ack 타임아웃을 기다리지 않고 즉시 failed로 표시한다 (PR #50 2차 리뷰 지적 1번)', async () => {
+    const { result, unmount } = await renderHook(() => useChatSocket());
+
+    await act(async () => {
+      result.current.sendMessage('레이트리밋에 걸리는 메시지');
+    });
+    expect(useChatStore.getState().messages[0].status).toBe('sending');
+
+    await act(async () => {
+      fakeSocket.__handlers.get('exception')?.({ code: 'CHAT_RATE_LIMIT' });
+    });
+
+    // ack 콜백(fakeSocket.__emitWithAck)을 아직 한 번도 호출하지 않았는데도 실패로
+    // 표시돼야 한다 — ACK_TIMEOUT_MS까지 기다리지 않았다는 뜻이다.
+    expect(useChatStore.getState().messages[0].status).toBe('failed');
+    await act(async () => unmount());
+  });
+
+  it('탭이 포커스를 잃으면 소켓을 disconnect하고, 다시 포커스를 받으면 재연결한다 (PR #50 2차 리뷰 지적 2번)', async () => {
+    mockedUseIsFocused.mockReturnValue(true);
+    const { rerender, unmount } = await renderHook(() => useChatSocket());
+
+    expect(mockedIo).toHaveBeenCalledTimes(1);
+    expect(fakeSocket.connect).toHaveBeenCalledTimes(1);
+
+    mockedUseIsFocused.mockReturnValue(false);
+    await act(async () => rerender());
+    expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
+
+    mockedUseIsFocused.mockReturnValue(true);
+    await act(async () => rerender());
+    expect(mockedIo).toHaveBeenCalledTimes(2);
+
     await act(async () => unmount());
   });
 });

@@ -15,7 +15,7 @@ import type { BlockedUser } from '@/api/moderation';
  * 하나로만 뭉개진다. 행마다 독립시키면 각자의 pending 상태가 정확히 자기 행만 가리킨다.
  */
 function BlockedUserRow({ user }: { user: BlockedUser }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const unblockMutation = useUnblockMutation();
 
   const handleUnblock = () => {
@@ -41,12 +41,16 @@ function BlockedUserRow({ user }: { user: BlockedUser }) {
       <View style={styles.rowInfo}>
         <Text style={styles.nickname}>{user.nickname}</Text>
         <Text style={styles.blockedAt}>
-          {t('moderation.blockedAtLabel')}: {new Date(user.blockedAt).toLocaleDateString()}
+          {t('moderation.blockedAtLabel')}: {new Date(user.blockedAt).toLocaleDateString(locale)}
         </Text>
       </View>
-      <TouchableOpacity onPress={handleUnblock} disabled={unblockMutation.isPending} hitSlop={8}>
-        <Text style={styles.unblockText}>{t('moderation.unblock')}</Text>
-      </TouchableOpacity>
+      {unblockMutation.isPending ? (
+        <ActivityIndicator color={BrandColors.accent} />
+      ) : (
+        <TouchableOpacity onPress={handleUnblock} hitSlop={8}>
+          <Text style={styles.unblockText}>{t('moderation.unblock')}</Text>
+        </TouchableOpacity>
+      )}
     </Card>
   );
 }

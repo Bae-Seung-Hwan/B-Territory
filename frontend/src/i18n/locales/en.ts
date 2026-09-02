@@ -111,6 +111,7 @@ export const en: Translations = {
     emptyState: 'No messages yet',
     inputPlaceholder: 'Type a message',
     send: 'Send',
+    sending: 'Sending…',
     messageFailed: 'Failed to send',
     retry: 'Retry',
     errors: {
@@ -154,7 +155,6 @@ export const en: Translations = {
     logoutConfirmMessage: 'Are you sure you want to log out?',
     blockedUsersLink: 'Manage Blocked Users',
     contactTitle: 'Contact Us',
-    contactEmail: 'B.territory123@gmail.com',
   },
   map: {
     hud: {

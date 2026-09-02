@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Platform, Text, TextInput, View, StyleSheet } from 'react-native';
 import { BottomSheetModal, BottomSheetScrollView, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { ReportReason } from '@/api/moderation';
@@ -114,10 +114,15 @@ export function MessageActionSheet({ target, onDismiss }: MessageActionSheetProp
     );
   };
 
+  // step에만 의존하는데도 인라인 배열은 렌더마다 새로 만들어져, @gorhom/bottom-sheet가
+  // prop 참조 변화로 보고 폼 입력(detail 타이핑) 같은 무관한 리렌더마다 스냅 포인트를
+  // 다시 계산했다(PR #50 2차 리뷰 지적).
+  const snapPoints = useMemo(() => [step === 'actions' ? '32%' : '65%'], [step]);
+
   return (
     <BottomSheet
       ref={sheetRef}
-      snapPoints={[step === 'actions' ? '32%' : '65%']}
+      snapPoints={snapPoints}
       onDismiss={onDismiss}
       // 신고 스텝은 사유 카드 5개 + 내용 미리보기 + 상세 입력창 + 제출 버튼이 한
       // 화면에 들어가는데, 작은 기기거나 상세 입력창에 포커스해 키보드가 뜨면 65%
