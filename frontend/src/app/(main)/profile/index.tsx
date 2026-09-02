@@ -6,6 +6,8 @@ import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
+import { useDeleteAccountMutation } from '@/hooks/use-account';
+import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useTranslation } from '@/i18n';
 import { BrandColors, Spacing } from '@/constants/theme';
 import { getCountryList } from '@/constants/countries';
@@ -17,10 +19,12 @@ import { Badge } from '@/components/ui/Badge';
 export default function ProfileScreen() {
   const router = useRouter();
   const { t, locale } = useTranslation();
+  const handleAuthError = useHandleAuthError();
 
   // 인증 상태와 같은 소스(queryKeys.auth.me)를 그대로 읽는다 — 로그인 때 채워진
   // 캐시라 재요청 없이 즉시 표시된다.
   const { profile, isLoading } = useAuth();
+  const deleteAccountMutation = useDeleteAccountMutation();
 
   const countries = useMemo(() => getCountryList(locale), [locale]);
   const nationalityCountry = useMemo(
@@ -49,6 +53,32 @@ export default function ProfileScreen() {
         },
       },
     ]);
+  };
+
+  // 백엔드가 계정을 완전히 삭제한 뒤라 서버 쪽 세션은 이미 무효다. signOut은 이 기기의
+  // 로컬 Firebase 세션만 정리하는 것이고, 로그아웃과 마찬가지로 캐시 정리는 AuthProvider가
+  // 세션 변경을 보고 처리한다.
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      t('profile.deleteAccountConfirmTitle'),
+      t('profile.deleteAccountConfirmMessage'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('profile.deleteAccount'),
+          style: 'destructive',
+          onPress: () => {
+            deleteAccountMutation.mutate(undefined, {
+              onSuccess: async () => {
+                await signOut(auth);
+                router.replace('/(auth)/login');
+              },
+              onError: (err) => handleAuthError(err, 'profile.errors.deleteAccountFailed'),
+            });
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -105,6 +135,20 @@ export default function ProfileScreen() {
         variant="danger"
         style={styles.logoutButton}
       />
+
+      {/* 로그아웃과 달리 되돌릴 수 없는 조작이라, 같은 무게의 버튼이 아니라 눈에 덜 띄는
+          텍스트 링크로 둔다 — 오터치로 탈퇴 확인창까지 가는 일을 줄이기 위함. */}
+      <TouchableOpacity
+        onPress={handleDeleteAccount}
+        disabled={deleteAccountMutation.isPending}
+        style={styles.deleteAccountLink}
+      >
+        <Text style={styles.deleteAccountText}>
+          {deleteAccountMutation.isPending
+            ? t('profile.deleteAccountPending')
+            : t('profile.deleteAccount')}
+        </Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -145,4 +189,6 @@ const styles = StyleSheet.create({
   menuLabel: { color: '#fff', fontSize: 14, fontWeight: '600' },
   menuSubLabel: { color: '#888', fontSize: 12, marginTop: 2 },
   logoutButton: { width: '100%' },
+  deleteAccountLink: { marginTop: Spacing.three, padding: Spacing.two },
+  deleteAccountText: { color: '#666', fontSize: 13, textDecorationLine: 'underline' },
 });
