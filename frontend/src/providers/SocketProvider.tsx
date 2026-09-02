@@ -273,7 +273,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
       // 결투 관련 실패면 진행 중이던 오버레이를 정리한다 — location:update 검증 오류 같은
       // 무관한 예외까지 결투를 취소시키지 않도록 코드 접두사로 구분한다.
-      if (payload.code.startsWith('DUEL_')) useOverlayStore.getState().resetDuel();
+      if (payload.code.startsWith('DUEL_')) {
+        useOverlayStore.getState().resetDuel();
+        // duel:request가 이 실패의 원인이었을 수 있다 — BattleEnemyRow의 Challenge 버튼이
+        // pendingChallengeTargetId에 갇혀 재시도 불가능해지지 않도록 여기서 함께 비운다
+        // (ack 콜백이 아예 안 오는 실패 경로라 BattleEnemyRow 스스로는 알 방법이 없다).
+        useBattleStore.getState().setPendingChallengeTargetId(null);
+      }
 
       Alert.alert(i18n.t('overlay.duelError.title'), message);
     };

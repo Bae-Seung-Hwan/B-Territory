@@ -1,22 +1,18 @@
 import React from 'react';
-import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
+import { render, fireEvent, act } from '@testing-library/react-native';
 import { BattleEnemyRow } from '@/components/battle/BattleEnemyRow';
 import { useOverlayStore } from '@/store/useOverlayStore';
 import { useBattleStore } from '@/store/useBattleStore';
 
 // 테스트 환경의 기본 locale은 en이다(expo-localization 목) — UI 문구 검증은 en.ts 값으로 한다.
 const enemy = { userId: 'enemy-1', nickname: 'tlgus', team: 'JP' };
+const enemy2 = { userId: 'enemy-2', nickname: 'tlfus', team: 'KR' };
 const initialOverlayState = useOverlayStore.getState();
 const initialBattleState = useBattleStore.getState();
 
 describe('BattleEnemyRow', () => {
   const emit = jest.fn();
-  const handlers: Record<string, (payload: unknown) => void> = {};
-  const on = jest.fn((event: string, handler: (payload: unknown) => void) => {
-    handlers[event] = handler;
-  });
-  const off = jest.fn();
-  const socket = { emit, on, off } as unknown as Parameters<typeof BattleEnemyRow>[0]['socket'];
+  const socket = { emit } as unknown as Parameters<typeof BattleEnemyRow>[0]['socket'];
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -24,7 +20,7 @@ describe('BattleEnemyRow', () => {
     useBattleStore.setState(initialBattleState, true);
   });
 
-  it('duel:request가 서버에서 throw로 끝나(ack 미호출) exception 이벤트만 오는 경우, 버튼이 스피너에 갇히지 않고 재시도 가능해진다', async () => {
+  it('duel:request가 서버에서 throw로 끝나(ack 미호출) 실패해도, pendingChallengeTargetId가 비워지면 재시도 가능해진다', async () => {
     const { getByText, queryByText } = await render(<BattleEnemyRow enemy={enemy} socket={socket} />);
 
     await act(async () => {
@@ -34,28 +30,16 @@ describe('BattleEnemyRow', () => {
     // pending 중에는 ActivityIndicator만 보이고 "Challenge" 텍스트는 사라진다.
     expect(emit).toHaveBeenCalledWith('duel:request', { targetUserId: 'enemy-1' }, expect.any(Function));
     expect(queryByText('Challenge')).toBeNull();
+    expect(useBattleStore.getState().pendingChallengeTargetId).toBe('enemy-1');
 
-    // 서버가 ack 없이 exception만 보낸 경우(예: DUEL_OUT_OF_RANGE) — ack 콜백은 호출되지 않는다.
+    // 서버가 ack 없이 exception만 보낸 경우(예: DUEL_OUT_OF_RANGE) ack 콜백은 호출되지 않는다 —
+    // 이 실패를 감지해 pendingChallengeTargetId를 비우는 건 SocketProvider의 전역 handleException
+    // 몫이라 여기서는 그 결과(값이 비워짐)만 재현한다.
     await act(async () => {
-      handlers['exception']({ code: 'DUEL_OUT_OF_RANGE' });
+      useBattleStore.getState().setPendingChallengeTargetId(null);
     });
 
-    await waitFor(() => expect(getByText('Challenge')).toBeTruthy());
-  });
-
-  it('DUEL_ 접두사가 아닌 무관한 exception은 pending을 건드리지 않는다', async () => {
-    const { getByText, queryByText } = await render(<BattleEnemyRow enemy={enemy} socket={socket} />);
-
-    await act(async () => {
-      fireEvent.press(getByText('Challenge'));
-    });
-    expect(queryByText('Challenge')).toBeNull();
-
-    await act(async () => {
-      handlers['exception']({ code: 'LOCATION_INVALID' });
-    });
-
-    expect(queryByText('Challenge')).toBeNull();
+    expect(getByText('Challenge')).toBeTruthy();
   });
 
   it('ack이 성공으로 오면 정상적으로 duel pending 오버레이를 연다', async () => {
@@ -72,5 +56,29 @@ describe('BattleEnemyRow', () => {
 
     expect(useOverlayStore.getState().duelId).toBe(42);
     expect(useOverlayStore.getState().showDuelPending).toBe(true);
+    expect(useBattleStore.getState().pendingChallengeTargetId).toBeNull();
+  });
+
+  it('한 행이 결투 신청 중이면 다른 행의 Challenge를 눌러도 요청이 나가지 않는다', async () => {
+    const { getAllByText } = await render(
+      <>
+        <BattleEnemyRow enemy={enemy} socket={socket} />
+        <BattleEnemyRow enemy={enemy2} socket={socket} />
+      </>,
+    );
+
+    const [btn1, btn2] = getAllByText('Challenge');
+
+    await act(async () => {
+      fireEvent.press(btn1);
+    });
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(useBattleStore.getState().pendingChallengeTargetId).toBe('enemy-1');
+
+    // enemy-1의 요청이 아직 안 끝난 상태에서 enemy-2 행을 눌러도 disabled라 emit이 늘지 않는다.
+    await act(async () => {
+      fireEvent.press(btn2);
+    });
+    expect(emit).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import type { Socket } from 'socket.io-client';
 import { useOverlayStore } from '@/store/useOverlayStore';
@@ -12,42 +11,32 @@ interface DuelRequestAck {
   duelId?: number;
 }
 
-interface WsExceptionPayload {
-  code: string;
-}
-
 interface BattleEnemyRowProps {
   enemy: NearbyEnemy;
   socket: Socket | null;
 }
 
 export function BattleEnemyRow({ enemy, socket }: BattleEnemyRowProps) {
-  const [pending, setPending] = useState(false);
+  // 리스트 전체가 공유하는 pendingChallengeTargetId를 쓴다(로컬 state가 아니다) — duel:request가
+  // 서버에서 throw로 끝나면(사거리 이탈·페널티·이미 진행 중인 결투 등) ack 콜백이 아예 호출되지
+  // 않고(ws-exception.filter.ts), 그 실패를 알려주는 exception 이벤트엔 어떤 요청에 대한 것인지
+  // 구분할 duelId가 없다. 행마다 로컬 pending을 두면 "이 exception이 내 요청 실패다"를 판단할
+  // 방법이 없어 아무 행이나 건드리게 된다 — 그래서 애초에 공유 값 하나로 리스트 전체를 막아
+  // "동시에 여러 결투를 신청하는 상황" 자체가 생기지 않게 한다. exception 발생 시 이 값을
+  // 비우는 처리는 SocketProvider의 전역 handleException이 한다.
+  const pendingChallengeTargetId = useBattleStore((s) => s.pendingChallengeTargetId);
+  const isPending = pendingChallengeTargetId === enemy.userId;
+  const blocked = pendingChallengeTargetId != null;
   const { t } = useTranslation();
 
-  // duel:request가 서버에서 throw로 끝나면(사거리 이탈, 이미 진행 중인 결투 등) ack 콜백이
-  // 아예 호출되지 않는다(ws-exception.filter.ts 주석 참고) — SocketProvider의 전역 `exception`
-  // 핸들러는 오버레이(duelId 등)만 정리하고 이 버튼의 로컬 pending은 모른다. 여기서도 구독하지
-  // 않으면 버튼이 스피너 상태로 영영 멈춰 재시도가 불가능해진다.
-  useEffect(() => {
-    if (!socket) return;
-    const handleException = (payload: WsExceptionPayload) => {
-      if (payload.code?.startsWith('DUEL_')) setPending(false);
-    };
-    socket.on('exception', handleException);
-    return () => {
-      socket.off('exception', handleException);
-    };
-  }, [socket]);
-
   const handleDuel = () => {
-    if (!socket || pending) return;
-    setPending(true);
+    if (!socket || blocked) return;
+    useBattleStore.getState().setPendingChallengeTargetId(enemy.userId);
     socket.emit(
       'duel:request',
       { targetUserId: enemy.userId },
       (ack: DuelRequestAck) => {
-        setPending(false);
+        useBattleStore.getState().setPendingChallengeTargetId(null);
         // 서버가 거부(예: 상대가 이미 다른 결투 중)하면 duelId가 안 온다 — 이 경우
         // 목록에 그대로 남겨 재시도할 수 있게 둔다.
         if (ack.status !== 'ok' || ack.duelId == null) return;
@@ -71,8 +60,8 @@ export function BattleEnemyRow({ enemy, socket }: BattleEnemyRowProps) {
         <Text style={styles.nickname}>{enemy.nickname ?? enemy.userId}</Text>
         <Text style={styles.team}>{enemy.team}</Text>
       </View>
-      <TouchableOpacity style={styles.btn} onPress={handleDuel} disabled={pending}>
-        {pending ? (
+      <TouchableOpacity style={styles.btn} onPress={handleDuel} disabled={blocked}>
+        {isPending ? (
           <ActivityIndicator size="small" color="#fff" />
         ) : (
           <Text style={styles.btnText}>{t('battle.duel')}</Text>
