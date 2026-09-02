@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import type { Socket } from 'socket.io-client';
 import { useOverlayStore } from '@/store/useOverlayStore';
@@ -12,6 +12,10 @@ interface DuelRequestAck {
   duelId?: number;
 }
 
+interface WsExceptionPayload {
+  code: string;
+}
+
 interface BattleEnemyRowProps {
   enemy: NearbyEnemy;
   socket: Socket | null;
@@ -20,6 +24,21 @@ interface BattleEnemyRowProps {
 export function BattleEnemyRow({ enemy, socket }: BattleEnemyRowProps) {
   const [pending, setPending] = useState(false);
   const { t } = useTranslation();
+
+  // duel:request가 서버에서 throw로 끝나면(사거리 이탈, 이미 진행 중인 결투 등) ack 콜백이
+  // 아예 호출되지 않는다(ws-exception.filter.ts 주석 참고) — SocketProvider의 전역 `exception`
+  // 핸들러는 오버레이(duelId 등)만 정리하고 이 버튼의 로컬 pending은 모른다. 여기서도 구독하지
+  // 않으면 버튼이 스피너 상태로 영영 멈춰 재시도가 불가능해진다.
+  useEffect(() => {
+    if (!socket) return;
+    const handleException = (payload: WsExceptionPayload) => {
+      if (payload.code?.startsWith('DUEL_')) setPending(false);
+    };
+    socket.on('exception', handleException);
+    return () => {
+      socket.off('exception', handleException);
+    };
+  }, [socket]);
 
   const handleDuel = () => {
     if (!socket || pending) return;
