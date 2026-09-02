@@ -253,8 +253,11 @@ export const ko = {
     miniGame: {
       title: '미니게임',
       start: '시작',
-      win: '승리!',
-      lose: '패배...',
+      preparing: '게임을 준비하는 중...',
+      waitingOpponent: '제출 완료! 상대를 기다리는 중...',
+      opponentAlreadySubmitted: '상대는 이미 제출했어요. 마저 제출해주세요!',
+      roundLabel: '라운드 {{round}}/{{maxRounds}}',
+      rematch: '무승부! 재경기를 시작합니다',
       tapBattle: {
         instruction: '5초 동안 최대한 많이 탭하세요',
         tapCount: '{{count}}회',
@@ -262,17 +265,11 @@ export const ko = {
       },
       reaction: {
         instructionWait: '초록불이 켜지면 최대한 빨리 탭하세요',
-        wait: '기다리세요...',
         go: '지금 탭!',
         tooSoon: '너무 빨랐어요! 다시 탭해서 재시작하세요',
       },
       quiz: {
         instruction: '정답을 맞히면 승리합니다',
-        question: '부산에서 가장 유명한 해수욕장은 어디일까요?',
-        choice1: '해운대',
-        choice2: '광안리',
-        choice3: '송정',
-        choice4: '다대포',
       },
     },
   },

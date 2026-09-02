@@ -2,35 +2,34 @@ import { useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
-import type { MiniGameProps } from './types';
+import type { LocalizedText } from '@/store/useOverlayStore';
+import type { MiniGameSubmit } from './types';
 
-const CORRECT_CHOICE_INDEX = 0;
+interface QuizGameProps {
+  /** 정답은 서버 세션에만 있다 — 여기서 채점하지 않는다(구 버전은 정답이 항상 선택지 1번이었다). */
+  question: LocalizedText;
+  choices: LocalizedText[];
+  onSubmit: MiniGameSubmit;
+}
 
-export function QuizGame({ onFinish }: MiniGameProps) {
-  const { t } = useTranslation();
-  const finishedRef = useRef(false);
-
-  const choices = [
-    t('overlay.miniGame.quiz.choice1'),
-    t('overlay.miniGame.quiz.choice2'),
-    t('overlay.miniGame.quiz.choice3'),
-    t('overlay.miniGame.quiz.choice4'),
-  ];
+export function QuizGame({ question, choices, onSubmit }: QuizGameProps) {
+  const { t, locale } = useTranslation();
+  const submittedRef = useRef(false);
 
   const handleSelect = (index: number) => {
-    if (finishedRef.current) return;
-    finishedRef.current = true;
-    onFinish(index === CORRECT_CHOICE_INDEX);
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    onSubmit(index);
   };
 
   return (
     <View style={styles.container}>
       <Text style={styles.instruction}>{t('overlay.miniGame.quiz.instruction')}</Text>
-      <Text style={styles.question}>{t('overlay.miniGame.quiz.question')}</Text>
+      <Text style={styles.question}>{question[locale]}</Text>
       <View style={styles.choices}>
         {choices.map((choice, index) => (
-          <TouchableOpacity key={choice} style={styles.choiceBtn} onPress={() => handleSelect(index)}>
-            <Text style={styles.choiceText}>{choice}</Text>
+          <TouchableOpacity key={index} style={styles.choiceBtn} onPress={() => handleSelect(index)}>
+            <Text style={styles.choiceText}>{choice[locale]}</Text>
           </TouchableOpacity>
         ))}
       </View>

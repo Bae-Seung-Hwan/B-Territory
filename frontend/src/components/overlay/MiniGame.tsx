@@ -1,61 +1,96 @@
-import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useState } from 'react';
+import { Modal, View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { useOverlayStore } from '@/store/useOverlayStore';
 import { useSocket } from '@/providers/SocketProvider';
-import { useAuth } from '@/hooks/use-auth';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
-import { pickGame } from './minigames';
+import { TapBattle, ReactionGame, QuizGame } from './minigames';
+import type { MiniGameSubmit } from './minigames';
 
+/**
+ * 결투 미니게임 조립부. 승패는 전부 서버가 판정한다(PR #46) — 여기서는 gameType에 맞는
+ * 게임을 골라 보여주고, 플레이 결과(탭 수/선택지 index/제출 사실)만 game:submit으로 보낸다.
+ * 결과 화면은 따로 없다 — 서버 확정(duel:completed/duel:voided)은 SocketProvider가 이미
+ * Alert로 안내하고 resetDuel()로 이 모달 자체를 닫는다.
+ */
 export function MiniGame() {
   const showMiniGame = useOverlayStore((s) => s.showMiniGame);
   const duelId = useOverlayStore((s) => s.duelId);
-  const enemyInfo = useOverlayStore((s) => s.enemyInfo);
-  const result = useOverlayStore((s) => s.miniGameResult);
-  const setResult = useOverlayStore((s) => s.setMiniGameResult);
-  const resetDuel = useOverlayStore((s) => s.resetDuel);
+  const gameType = useOverlayStore((s) => s.gameType);
+  const gameRound = useOverlayStore((s) => s.gameRound);
+  const gameMaxRounds = useOverlayStore((s) => s.gameMaxRounds);
+  const gameTap = useOverlayStore((s) => s.gameTap);
+  const gameQuiz = useOverlayStore((s) => s.gameQuiz);
+  const goSignal = useOverlayStore((s) => s.goSignal);
+  const opponentSubmitted = useOverlayStore((s) => s.opponentSubmitted);
   const socket = useSocket();
-  const { profile } = useAuth();
   const { t } = useTranslation();
 
-  const handleClose = () => {
-    resetDuel();
+  const [submitted, setSubmitted] = useState(false);
+  // 라운드가 바뀔 때마다(재경기 포함) 제출 상태를 새로 시작한다 — effect가 아니라 렌더 중
+  // 직접 setState하는, React가 안내하는 "prop이 바뀌면 state를 조정하는" 패턴이다
+  // (MessageActionSheet.tsx의 prevTarget과 동일한 이유).
+  const [prevGameRound, setPrevGameRound] = useState(gameRound);
+  if (gameRound !== prevGameRound) {
+    setPrevGameRound(gameRound);
+    setSubmitted(false);
+  }
+
+  const handleSubmit: MiniGameSubmit = (value) => {
+    if (submitted || duelId == null || gameRound == null) return;
+    setSubmitted(true);
+    socket?.emit('game:submit', { duelId, round: gameRound, value });
   };
 
-  const handleFinish = (didWin: boolean) => {
-    if (duelId != null && profile && enemyInfo) {
-      // 승자 판정은 서버가 두 참가자의 신고가 일치할 때만 확정한다(자가신고 합의,
-      // duels.service.ts#submitResult) — 여기서는 내가 관찰한 결과만 emit하면 된다.
-      const winnerId = didWin ? profile.id : enemyInfo.userId;
-      socket?.emit('duel:result', { duelId, winnerId });
+  const renderBody = () => {
+    if (!gameType) {
+      return (
+        <>
+          <ActivityIndicator color={BrandColors.accent} />
+          <Text style={styles.statusText}>{t('overlay.miniGame.preparing')}</Text>
+        </>
+      );
     }
-    setResult(didWin ? 'win' : 'lose');
-  };
 
-  // pickGame은 GAMES 배열의 고정된 컴포넌트 참조 중 하나를 duelId로 결정적으로 골라올 뿐,
-  // 새 컴포넌트를 만들지 않는다 — react-hooks/static-components는 이 패턴을 구분하지 못한다.
-  const Game = duelId != null ? pickGame(duelId) : null;
+    if (submitted) {
+      return (
+        <>
+          <ActivityIndicator color={BrandColors.accent} />
+          <Text style={styles.statusText}>
+            {t(
+              opponentSubmitted
+                ? 'overlay.miniGame.opponentAlreadySubmitted'
+                : 'overlay.miniGame.waitingOpponent',
+            )}
+          </Text>
+        </>
+      );
+    }
+
+    switch (gameType) {
+      case 'TAP':
+        return <TapBattle durationSec={gameTap?.durationSec ?? 5} onSubmit={handleSubmit} />;
+      case 'REACTION':
+        return <ReactionGame goSignal={goSignal} onSubmit={handleSubmit} />;
+      case 'QUIZ':
+        return gameQuiz ? (
+          <QuizGame question={gameQuiz.question} choices={gameQuiz.choices} onSubmit={handleSubmit} />
+        ) : null;
+      default:
+        return null;
+    }
+  };
 
   return (
     <Modal visible={showMiniGame} transparent={false} animationType="slide" statusBarTranslucent>
       <View style={styles.container}>
-        {result ? (
-          <>
-            <Text style={styles.resultTitle}>
-              {result === 'win' ? t('overlay.miniGame.win') : t('overlay.miniGame.lose')}
-            </Text>
-            <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
-              <Text style={styles.closeBtnText}>{t('common.close')}</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <>
-            <Text style={styles.title}>⚡ {t('overlay.miniGame.title')}</Text>
-            {
-              // eslint-disable-next-line react-hooks/static-components -- Game은 GAMES의 고정 참조, 매 렌더 새로 만들어지지 않음
-              Game ? <Game onFinish={handleFinish} /> : null
-            }
-          </>
+        <Text style={styles.title}>⚡ {t('overlay.miniGame.title')}</Text>
+        {gameRound != null && gameMaxRounds != null && (
+          <Text style={styles.roundLabel}>
+            {t('overlay.miniGame.roundLabel', { round: gameRound, maxRounds: gameMaxRounds })}
+          </Text>
         )}
+        {renderBody()}
       </View>
     </Modal>
   );
@@ -71,14 +106,6 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   title: { fontSize: 28, fontWeight: 'bold', color: '#fff' },
-  resultTitle: { fontSize: 32, fontWeight: 'bold', color: BrandColors.accent },
-  closeBtn: {
-    marginTop: 32,
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  closeBtnText: { color: '#888', fontWeight: '600' },
+  roundLabel: { fontSize: 13, color: '#888', marginTop: -16 },
+  statusText: { color: '#ccc', fontSize: 15, textAlign: 'center' },
 });

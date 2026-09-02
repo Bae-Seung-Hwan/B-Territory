@@ -4,7 +4,7 @@ import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/lib/api-client';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
-import { useOverlayStore, isDuelBusy } from '@/store/useOverlayStore';
+import { useOverlayStore, isDuelBusy, type MiniGameType, type LocalizedText } from '@/store/useOverlayStore';
 import { useBattleStore } from '@/store/useBattleStore';
 // 훅(useTranslation)이 아니라 i18n 인스턴스를 직접 쓴다 — 훅이 반환하는 t는 매 렌더
 // 새로 bind된 함수라 effect 의존성에 넣으면 소켓 리스너 전체가 렌더마다 재등록된다.
@@ -44,6 +44,27 @@ interface DuelCompleted {
   loserId: string;
   scoreDelta: number;
   allyBonusApplied: boolean;
+}
+
+interface GameStartPayload {
+  duelId: number;
+  gameType: MiniGameType;
+  round: number;
+  maxRounds: number;
+  deadlineAt: number;
+  tap?: { durationSec: number };
+  quiz?: { question: LocalizedText; choices: LocalizedText[] };
+}
+
+interface GameRoundPayload {
+  duelId: number;
+  round: number;
+}
+
+interface GameRoundResultPayload {
+  duelId: number;
+  round: number;
+  winnerId: null;
 }
 
 const SocketContext = createContext<Socket | null>(null);
@@ -192,6 +213,51 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('duel:voided', handleDuelVoided);
     };
   }, [socket, profile]);
+
+  // 미니게임 라운드 이벤트 — 판정은 전부 서버가 하고(PR #46), 클라이언트는 게임 진행과
+  // game:submit만 담당한다. duel:accepted 이후 game:start가 도착하기까지의 왕복 구간은
+  // MiniGame이 gameType==null을 보고 자체적으로 로딩 화면을 보여준다(별도 show* 플래그 불필요).
+  useEffect(() => {
+    const handleGameStart = (payload: GameStartPayload) => {
+      const store = useOverlayStore.getState();
+      if (store.duelId !== payload.duelId) return;
+      store.startGameRound(payload);
+    };
+
+    // 반응속도 게임의 출발 신호 — 대기 시간은 payload에 없다(미리 알면 예측 탭이 가능해진다).
+    // goSignal을 증가시켜만 두면 ReactionGame이 그 변화를 보고 스스로 phase를 바꾼다.
+    const handleGameGo = (payload: GameRoundPayload) => {
+      const store = useOverlayStore.getState();
+      if (store.duelId !== payload.duelId || store.gameRound !== payload.round) return;
+      store.bumpGoSignal();
+    };
+
+    const handleOpponentSubmitted = (payload: GameRoundPayload) => {
+      const store = useOverlayStore.getState();
+      if (store.duelId !== payload.duelId || store.gameRound !== payload.round) return;
+      store.setOpponentSubmitted(true);
+    };
+
+    // 동점 재경기 — 곧이어 다음 라운드의 game:start가 오므로, 여기서는 gameType만 비워
+    // MiniGame을 "다음 라운드 준비 중" 로딩 화면으로 되돌리고 짧게 안내만 한다.
+    const handleRoundResult = (payload: GameRoundResultPayload) => {
+      const store = useOverlayStore.getState();
+      if (store.duelId !== payload.duelId) return;
+      store.clearGameRound();
+      Alert.alert(i18n.t('overlay.duelOutcome.title'), i18n.t('overlay.miniGame.rematch'));
+    };
+
+    socket.on('game:start', handleGameStart);
+    socket.on('game:go', handleGameGo);
+    socket.on('game:opponent:submitted', handleOpponentSubmitted);
+    socket.on('game:round:result', handleRoundResult);
+    return () => {
+      socket.off('game:start', handleGameStart);
+      socket.off('game:go', handleGameGo);
+      socket.off('game:opponent:submitted', handleOpponentSubmitted);
+      socket.off('game:round:result', handleRoundResult);
+    };
+  }, [socket]);
 
   // 서버가 거절한 요청(사거리 이탈, 페널티, 이미 처리된 결투 등)을 사용자에게 알린다.
   // 이걸 구독하지 않으면 ack가 오지 않는 실패 경로에서 오버레이가 영영 열린 채 멈춘다.

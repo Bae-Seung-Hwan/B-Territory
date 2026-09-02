@@ -250,8 +250,11 @@ export const en: Translations = {
     miniGame: {
       title: 'Mini Game',
       start: 'Start',
-      win: 'You Win!',
-      lose: 'You Lose...',
+      preparing: 'Preparing the game...',
+      waitingOpponent: 'Submitted! Waiting for opponent...',
+      opponentAlreadySubmitted: 'Your opponent already submitted. Go ahead!',
+      roundLabel: 'Round {{round}}/{{maxRounds}}',
+      rematch: "It's a tie! Starting a rematch",
       tapBattle: {
         instruction: 'Tap as many times as you can in 5 seconds',
         tapCount: '{{count}} taps',
@@ -259,17 +262,11 @@ export const en: Translations = {
       },
       reaction: {
         instructionWait: 'Tap as fast as you can when it turns green',
-        wait: 'Wait for it...',
         go: 'TAP NOW!',
         tooSoon: 'Too soon! Tap again to restart',
       },
       quiz: {
         instruction: 'Answer correctly to win',
-        question: 'Which is the most famous beach in Busan?',
-        choice1: 'Haeundae',
-        choice2: 'Gwangalli',
-        choice3: 'Songjeong',
-        choice4: 'Dadaepo',
       },
     },
   },

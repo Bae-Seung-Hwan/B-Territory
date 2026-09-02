@@ -1,12 +1,18 @@
 import { create } from 'zustand';
 
 // 이 체인(배틀 탭 리스트 행 → DuelRequest/DuelPending → MiniGame)은 SocketProvider의
-// 소켓 리스너(encounter:detected, duel:requested/accepted/rejected/expired/completed/voided)가
-// 트리거한다 — providers/SocketProvider.tsx 참고.
+// 소켓 리스너(encounter:detected, duel:requested/accepted/rejected/expired/completed/voided,
+// game:start/go/opponent:submitted/round:result)가 트리거한다 — providers/SocketProvider.tsx 참고.
 
 export type DuelRole = 'challenger' | 'recipient';
 
-export type MiniGameResult = 'win' | 'lose';
+export type MiniGameType = 'TAP' | 'REACTION' | 'QUIZ';
+
+/** 소켓에 lang 파라미터가 없어 서버가 ko/en을 함께 내려준다 — 표시 언어는 클라 i18n이 고른다. */
+export interface LocalizedText {
+  ko: string;
+  en: string;
+}
 
 interface EnemyInfo {
   userId: string;
@@ -21,18 +27,25 @@ interface OverlayStore {
   showDuelPending: boolean;
   showMiniGame: boolean;
   enemyInfo: EnemyInfo | null;
-  // 결투 식별자. 백엔드가 발급하는 값을 그대로 받아 저장해두고,
-  // MiniGame이 이 값을 시드로 미니게임 종류를 결정한다 (minigames/index.ts#pickGame).
+  // 결투 식별자. 백엔드가 발급하는 값을 그대로 받아 저장해둔다.
   duelId: number | null;
   // 신청자/수신자에 따라 결투 종료 후 알림 문구가 달라져야 해서 구분해둔다.
   duelRole: DuelRole | null;
   // duel:requested엔 team 정보가 없어(realtime.gateway.ts), 수신자용 DuelRequest 시트는
   // enemyInfo.nationality 대신 이 닉네임으로 문구를 구성한다.
   challengerNickname: string | null;
-  // 미니게임의 로컬 판정 결과. MiniGame의 컴포넌트 지역 state로 두면 서버 확정
-  // (duel:completed 등)으로 오버레이가 닫힐 때 초기화될 기회가 없어 다음 결투에
-  // 이전 결과 화면이 그대로 뜬다 — resetDuel이 함께 비우도록 스토어에 둔다.
-  miniGameResult: MiniGameResult | null;
+  // 아래부터는 미니게임 라운드 상태 — 전부 game:start/go/opponent:submitted/round:result가 채운다
+  // (SocketProvider). 게임 종류·문제는 서버가 정하므로 로컬에서 결정론적으로 고르지 않는다.
+  gameType: MiniGameType | null;
+  gameRound: number | null;
+  gameMaxRounds: number | null;
+  /** 제출 마감 시각(epoch ms). 서버 시계 기준. */
+  gameDeadlineAt: number | null;
+  gameTap: { durationSec: number } | null;
+  gameQuiz: { question: LocalizedText; choices: LocalizedText[] } | null;
+  /** game:go 수신마다 증가하는 카운터 — ReactionGame이 이 값 변화를 구독해 phase를 전환한다. */
+  goSignal: number;
+  opponentSubmitted: boolean;
   setShowDuelRequest: (v: boolean) => void;
   setShowDuelPending: (v: boolean) => void;
   setShowMiniGame: (v: boolean) => void;
@@ -40,7 +53,19 @@ interface OverlayStore {
   setDuelId: (id: number | null) => void;
   setDuelRole: (role: DuelRole | null) => void;
   setChallengerNickname: (name: string | null) => void;
-  setMiniGameResult: (result: MiniGameResult | null) => void;
+  /** game:start 수신 시 라운드를 새로 연다 — 이전 라운드의 opponentSubmitted도 함께 리셋한다. */
+  startGameRound: (round: {
+    gameType: MiniGameType;
+    round: number;
+    maxRounds: number;
+    deadlineAt: number;
+    tap?: { durationSec: number };
+    quiz?: { question: LocalizedText; choices: LocalizedText[] };
+  }) => void;
+  /** game:round:result(재경기) 수신 시 — 다음 game:start가 올 때까지 로딩 상태로 되돌린다. */
+  clearGameRound: () => void;
+  bumpGoSignal: () => void;
+  setOpponentSubmitted: (v: boolean) => void;
   /** 결투 한 사이클(수락/거부/만료/완료/무효) 종료 시 관련 상태를 한 번에 초기화한다. */
   resetDuel: () => void;
 }
@@ -62,6 +87,16 @@ export function isDuelBusy(s: OverlayStore): boolean {
   );
 }
 
+const GAME_ROUND_DEFAULTS = {
+  gameType: null,
+  gameRound: null,
+  gameMaxRounds: null,
+  gameDeadlineAt: null,
+  gameTap: null,
+  gameQuiz: null,
+  opponentSubmitted: false,
+} as const;
+
 export const useOverlayStore = create<OverlayStore>((set) => ({
   showDuelRequest: false,
   showDuelPending: false,
@@ -70,7 +105,8 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
   duelId: null,
   duelRole: null,
   challengerNickname: null,
-  miniGameResult: null,
+  goSignal: 0,
+  ...GAME_ROUND_DEFAULTS,
   setShowDuelRequest: (v) => set({ showDuelRequest: v }),
   setShowDuelPending: (v) => set({ showDuelPending: v }),
   setShowMiniGame: (v) => set({ showMiniGame: v }),
@@ -78,7 +114,19 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
   setDuelId: (id) => set({ duelId: id }),
   setDuelRole: (role) => set({ duelRole: role }),
   setChallengerNickname: (name) => set({ challengerNickname: name }),
-  setMiniGameResult: (miniGameResult) => set({ miniGameResult }),
+  startGameRound: (round) =>
+    set({
+      gameType: round.gameType,
+      gameRound: round.round,
+      gameMaxRounds: round.maxRounds,
+      gameDeadlineAt: round.deadlineAt,
+      gameTap: round.tap ?? null,
+      gameQuiz: round.quiz ?? null,
+      opponentSubmitted: false,
+    }),
+  clearGameRound: () => set(GAME_ROUND_DEFAULTS),
+  bumpGoSignal: () => set((s) => ({ goSignal: s.goSignal + 1 })),
+  setOpponentSubmitted: (v) => set({ opponentSubmitted: v }),
   resetDuel: () =>
     set({
       showDuelRequest: false,
@@ -88,6 +136,6 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
       duelId: null,
       duelRole: null,
       challengerNickname: null,
-      miniGameResult: null,
+      ...GAME_ROUND_DEFAULTS,
     }),
 }));
