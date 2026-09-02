@@ -122,6 +122,7 @@ export const en: Translations = {
       previous: 'Previous season',
       next: 'Next season',
       backToCurrent: 'Back to current season',
+      unknown: '—',
       seasonLabel: 'Season {{season}}',
       range: '{{start}} ~ {{end}}',
       status: {

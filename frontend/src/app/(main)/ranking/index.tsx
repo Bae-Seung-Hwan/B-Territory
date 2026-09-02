@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react';
 import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { TeamRankEntry, UserRankEntry } from '@/api/ranking';
 import { useSeasonRanking, type RankingScope } from '@/hooks/use-season-ranking';
 import { useTranslation } from '@/i18n';
-import { getCountryList } from '@/constants/countries';
+import { getCountryList, type Country } from '@/constants/countries';
 import { Card } from '@/components/ui/Card';
 import { BrandColors, Spacing } from '@/constants/theme';
 
@@ -15,15 +14,18 @@ export default function RankingScreen() {
   const [scope, setScope] = useState<Scope>('teams');
 
   const countries = useMemo(() => getCountryList(locale), [locale]);
-  const flagByTeam = useMemo(
-    () => new Map(countries.map((c) => [c.code, c.flag])),
+  // flag만이 아니라 현지화된 국가명도 함께 들고 있어야 한다 — register.tsx·profile/index.tsx
+  // 는 둘 다 "flag + name"으로 국가를 표시하는데, 랭킹만 team(ISO 코드) 원문을 그대로
+  // 보여주고 있었다(PR #49 2차 리뷰 지적).
+  const countryByCode = useMemo(
+    () => new Map(countries.map((c) => [c.code, c])),
     [countries],
   );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Text style={styles.title}>{t('ranking.title')}</Text>
-      <SeasonRankingView scope={scope} onScopeChange={setScope} flagByTeam={flagByTeam} />
+      <SeasonRankingView scope={scope} onScopeChange={setScope} countryByCode={countryByCode} />
     </SafeAreaView>
   );
 }
@@ -38,7 +40,12 @@ function Segment({
   onPress: () => void;
 }) {
   return (
-    <Pressable style={[styles.segment, active && styles.segmentActive]} onPress={onPress}>
+    <Pressable
+      style={[styles.segment, active && styles.segmentActive]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+    >
       <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{label}</Text>
     </Pressable>
   );
@@ -47,15 +54,17 @@ function Segment({
 function SeasonRankingView({
   scope,
   onScopeChange,
-  flagByTeam,
+  countryByCode,
 }: {
   scope: Scope;
   onScopeChange: (scope: Scope) => void;
-  flagByTeam: Map<string, string>;
+  countryByCode: Map<string, Country>;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const {
     query,
+    teamQuery,
+    userQuery,
     displaySeason,
     isLiveSeason,
     canGoPrevious,
@@ -81,7 +90,13 @@ function SeasonRankingView({
       </View>
 
       <View style={styles.seasonNav}>
-        <Pressable onPress={goToPrevious} disabled={!canGoPrevious} hitSlop={8}>
+        <Pressable
+          onPress={goToPrevious}
+          disabled={!canGoPrevious}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !canGoPrevious }}
+        >
           <Text style={[styles.seasonNavArrow, !canGoPrevious && styles.seasonNavArrowDisabled]}>
             {'◀ ' + t('ranking.seasonNav.previous')}
           </Text>
@@ -89,9 +104,15 @@ function SeasonRankingView({
         <Text style={styles.seasonLabel}>
           {displaySeason !== null
             ? t('ranking.seasonNav.seasonLabel', { season: displaySeason })
-            : '—'}
+            : t('ranking.seasonNav.unknown')}
         </Text>
-        <Pressable onPress={goToNext} disabled={!canGoNext} hitSlop={8}>
+        <Pressable
+          onPress={goToNext}
+          disabled={!canGoNext}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !canGoNext }}
+        >
           <Text style={[styles.seasonNavArrow, !canGoNext && styles.seasonNavArrowDisabled]}>
             {t('ranking.seasonNav.next') + ' ▶'}
           </Text>
@@ -99,7 +120,7 @@ function SeasonRankingView({
       </View>
 
       {!isLiveSeason && (
-        <Pressable onPress={backToCurrent}>
+        <Pressable onPress={backToCurrent} accessibilityRole="button">
           <Text style={styles.backToCurrentText}>{t('ranking.seasonNav.backToCurrent')}</Text>
         </Pressable>
       )}
@@ -107,8 +128,8 @@ function SeasonRankingView({
       {query.data && (
         <Text style={styles.seasonRangeText}>
           {t('ranking.seasonNav.range', {
-            start: new Date(query.data.start).toLocaleDateString(),
-            end: new Date(query.data.end).toLocaleDateString(),
+            start: new Date(query.data.start).toLocaleDateString(locale),
+            end: new Date(query.data.end).toLocaleDateString(locale),
           })}
           {' · '}
           {t(`ranking.seasonNav.status.${query.data.status}`)}
@@ -119,7 +140,9 @@ function SeasonRankingView({
         <ActivityIndicator style={styles.loading} color={BrandColors.accent} />
       )}
 
-      {query.isError && (
+      {/* 백그라운드 폴링 실패는 직전 성공 데이터를 유지한 채 isError만 true가 되므로,
+          data가 남아있는 동안은 에러 박스로 목록을 가리지 않는다(PR #49 2차 리뷰 지적). */}
+      {query.isError && !query.data && (
         <Pressable style={styles.errorBox} onPress={() => query.refetch()}>
           <Text style={styles.errorText}>{t('ranking.loadFailed')}</Text>
           <Text style={styles.retryText}>{t('ranking.retry')}</Text>
@@ -129,28 +152,31 @@ function SeasonRankingView({
       {query.data &&
         (scope === 'teams' ? (
           <FlatList
-            data={query.data.ranking as TeamRankEntry[]}
+            data={teamQuery.data?.ranking ?? []}
             keyExtractor={(item) => `${item.rank}-${item.team}`}
             contentContainerStyle={styles.list}
             ListEmptyComponent={<Text style={styles.emptyText}>{t('ranking.empty')}</Text>}
-            renderItem={({ item }) => (
-              <RankRow
-                rank={item.rank}
-                label={`${flagByTeam.get(item.team) ?? ''} ${item.team}`.trim()}
-                score={item.score}
-              />
-            )}
+            renderItem={({ item }) => {
+              const country = countryByCode.get(item.team);
+              return (
+                <RankRow
+                  rank={item.rank}
+                  label={`${country?.flag ?? ''} ${country?.name ?? item.team}`.trim()}
+                  score={item.score}
+                />
+              );
+            }}
           />
         ) : (
           <FlatList
-            data={query.data.ranking as UserRankEntry[]}
+            data={userQuery.data?.ranking ?? []}
             keyExtractor={(item) => `${item.rank}-${item.userId}`}
             contentContainerStyle={styles.list}
             ListEmptyComponent={<Text style={styles.emptyText}>{t('ranking.empty')}</Text>}
             renderItem={({ item }) => (
               <RankRow
                 rank={item.rank}
-                label={`${flagByTeam.get(item.team) ?? ''} ${item.nickname}`.trim()}
+                label={`${countryByCode.get(item.team)?.flag ?? ''} ${item.nickname}`.trim()}
                 score={item.score}
               />
             )}

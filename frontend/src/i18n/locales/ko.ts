@@ -117,6 +117,7 @@ export const ko = {
       previous: '이전 시즌',
       next: '다음 시즌',
       backToCurrent: '현재 시즌으로 돌아가기',
+      unknown: '—',
       seasonLabel: '시즌 {{season}}',
       range: '{{start}} ~ {{end}}',
       status: {

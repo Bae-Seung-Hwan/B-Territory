@@ -1,10 +1,11 @@
 import React from 'react';
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   useSeasonRanking,
   computeSeasonNavState,
   computeSeasonRefetchInterval,
+  resolveNextSeason,
 } from '@/hooks/use-season-ranking';
 import { fetchTeamRanking, fetchUserRanking } from '@/api/ranking';
 
@@ -18,11 +19,14 @@ jest.mock('expo-router', () => ({ useIsFocused: jest.fn(() => true) }));
 const mockedFetchTeamRanking = fetchTeamRanking as jest.Mock;
 const mockedFetchUserRanking = fetchUserRanking as jest.Mock;
 
-function createWrapper() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
+}
+
+function createQueryClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
 describe('computeSeasonNavState', () => {
@@ -89,9 +93,33 @@ describe('computeSeasonRefetchInterval', () => {
   });
 });
 
+describe('resolveNextSeason', () => {
+  it('현재 시즌 번호를 모르면 안전하게 명시적 번호로 이동한다', () => {
+    expect(resolveNextSeason(3, null)).toBe(4);
+  });
+
+  it('다음 시즌이 현재 시즌보다 작으면 명시적 번호로 이동한다', () => {
+    expect(resolveNextSeason(3, 10)).toBe(4);
+  });
+
+  it('다음 시즌이 현재 시즌과 같아지면 null(current)로 되돌린다 (PR #49 2차 리뷰 지적)', () => {
+    expect(resolveNextSeason(4, 5)).toBeNull();
+  });
+
+  it('다음 시즌이 현재 시즌을 넘어서도 null(current)로 되돌린다', () => {
+    expect(resolveNextSeason(5, 5)).toBeNull();
+  });
+});
+
 describe('useSeasonRanking', () => {
+  let queryClient: QueryClient;
+
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    queryClient.clear();
   });
 
   it("scope가 'teams'면 팀 랭킹 API만 호출한다", async () => {
@@ -102,8 +130,9 @@ describe('useSeasonRanking', () => {
       end: '2026-02-01',
       ranking: [],
     });
+    queryClient = createQueryClient();
     const { result } = await renderHook(() => useSeasonRanking('teams'), {
-      wrapper: createWrapper(),
+      wrapper: createWrapper(queryClient),
     });
 
     await waitFor(() => expect(result.current.query.data).toBeDefined());
@@ -119,12 +148,55 @@ describe('useSeasonRanking', () => {
       end: '2026-02-01',
       ranking: [],
     });
+    queryClient = createQueryClient();
     const { result } = await renderHook(() => useSeasonRanking('users'), {
-      wrapper: createWrapper(),
+      wrapper: createWrapper(queryClient),
     });
 
     await waitFor(() => expect(result.current.query.data).toBeDefined());
     expect(mockedFetchUserRanking).toHaveBeenCalledWith(undefined);
     expect(mockedFetchTeamRanking).not.toHaveBeenCalled();
+  });
+
+  it('next로 현재 시즌 번호에 도달하면 selectedSeason이 null로 정규화되어 이중 캐시를 피한다 (PR #49 2차 리뷰 지적)', async () => {
+    // 현재 시즌은 5. 시즌 3(ended)을 보다가 next를 두 번 눌러 5(ongoing)에 도달하면,
+    // queryKeys.ranking.teams(5)가 아니라 다시 'current' 키(undefined)로 돌아가야
+    // 같은 데이터가 두 키에 중복 캐시되어 각각 폴링하는 일이 없다.
+    mockedFetchTeamRanking.mockImplementation((season?: number) => {
+      if (season === undefined || season === 5) {
+        return Promise.resolve({
+          season: 5,
+          status: 'ongoing',
+          start: '2026-01-01',
+          end: '2026-02-01',
+          ranking: [],
+        });
+      }
+      return Promise.resolve({
+        season,
+        status: 'ended',
+        start: '2026-01-01',
+        end: '2026-02-01',
+        ranking: [],
+      });
+    });
+    queryClient = createQueryClient();
+    const { result } = await renderHook(() => useSeasonRanking('teams'), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.resolvedSeason).toBe(5));
+
+    await act(async () => result.current.goToPrevious());
+    await waitFor(() => expect(result.current.resolvedSeason).toBe(4));
+    await act(async () => result.current.goToPrevious());
+    await waitFor(() => expect(result.current.resolvedSeason).toBe(3));
+
+    await act(async () => result.current.goToNext());
+    await waitFor(() => expect(result.current.resolvedSeason).toBe(4));
+    await act(async () => result.current.goToNext());
+
+    await waitFor(() => expect(result.current.isLiveSeason).toBe(true));
+    expect(mockedFetchTeamRanking).not.toHaveBeenCalledWith(5);
   });
 });
