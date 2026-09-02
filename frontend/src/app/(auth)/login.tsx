@@ -17,7 +17,9 @@ import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
-import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
+import { useGoogleLogin } from '@/hooks/use-google-login';
+import { useFinishSocialLogin } from '@/hooks/use-social-auth';
+import { useSocialLoginConsent } from '@/hooks/use-social-login-consent';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BottomSheet } from '@/components/ui/BottomSheet';
@@ -36,6 +38,18 @@ export default function LoginScreen() {
   const [agreePrivacy, setAgreePrivacy] = useState(false);
   const [termsView, setTermsView] = useState<'list' | 'service' | 'privacy'>('list');
   const allAgreed = agreeTerms && agreePrivacy;
+  const {
+    requestConsent: requestSocialConsent,
+    resolveConsent,
+    isAwaitingConsent,
+  } = useSocialLoginConsent({
+    onRequest: () => {
+      setAgreeTerms(false);
+      setAgreePrivacy(false);
+      setTermsView('list');
+      termsSheetRef.current?.present();
+    },
+  });
 
   const canSubmit = email.trim().length > 0 && password.length > 0 && !loading;
 
@@ -60,6 +74,7 @@ export default function LoginScreen() {
   };
 
   const handleAuthError = useHandleAuthError();
+  const finishSocialLogin = useFinishSocialLogin(requestSocialConsent);
 
   const handleLogin = async () => {
     if (!canSubmit) return;
@@ -74,11 +89,40 @@ export default function LoginScreen() {
     }
   };
 
-  // 실제 연동은 hooks/use-google-login.ts(useGoogleLogin)에 준비돼 있다. Expo Go
-  // 실기기에서 OAuth 화면을 닫을 때 앱이 꺼지는 문제 때문에 Dev Build 전환 전까지는
-  // 의도적으로 배선하지 않고 "준비 중" 스텁만 노출한다.
-  const handleGoogleLogin = () => {
-    Alert.alert(t('common.comingSoon'), t('auth.login.googleComingSoonMessage'));
+  // Google/Apple 버튼을 동시에(또는 한쪽 present 애니메이션 중 다른 쪽을) 누르면 양쪽
+  // 네이티브 로그인 플로우가 함께 시작돼 signInWithCredential이 두 번 성공하고
+  // finishSocialLogin()도 두 번 돌아 네비게이션이 겹칠 수 있다. state만으로 막으면 두
+  // 탭이 리렌더 전에 들어올 때 둘 다 통과하므로, ref로 동기적으로 막는다.
+  const socialAuthBusyRef = useRef(false);
+  const [socialAuthBusy, setSocialAuthBusy] = useState(false);
+
+  const beginSocialAuth = () => {
+    if (socialAuthBusyRef.current) return false;
+    socialAuthBusyRef.current = true;
+    setSocialAuthBusy(true);
+    return true;
+  };
+
+  const endSocialAuth = () => {
+    socialAuthBusyRef.current = false;
+    setSocialAuthBusy(false);
+  };
+
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const { isConfigured: isGoogleConfigured, promptGoogleLogin } = useGoogleLogin({
+    onSuccess: finishSocialLogin,
+    onError: (err) => handleAuthError(err, 'auth.errors.loginFailed'),
+  });
+
+  const handleGoogleLogin = async () => {
+    if (!beginSocialAuth()) return;
+    setGoogleLoading(true);
+    try {
+      await promptGoogleLogin();
+    } finally {
+      setGoogleLoading(false);
+      endSocialAuth();
+    }
   };
 
   const openTermsSheet = () => {
@@ -95,8 +139,18 @@ export default function LoginScreen() {
   };
 
   const handleContinueToRegister = () => {
+    const wasAwaitingSocialConsent = isAwaitingConsent();
+    if (wasAwaitingSocialConsent) {
+      resolveConsent(true);
+    }
     termsSheetRef.current?.dismiss();
-    router.push('/(auth)/register');
+    if (!wasAwaitingSocialConsent) {
+      router.push('/(auth)/register');
+    }
+  };
+
+  const handleTermsSheetDismiss = () => {
+    resolveConsent(false);
   };
 
 
@@ -146,10 +200,16 @@ export default function LoginScreen() {
         title={t('auth.login.google')}
         onPress={handleGoogleLogin}
         variant="secondary"
-        style={styles.googleButton}
+        disabled={!isGoogleConfigured || socialAuthBusy}
+        loading={googleLoading}
       />
 
-      <AppleSignInButton />
+      {/*
+        Apple 로그인 임시 비활성화 — app.config.js의 ios 블록에 usesAppleSignIn: true가
+        빠져 있어 entitlement 없이 signInAsync()가 모든 기기에서 ERR_REQUEST_NOT_HANDLED로
+        실패한다(PR #48 3차 리뷰 #1). 컴포넌트와 테스트는 그대로 두고 노출만 막는다 —
+        app.config.js 수정 + 실기기 검증(App Store 4.8) 마친 뒤 다시 연결한다.
+      */}
 
       <TouchableOpacity style={styles.registerLink} onPress={openTermsSheet}>
         <Text style={styles.registerLinkText}>
@@ -158,7 +218,11 @@ export default function LoginScreen() {
         </Text>
       </TouchableOpacity>
 
-      <BottomSheet ref={termsSheetRef} snapPoints={[termsView === 'list' ? '58%' : '70%']}>
+      <BottomSheet
+        ref={termsSheetRef}
+        snapPoints={[termsView === 'list' ? '58%' : '70%']}
+        onDismiss={handleTermsSheetDismiss}
+      >
         {termsView === 'list' ? (
           <>
             <Text style={styles.termsTitle}>{t('auth.terms.title')}</Text>
@@ -260,7 +324,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   button: { marginTop: 8 },
-  googleButton: { opacity: 0.6 },
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 24 },
   dividerLine: { flex: 1, height: 1, backgroundColor: BrandColors.border },
   dividerText: { color: '#666', fontSize: 12, marginHorizontal: 12 },

@@ -1,14 +1,24 @@
-import { useEffect, useMemo } from 'react';
-import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
-import * as Crypto from 'expo-crypto';
+import { useCallback } from 'react';
+import { Platform } from 'react-native';
+import {
+  GoogleSignin,
+  isErrorWithCode,
+  isSuccessResponse,
+  statusCodes,
+} from '@react-native-google-signin/google-signin';
 import { GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 
-WebBrowser.maybeCompleteAuthSession();
+const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 
-const CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-const discovery = { authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth' };
+// 모듈 최초 평가 시 한 번만 구성한다 — signIn()은 매 호출 전에 재구성할 필요가 없다.
+// webClientId가 비어 있으면(콘솔에서 아직 발급 안 함) 네이티브 SDK가 실제 로그인 시도
+// 시점에 에러를 던지므로, isConfigured로 그 전에 버튼 자체를 비활성화할 수 있게 한다.
+GoogleSignin.configure({
+  webClientId: WEB_CLIENT_ID,
+  ...(IOS_CLIENT_ID ? { iosClientId: IOS_CLIENT_ID } : {}),
+});
 
 interface UseGoogleLoginOptions {
   onSuccess: () => void | Promise<void>;
@@ -16,65 +26,59 @@ interface UseGoogleLoginOptions {
 }
 
 /**
- * Google 로그인 (Firebase Auth 자격증명 교환).
+ * 웹은 @react-native-google-signin/google-signin이 스텁만 제공한다 — signIn()이 항상
+ * PLAY_SERVICES_NOT_AVAILABLE로 실패하므로(PR #48 리뷰 지적) 버튼 자체를 숨긴다.
+ * iOS는 webClientId만으로는 부족하고 iosClientId도 있어야 하는데, 이를 보지 않으면
+ * 미설정 상태에서도 버튼이 활성화된 채 렌더된다(PR #48 리뷰 지적). 순수 함수로 뽑아둔
+ * 이유는 React 렌더링 없이 플랫폼·환경변수 조합을 직접 테스트하기 위해서다.
+ */
+export function isGoogleLoginConfigured(
+  platformOS: string,
+  webClientId: string | undefined,
+  iosClientId: string | undefined,
+): boolean {
+  return !!webClientId && platformOS !== 'web' && (platformOS !== 'ios' || !!iosClientId);
+}
+
+/**
+ * Google 로그인 (네이티브 SDK + Firebase Auth 자격증명 교환).
  *
- * 현재 어디서도 호출하지 않는다 — login.tsx의 handleGoogleLogin은 "준비 중" 스텁만
- * 띄운다. Dev Build 전환 시 이 훅을 그 자리에 배선할 예정이라 미리 준비해둔 것.
- *
- * expo-auth-session/providers/google 대신 generic useAuthRequest를 직접 쓴다 —
- * deprecated된 헬퍼는 플랫폼별 네이티브 클라이언트 ID를 요구하는데, 우리는
- * Web 클라이언트 ID 하나로 충분한 implicit id_token 플로우만 쓰기 때문.
- *
- * ⚠️ Google의 OAuth Web 클라이언트는 redirect URI로 http(s)만 허용해서, Expo Go
- * 실기기(`exp://...`)에서는 redirect_uri_mismatch로 실패하는 게 정상이다.
- * `expo start --web`(redirect URI가 http://localhost:...)으로만 지금 검증 가능하며,
- * Dev Build 전환 시 네이티브 SDK(@react-native-google-signin/google-signin)로 교체 예정
- * (docs/decisions/0001-expo-go-vs-dev-build.md, docs/integrations.md 참고).
+ * 예전엔 expo-auth-session의 generic OAuth 플로우를 썼으나, Google의 OAuth Web
+ * 클라이언트가 Expo Go의 커스텀 스킴(exp://...) redirect URI를 거부하는 문제(게다가
+ * 거부 화면을 닫으면 Expo Go 자체가 죽는 문제)가 있어 Dev Build 전환 후 네이티브
+ * SDK로 교체했다 (docs/integrations.md "Google 로그인" 섹션 참고).
  */
 export function useGoogleLogin({ onSuccess, onError }: UseGoogleLoginOptions) {
-  const redirectUri = useMemo(() => AuthSession.makeRedirectUri({ scheme: 'b-territory' }), []);
-  // nonce는 요청마다 한 번만 생성해야 한다. 매 렌더링마다 새로 만들면
-  // extraParams가 매번 다른 객체가 되어 useAuthRequest의 useEffect가 계속
-  // 재실행 -> setRequest -> 리렌더 -> nonce 재생성으로 이어지는 무한 루프에
-  // 빠진다(로그인 화면에서 텍스트 입력 등 아무 리렌더링에도 CPU가 100%로 치솟음).
-  const nonce = useMemo(() => Crypto.randomUUID(), []);
-  const [request, response, promptAsync] = AuthSession.useAuthRequest(
-    {
-      clientId: CLIENT_ID ?? '',
-      redirectUri,
-      responseType: AuthSession.ResponseType.IdToken,
-      usePKCE: false,
-      scopes: ['openid', 'profile', 'email'],
-      extraParams: {
-        nonce,
-      },
-    },
-    discovery,
-  );
+  const promptGoogleLogin = useCallback(async () => {
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      // signIn()은 기기에 남은 이전 세션이 있으면 계정 선택 화면 없이 그 계정으로
+      // 조용히 재로그인해버린다. 매번 계정을 고를 수 있게 하려면 로그인 전에
+      // 네이티브 Google 세션을 비워야 한다(Firebase 세션과는 무관해 안전하다).
+      await GoogleSignin.signOut();
+      const response = await GoogleSignin.signIn();
+      if (!isSuccessResponse(response)) return; // 사용자가 취소함
 
-  useEffect(() => {
-    if (response?.type !== 'success') return;
-
-    const idToken = response.params.id_token;
-    if (!idToken) {
-      onError(new Error('Google 로그인 응답에 id_token이 없습니다.'));
-      return;
-    }
-
-    (async () => {
-      try {
-        const credential = GoogleAuthProvider.credential(idToken);
-        await signInWithCredential(auth, credential);
-        await onSuccess();
-      } catch (err) {
-        onError(err);
+      const idToken = response.data.idToken;
+      if (!idToken) {
+        onError(new Error('Google 로그인 응답에 idToken이 없습니다.'));
+        return;
       }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [response]);
+
+      const credential = GoogleAuthProvider.credential(idToken);
+      await signInWithCredential(auth, credential);
+      await onSuccess();
+    } catch (err) {
+      const isBenignCancel =
+        isErrorWithCode(err) &&
+        (err.code === statusCodes.SIGN_IN_CANCELLED || err.code === statusCodes.IN_PROGRESS);
+      if (isBenignCancel) return;
+      onError(err);
+    }
+  }, [onSuccess, onError]);
 
   return {
-    request: CLIENT_ID ? request : null,
-    promptGoogleLogin: () => promptAsync(),
+    isConfigured: isGoogleLoginConfigured(Platform.OS, WEB_CLIENT_ID, IOS_CLIENT_ID),
+    promptGoogleLogin,
   };
 }
