@@ -105,3 +105,20 @@ describe('fetchQuery가 CancelledError로 실패할 때(계정 전환 레이스)
     expect(replace).toHaveBeenCalledWith('/');
   });
 });
+
+describe('getMe가 취소가 아닌 이유로 계속 실패할 때(오프라인/5xx)', () => {
+  it('Firebase 세션을 정리하고 에러를 다시 던진다', async () => {
+    mockedSignOut.mockClear();
+    mockedGetMe.mockRejectedValue(new Error('network error'));
+    const replace = jest.fn();
+    mockedUseRouter.mockReturnValue({ replace, push: jest.fn() });
+    const requestConsent = jest.fn().mockResolvedValue(true);
+
+    const finishSocialLogin = await renderFinishSocialLogin(requestConsent);
+
+    await expect(finishSocialLogin()).rejects.toThrow('network error');
+
+    expect(mockedSignOut).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+  });
+});

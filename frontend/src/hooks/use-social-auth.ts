@@ -38,29 +38,41 @@ async function fetchProfile(queryClient: QueryClient) {
  * use-registration-flow.ts의 auth.currentUser 기반 초기 판단 때문에 register.tsx를
  * 폼이 아니라 "인증 메일을 확인하세요" 단계로 잘못 열어버린다(PR #48 리뷰 지적). 이메일
  * 경로(login.tsx의 finishLogin)가 "세션은 있는데 미가입"일 때 signOut하는 것과 동일하다.
+ *
+ * fetchProfile 이후 어느 단계에서든 실패하면(예: getMe가 오프라인/5xx로 거부) 여기서
+ * signOut까지 하고 다시 throw한다 — 그러지 않으면 signInWithCredential로 만들어진
+ * Firebase 세션만 고아로 남아, 이후 로그인 화면의 "회원가입 하기"가
+ * use-registration-flow.ts의 auth.currentUser 기반 판단 때문에 register.tsx를 폼이 아닌
+ * "인증 메일을 확인하세요" 단계로 잘못 열어버린다(PR #48 3차 리뷰 #2·#3). Google/Apple
+ * 호출부는 각자 catch에서 알럿만 띄우면 되고 정리는 여기 한 곳에서 끝난다.
  */
 export function useFinishSocialLogin(requestConsent: () => Promise<boolean>) {
   const router = useRouter();
   const queryClient = useQueryClient();
 
   return async () => {
-    const profile = await fetchProfile(queryClient);
+    try {
+      const profile = await fetchProfile(queryClient);
 
-    if (profile) {
-      // (main)은 가드되어 있어 인증 상태가 리렌더에 반영되기 전까진 열리지 않으므로,
-      // 항상 열려있는 "/"로 보내 index가 판단하게 한다 (login.tsx의 finishLogin과 동일).
-      router.replace('/');
-      return;
-    }
+      if (profile) {
+        // (main)은 가드되어 있어 인증 상태가 리렌더에 반영되기 전까진 열리지 않으므로,
+        // 항상 열려있는 "/"로 보내 index가 판단하게 한다 (login.tsx의 finishLogin과 동일).
+        router.replace('/');
+        return;
+      }
 
-    const agreed = await requestConsent();
-    if (!agreed) {
+      const agreed = await requestConsent();
+      if (!agreed) {
+        await signOut(auth);
+        return;
+      }
+      // push가 아니라 replace다 — push라면 하드웨어 백/스와이프로 login 화면에 돌아갈 수
+      // 있고, 그 순간 "Firebase 세션은 있는데 가입은 안 된" 상태가 되어 위와 같은 문제가
+      // 재현된다(PR #48 리뷰 지적).
+      router.replace('/(auth)/complete-profile');
+    } catch (err) {
       await signOut(auth);
-      return;
+      throw err;
     }
-    // push가 아니라 replace다 — push라면 하드웨어 백/스와이프로 login 화면에 돌아갈 수
-    // 있고, 그 순간 "Firebase 세션은 있는데 가입은 안 된" 상태가 되어 위와 같은 문제가
-    // 재현된다(PR #48 리뷰 지적).
-    router.replace('/(auth)/complete-profile');
   };
 }

@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { Alert, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { Redirect, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
+import { signOut } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
@@ -59,7 +61,13 @@ export default function CompleteProfileScreen() {
             queryFn: getMe,
           });
           if (!profile) {
-            handleAuthError(err, 'auth.errors.registerFailed');
+            // 진짜 동시 가입 레이스라면 재조회로 profile이 채워졌을 것이다. 그래도 계속
+            // null이라면 다른 firebaseUid가 이미 이 이메일로 가입한 unique(email) 충돌형
+            // 409로, 현재 uid로는 재시도해도 영원히 null만 나와 이 화면을 벗어날 방법이
+            // 없다(PR #48 3차 리뷰 #4). 세션을 정리하고 로그인 화면으로 돌려보낸다.
+            await signOut(auth);
+            Alert.alert(t('auth.errors.title'), t('auth.errors.emailAlreadyInUse'));
+            router.replace('/(auth)/login');
             return;
           }
           router.replace('/');

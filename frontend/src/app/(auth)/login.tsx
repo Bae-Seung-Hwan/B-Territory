@@ -20,7 +20,6 @@ import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useGoogleLogin } from '@/hooks/use-google-login';
 import { useFinishSocialLogin } from '@/hooks/use-social-auth';
 import { useSocialLoginConsent } from '@/hooks/use-social-login-consent';
-import { AppleSignInButton } from '@/components/auth/AppleSignInButton';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BottomSheet } from '@/components/ui/BottomSheet';
@@ -205,11 +204,12 @@ export default function LoginScreen() {
         loading={googleLoading}
       />
 
-      <AppleSignInButton
-        requestConsent={requestSocialConsent}
-        beginSocialAuth={beginSocialAuth}
-        endSocialAuth={endSocialAuth}
-      />
+      {/*
+        Apple 로그인 임시 비활성화 — app.config.js의 ios 블록에 usesAppleSignIn: true가
+        빠져 있어 entitlement 없이 signInAsync()가 모든 기기에서 ERR_REQUEST_NOT_HANDLED로
+        실패한다(PR #48 3차 리뷰 #1). 컴포넌트와 테스트는 그대로 두고 노출만 막는다 —
+        app.config.js 수정 + 실기기 검증(App Store 4.8) 마친 뒤 다시 연결한다.
+      */}
 
       <TouchableOpacity style={styles.registerLink} onPress={openTermsSheet}>
         <Text style={styles.registerLinkText}>
