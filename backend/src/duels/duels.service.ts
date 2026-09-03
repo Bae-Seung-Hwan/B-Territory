@@ -69,6 +69,13 @@ export function duelPenaltyPayload(row: {
   id: number;
   opponentId: string | null;
   scoreDelta?: number | null;
+  /**
+   * 보호막이 Redis에 **실제로** 걸렸는지(grantShields의 결과). 필수로 둔 이유는
+   * scoreDelta처럼 옵셔널로 두면 새 호출부가 빠뜨렸을 때 조용히 거짓 안내가 나가기
+   * 때문이다 — 여기서는 빠뜨림이 컴파일 에러가 되고, 굳이 false를 넘기면 "보호 없음"
+   * 쪽으로 넘어진다(과안내보다 미안내가 안전하다).
+   */
+  shieldGranted: boolean;
 }): {
   duelId: number;
   scorePenalty: number;
@@ -83,9 +90,15 @@ export function duelPenaltyPayload(row: {
     // 결투 페널티는 언제나 "신청을 성립시키지 못한 쪽" = opponentId가 진다.
     penalizedUserId: penalized ? row.opponentId : null,
     // 보호막은 점수를 문 순간(수 ms 전) 걸렸으므로 지금 기준으로 계산해도 오차가 없다.
-    shieldUntil: penalized
-      ? new Date(Date.now() + DUEL_SHIELD_TTL * 1000).toISOString()
-      : null,
+    //
+    // 차감(DB, 트랜잭션)과 보호막(Redis, 베스트 에포트)은 성패가 따로 논다. 차감만 보고
+    // 이 값을 채우면, setDuelShield가 실패한 순간에도 "30분간 안전하다"는 안내가 나가고
+    // 실제로는 requestDuel이 보호막을 못 찾아 신청자를 그대로 통과시킨다 — 방금 점수를
+    // 깎인 쪽이 오안내를 믿고 있다가 곧바로 다시 걸린다. 그래서 두 조건을 모두 본다.
+    shieldUntil:
+      penalized && row.shieldGranted
+        ? new Date(Date.now() + DUEL_SHIELD_TTL * 1000).toISOString()
+        : null,
   };
 }
 
@@ -100,10 +113,29 @@ export function duelPenaltyPayload(row: {
 export function duelVoidPayload(
   duelId: number,
 ): ReturnType<typeof duelPenaltyPayload> {
-  return duelPenaltyPayload({ id: duelId, opponentId: null });
+  // VOID는 차감이 없으니 보호막도 없다.
+  return duelPenaltyPayload({
+    id: duelId,
+    opponentId: null,
+    shieldGranted: false,
+  });
 }
 
 const ACTIVE_STATUSES = [DuelStatus.PENDING, DuelStatus.ACCEPTED];
+
+/** 보호막을 걸 일이 없는 경로(수락·VOID·탈퇴 종료)가 공유하는 빈 집합. */
+const EMPTY_SHIELDS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * 종료 알림을 만들 때만 필요한, DB에 남지 않는 한 가지 사실: 페널티를 문 쪽에게
+ * 보호막이 실제로 걸렸는지.
+ *
+ * duels 테이블에 컬럼으로 두지 않는 이유는 이것이 결투의 상태가 아니라 Redis 키의
+ * 성패라서다 — 30분 뒤면 사라질 값이고, 그때 DB에 남은 true는 아무 의미가 없다.
+ * 그렇다고 payload를 서비스가 직접 만들면 게이트웨이의 emit 경로가 둘로 갈라지므로,
+ * 반환 객체에 실어 보내 duelPenaltyPayload가 한 곳에서 판단하게 한다.
+ */
+export type PenalizedDuel = Duel & { shieldGranted: boolean };
 
 // 참가자 id는 DB가 nullable이다(탈퇴 시 SET NULL). 엔티티 쪽은 진행 중인 결투만 읽는다는
 // 전제로 string을 유지하지만, 여기 오는 행은 상태 전이 결과라 그 전제가 약하다 — null을
@@ -523,7 +555,7 @@ export class DuelsService {
     duelId: number,
     responderId: string,
     accept: boolean,
-  ): Promise<Duel> {
+  ): Promise<PenalizedDuel> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
     if (!duel)
       throw new NotFoundException(
@@ -544,7 +576,7 @@ export class DuelsService {
   /**
    * PENDING -> ACCEPTED. 페어 락을 응답 대기(30초)에서 대전 시간(DUEL_ACTIVE_TTL)으로 늘린다.
    */
-  private async acceptDuel(duel: Duel): Promise<Duel> {
+  private async acceptDuel(duel: Duel): Promise<PenalizedDuel> {
     // PENDING일 때만 전이하는 조건부 UPDATE로 accept/reject/expire 동시 요청 경쟁을 DB 레벨에서 막는다.
     const updateResult = await this.duelRepo
       .createQueryBuilder()
@@ -577,7 +609,8 @@ export class DuelsService {
 
     duel.status = DuelStatus.ACCEPTED;
     duel.respondedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
-    return duel;
+    // 수락은 아무도 깎지 않으므로 보호막도 없다.
+    return Object.assign(duel, { shieldGranted: false });
   }
 
   /**
@@ -587,18 +620,25 @@ export class DuelsService {
    * 실패해도 예외를 올리지 않는다. 호출 시점엔 상태 전이와 점수 차감이 이미 커밋돼 있어,
    * 여기서 던지면 종료 알림이 통째로 막히고 클라이언트가 대기 화면에 갇힌다. 보호막을
    * 놓치면 그 유저가 조금 일찍 다시 걸릴 뿐 상태는 어긋나지 않는다.
+   *
+   * 대신 **실제로 걸린 유저의 집합**을 돌려준다. 삼킨 실패를 호출부가 알 방법이 없으면
+   * 종료 알림의 shieldUntil이 Redis 상태와 다른 얘기를 하게 된다(duelPenaltyPayload 주석).
    */
-  private async grantShields(userIds: string[]): Promise<void> {
-    if (userIds.length === 0) return;
+  private async grantShields(userIds: string[]): Promise<ReadonlySet<string>> {
+    if (userIds.length === 0) return EMPTY_SHIELDS;
     const results = await Promise.allSettled(
       userIds.map((id) => this.redis.setDuelShield(id, DUEL_SHIELD_TTL)),
     );
-    const failed = results.filter((r) => r.status === 'rejected').length;
+    const granted = new Set(
+      userIds.filter((_, i) => results[i].status === 'fulfilled'),
+    );
+    const failed = results.length - granted.size;
     if (failed > 0) {
       this.logger.warn(
         `결투 보호막 설정 ${failed}건 실패 (해당 유저가 조금 일찍 다시 걸릴 뿐)`,
       );
     }
+    return granted;
   }
 
   /**
@@ -747,7 +787,7 @@ export class DuelsService {
    * 차감·원장은 무응답 만료(expireDuel·sweepStaleDuels)와 같은 경로를 쓴다
    * (chargeDuelPenalties) — 금액과 원장 형태가 두 곳에서 갈리지 않도록.
    */
-  private async rejectDuel(duel: Duel): Promise<Duel> {
+  private async rejectDuel(duel: Duel): Promise<PenalizedDuel> {
     const responderId = duel.opponentId;
     // 원장에 남길 이벤트 시점의 팀 (resolveDuel과 같은 이유로 트랜잭션 밖에서 미리 읽는다).
     const responder = await this.usersService.findById(responderId);
@@ -797,13 +837,16 @@ export class DuelsService {
     // 여기서 던지면 응답자는 에러 ack만 받고 duel:rejected를 못 받으며, 신청자에게도
     // 알림이 가지 않는다. 재시도는 409고 30초 타이머의 expireDuel도 PENDING이 아니라
     // null을 돌려주므로, 두 사람 다 종료 이벤트를 영영 못 받고 대기 화면에 갇힌다.
-    await this.grantShields(applied.map((c) => c.userId));
+    const shielded = await this.grantShields(applied.map((c) => c.userId));
     await this.releasePairLockQuietly(duel);
 
     duel.status = DuelStatus.REJECTED;
     duel.scoreDelta = applied[0]?.points ?? null;
     duel.respondedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
-    return duel;
+    // scoreDelta(DB)와 달리 보호막은 실패를 삼키는 Redis 쓰기라, 걸렸다는 사실을 따로 싣는다.
+    return Object.assign(duel, {
+      shieldGranted: shielded.has(duel.opponentId),
+    });
   }
 
   /**
@@ -814,7 +857,7 @@ export class DuelsService {
    * 점수도 보호막도 건드리지 않는다. 보호막이 차감을 따라가는 이유는 그것이 차감의 짝이라서다
    * — 깎지 않았는데 주면 아무 대가 없이 30분간 결투를 피하는 수단이 된다.
    */
-  async expireDuel(duelId: number): Promise<Duel | null> {
+  async expireDuel(duelId: number): Promise<PenalizedDuel | null> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
     if (!duel) return null;
 
@@ -850,12 +893,15 @@ export class DuelsService {
 
     // 여기부터는 커밋 뒤다 — 락 해제로 예외를 올리면 만료가 이미 확정된 결투의 종료
     // 알림을 아무도 못 보내 두 클라이언트가 대기 화면에 갇힌다(releasePairLockQuietly 주석).
-    await this.grantShields(applied.map((c) => c.userId));
+    const shielded = await this.grantShields(applied.map((c) => c.userId));
     await this.releasePairLockQuietly(duel);
 
     duel.status = DuelStatus.EXPIRED;
     duel.scoreDelta = applied[0]?.points ?? null;
-    return duel;
+    // rejectDuel과 같은 이유로 보호막의 실제 성패를 함께 반환한다.
+    return Object.assign(duel, {
+      shieldGranted: shielded.has(duel.opponentId),
+    });
   }
 
   /** ACCEPTED 상태의 결투를 읽어온다 — 미니게임 세션 시작·점수 제출의 공통 전제 확인. */
@@ -1247,6 +1293,8 @@ export class DuelsService {
       await this.notifySwept(
         rows.filter((row) => row.event === event),
         event,
+        // 탈퇴로 끝난 결투는 누구도 깎지 않으므로 보호막을 걸지 않는다.
+        EMPTY_SHIELDS,
         leaverId,
       );
     }
@@ -1336,10 +1384,17 @@ export class DuelsService {
     // 참가자에게 결과를 알린다 — 스윕된 결투는 인메모리 타이머·결과 핸들러를 타지 않아
     // 여기서 알리지 않으면 클라이언트가 응답 대기 상태에 영영 갇힌다.
     // 보호막은 커밋 뒤에 건다 — 롤백된 스윕의 유저를 보호해두면 안 된다.
-    await this.grantShields(expired.charges.map((c) => c.userId));
+    const shielded = await this.grantShields(
+      expired.charges.map((c) => c.userId),
+    );
 
-    await this.notifySwept(expired.rows, 'duel:expired');
-    await this.notifySwept(voided.raw as SweptDuelRow[], 'duel:voided');
+    await this.notifySwept(expired.rows, 'duel:expired', shielded);
+    // VOID는 차감이 없어 보호막도 없다.
+    await this.notifySwept(
+      voided.raw as SweptDuelRow[],
+      'duel:voided',
+      EMPTY_SHIELDS,
+    );
 
     return {
       expiredPending: expired.affected,
@@ -1347,9 +1402,15 @@ export class DuelsService {
     };
   }
 
+  /**
+   * @param shielded 이 회차에서 보호막이 **실제로** 걸린 userId 집합. 페널티 대상은 언제나
+   *   opponentId라(duelPenaltyPayload 주석) 행마다 그 id로 조회하면 된다. 보호막을 걸지
+   *   않는 경로(VOID·탈퇴 종료)는 EMPTY_SHIELDS를 넘긴다.
+   */
   private async notifySwept(
     rows: SweptDuelRow[],
     event: string,
+    shielded: ReadonlySet<string>,
     excludeUserId?: string,
   ): Promise<void> {
     if (!this.notifier || rows.length === 0) return;
@@ -1357,7 +1418,11 @@ export class DuelsService {
       rows.flatMap((row) => {
         // payload는 양쪽에 동일하게 보내고, 누가 깎였는지는 penalizedUserId로 알린다.
         // 수신자별로 payload를 가르지 않아야 큐잉된 알림을 재생할 때도 형태가 같다.
-        const payload = duelPenaltyPayload(row);
+        const payload = duelPenaltyPayload({
+          ...row,
+          shieldGranted:
+            row.opponentId !== null && shielded.has(row.opponentId),
+        });
         return (
           [row.challengerId, row.opponentId]
             // 이미 탈퇴한 참가자는 NULL로 들어온다 — 보낼 곳이 없다.

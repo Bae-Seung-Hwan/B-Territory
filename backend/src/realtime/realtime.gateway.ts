@@ -362,7 +362,8 @@ export class RealtimeGateway
     // 거절 payload는 양쪽에 동일하다 — 누가 점수를 깎이고 보호막을 얻었는지는
     // penalizedUserId로 실어보내고 클라이언트가 자기 id와 비교한다(duelPenaltyPayload 주석).
     // shieldUntil은 클라이언트 타이머용 안내값이고, 재신청 가능 여부 판정은 언제나
-    // requestDuel이 Redis를 다시 읽어 내린다.
+    // requestDuel이 Redis를 다시 읽어 내린다. 그래도 보호막 설정이 실패했으면 null로
+    // 나간다 — 안내와 실제 판정이 어긋나면 "30분간 안전하다"를 믿은 쪽이 곧바로 다시 걸린다.
     const payload = accept ? { duelId: duel.id } : duelPenaltyPayload(duel);
     client.emit(event, payload);
     await this.notifyUser(duel.challengerId, event, payload);

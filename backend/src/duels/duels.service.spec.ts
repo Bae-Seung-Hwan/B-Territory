@@ -7,7 +7,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { DuelsService } from './duels.service';
+import { DuelsService, duelPenaltyPayload } from './duels.service';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { ErrorCode } from '../common/errors/error-code';
@@ -498,6 +498,36 @@ describe('DuelsService', () => {
       expect(redis.releaseLock).toHaveBeenCalledWith(expect.any(String), '1');
     });
 
+    /**
+     * setDuelShield는 실패를 삼키는 베스트 에포트다(위 테스트). 그 실패가 알림에 반영되지
+     * 않으면 "-2점 깎였고 30분간 안전합니다"라고 안내한 직후 신청자의 재신청이 그대로
+     * 통과한다 — 재신청 판정은 requestDuel이 Redis를 다시 읽어 내리는데 거기엔 키가 없다.
+     * 차감은 이미 커밋됐으니 그대로 두고, 걸리지 않은 보호막만 안내에서 뺀다.
+     */
+    it('보호막 설정이 실패하면 차감은 유지하되 보호 기간을 안내하지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      redis.setDuelShield.mockRejectedValue(new Error('redis down'));
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duel.scoreDelta).toBe(DUEL_REJECT_SCORE_PENALTY);
+      expect(duelPenaltyPayload(duel)).toEqual({
+        duelId: 1,
+        scorePenalty: DUEL_REJECT_SCORE_PENALTY,
+        penalizedUserId: opponentId,
+        shieldUntil: null,
+      });
+    });
+
+    // 반대쪽 — 정상 경로에서까지 null이 되면 보호 기간 UI가 통째로 죽는다.
+    it('보호막이 실제로 걸렸으면 shieldUntil을 실어 보낸다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duelPenaltyPayload(duel).shieldUntil).toEqual(expect.any(String));
+    });
+
     it('락 해제가 실패해도 거절 자체는 성공시킨다', async () => {
       duelRepo.findOne.mockResolvedValue(buildPendingDuel());
       redis.releaseLock.mockRejectedValue(new Error('redis down'));
@@ -943,6 +973,21 @@ describe('DuelsService', () => {
       );
     });
 
+    // 거절과 같은 이유 — 만료 알림도 걸리지 않은 보호막을 걸렸다고 말하면 안 된다.
+    it('보호막 설정이 실패하면 만료 알림도 보호 기간을 안내하지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+      redis.setDuelShield.mockRejectedValue(new Error('redis down'));
+
+      const duel = await service.expireDuel(1);
+
+      expect(duel?.scoreDelta).toBe(DUEL_NO_RESPONSE_SCORE_PENALTY);
+      expect(duelPenaltyPayload(duel!).shieldUntil).toBeNull();
+    });
+
     // 팀 조회가 기본 리포지토리로 새면 트랜잭션이 커넥션을 쥔 채 두 번째를 잡아,
     // 만료 타이머가 풀 크기만큼 동시에 발화하면 전원이 서로를 기다리다 멈춘다.
     it('원장용 팀 조회를 트랜잭션 커넥션으로 한다 (커넥션 풀 데드락 차단)', async () => {
@@ -1159,6 +1204,68 @@ describe('DuelsService', () => {
         'user-d',
         'duel:voided',
         voidedPayload,
+      );
+    });
+
+    /**
+     * 스윕은 한 회차에 여러 결투를 처리한다 — 보호막이 유저별로 따로 실패할 수 있으므로,
+     * 실패한 유저의 알림에서만 shieldUntil이 빠지고 나머지는 그대로 안내돼야 한다.
+     * (실패를 행 단위로 가르지 않고 회차 전체를 null로 만들면 정상 보호막까지 숨는다.)
+     */
+    it('스윕 알림은 보호막이 실패한 유저에게만 shieldUntil을 비운다', async () => {
+      const notifier = jest.fn().mockResolvedValue(undefined);
+      service.setNotifier(notifier);
+
+      const deliveredAt = new Date('2026-01-01T00:00:00Z');
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(2, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            inviteDeliveredAt: deliveredAt,
+          },
+          {
+            id: 9,
+            challengerId: 'user-e',
+            opponentId: 'user-f',
+            inviteDeliveredAt: deliveredAt,
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+        { id: 'user-f', team: 'KR' },
+      ] as never);
+      // user-b의 보호막만 실패시킨다.
+      redis.setDuelShield.mockImplementation((userId: string) =>
+        userId === 'user-b'
+          ? Promise.reject(new Error('redis down'))
+          : Promise.resolve(undefined),
+      );
+
+      await service.sweepStaleDuels();
+
+      // 차감은 두 건 다 커밋됐으므로 scorePenalty는 그대로 나간다.
+      expect(notifier).toHaveBeenCalledWith('user-b', 'duel:expired', {
+        duelId: 7,
+        scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
+        penalizedUserId: 'user-b',
+        shieldUntil: null,
+      });
+      const shieldedPayload = {
+        duelId: 9,
+        scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
+        penalizedUserId: 'user-f',
+        shieldUntil: expect.any(String) as unknown as string,
+      };
+      expect(notifier).toHaveBeenCalledWith(
+        'user-f',
+        'duel:expired',
+        shieldedPayload,
       );
     });
 
