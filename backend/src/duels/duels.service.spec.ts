@@ -83,7 +83,16 @@ describe('DuelsService', () => {
     } as unknown as jest.Mocked<Repository<Duel>>;
 
     txManager = {
-      query: jest.fn().mockResolvedValue(undefined),
+      // SAVEPOINT류는 반환값이 없고, sweepStaleDuels의 "이 프로세스가 뜬 시각" 조회만
+      // 행을 돌려준다. 기본값을 1970으로 두면 모든 신청이 부팅 이후로 읽혀 기존 기대치가
+      // 그대로 유지되고, 재시작 경계를 검증하는 테스트만 이 값을 덮어쓴다.
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(
+            sql.startsWith('SELECT') ? [{ startedAt: new Date(0) }] : undefined,
+          ),
+        ),
       exists: jest.fn().mockResolvedValue(false),
       create: jest.fn((_entity: unknown, data: Partial<Duel>) => data as Duel),
       save: jest.fn((duel: Duel) =>
@@ -526,6 +535,52 @@ describe('DuelsService', () => {
       const duel = await service.respondDuel(1, opponentId, false);
 
       expect(duelPenaltyPayload(duel).shieldUntil).toEqual(expect.any(String));
+    });
+
+    /**
+     * 배치(스윕)와 정반대다 — charge가 1건뿐이라 지킬 나머지가 없다. 여기서 삼키면
+     * REJECTED만 커밋되고 차감·원장·보호막이 없는 행이 남아 거절한 쪽이 영구 무료
+     * 통과한다. 던져서 전이까지 되돌리면 결투가 PENDING으로 남고, 30초 타이머의
+     * expireDuel이 같은 금액을 무응답으로 물린다.
+     */
+    it('거절의 페널티가 FK 위반이 아닌 오류로 실패하면 전이까지 되돌린다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message: 'could not serialize access due to concurrent update',
+          code: '40001',
+        } as unknown as Error),
+      );
+
+      await expect(service.respondDuel(1, opponentId, false)).rejects.toThrow(
+        QueryFailedError,
+      );
+      // 세이브포인트는 정리하고 나간다 — 그래야 트랜잭션 롤백이 깨끗하다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'ROLLBACK TO SAVEPOINT duel_penalty_ledger',
+      );
+      // 커밋되지 않았으므로 보호막도 주지 않는다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 탈퇴(FK 위반)는 예상된 경로다 — 이건 여전히 건너뛰고 거절 자체는 성립시킨다.
+    it('상대가 탈퇴해 FK 위반이 나면 거절은 그대로 성립시킨다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message:
+            'insert or update on table "score_events" violates foreign key constraint',
+          code: '23503',
+        } as unknown as Error),
+      );
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duel.status).toBe(DuelStatus.REJECTED);
+      expect(duel.scoreDelta).toBeNull();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
     });
 
     it('락 해제가 실패해도 거절 자체는 성공시킨다', async () => {
@@ -988,6 +1043,26 @@ describe('DuelsService', () => {
       expect(duelPenaltyPayload(duel!).shieldUntil).toBeNull();
     });
 
+    // rejectDuel과 같은 이유 — 단건이라 삼키면 EXPIRED만 남고 무응답이 공짜가 된다.
+    // 던지면 PENDING으로 남아 백스톱(sweepStaleDuels)이 다음 회차에 다시 물린다.
+    it('만료의 페널티가 FK 위반이 아닌 오류로 실패하면 전이까지 되돌린다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message: 'could not serialize access due to concurrent update',
+          code: '40001',
+        } as unknown as Error),
+      );
+
+      await expect(service.expireDuel(1)).rejects.toThrow(QueryFailedError);
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
     // 팀 조회가 기본 리포지토리로 새면 트랜잭션이 커넥션을 쥔 채 두 번째를 잡아,
     // 만료 타이머가 풀 크기만큼 동시에 발화하면 전원이 서로를 기다리다 멈춘다.
     it('원장용 팀 조회를 트랜잭션 커넥션으로 한다 (커넥션 풀 데드락 차단)', async () => {
@@ -1156,6 +1231,7 @@ describe('DuelsService', () => {
         challengerId: 'user-a',
         opponentId: 'user-b',
         inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+        requestedAt: new Date('2026-01-01T00:00:00Z'),
       };
       usersService.findByIds.mockResolvedValue([
         { id: 'user-b', team: 'JP' },
@@ -1224,12 +1300,14 @@ describe('DuelsService', () => {
             challengerId: 'user-a',
             opponentId: 'user-b',
             inviteDeliveredAt: deliveredAt,
+            requestedAt: deliveredAt,
           },
           {
             id: 9,
             challengerId: 'user-e',
             opponentId: 'user-f',
             inviteDeliveredAt: deliveredAt,
+            requestedAt: deliveredAt,
           },
         ]),
       );
@@ -1278,6 +1356,7 @@ describe('DuelsService', () => {
             opponentId: 'user-b',
             scoreDelta: 2,
             inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
           },
         ]),
       );
@@ -1322,6 +1401,7 @@ describe('DuelsService', () => {
             challengerId: 'user-a',
             opponentId: 'user-b',
             inviteDeliveredAt: null,
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
           },
         ]),
       );
@@ -1341,6 +1421,82 @@ describe('DuelsService', () => {
     });
 
     /**
+     * 초대가 화면에 뜬 직후 서버가 재배포되면 상대의 소켓이 이전 프로세스와 함께 죽어
+     * 모달이 사라지고, duel:requested는 ephemeral이라 재접속해도 재생되지 않는다.
+     * 답할 방법이 구조적으로 없던 신청이므로 스윕이 청구하면 안 된다.
+     */
+    it('재시작을 사이에 둔 신청은 EXPIRED로만 넘기고 청구하지 않는다', async () => {
+      // 프로세스는 2026-01-01 00:10에 떴고, 신청은 그 10분 전에 들어왔다.
+      txManager.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.startsWith('SELECT')
+            ? [{ startedAt: new Date('2026-01-01T00:10:00Z') }]
+            : undefined,
+        ),
+      );
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            // 전달까지 됐지만 그 뒤 재시작으로 상대의 소켓이 죽었다.
+            inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      await expect(service.sweepStaleDuels()).resolves.toEqual({
+        expiredPending: 1,
+        voidedAccepted: 0,
+      });
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(scoresService.record).not.toHaveBeenCalled();
+      // 보호막은 차감의 짝이다 — 깎지 않았으면 주지도 않는다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 반대쪽 — 부팅 이후 신청은 그대로 청구된다(가드가 전부를 막아버리면 안 된다).
+    it('프로세스가 뜬 뒤 들어온 신청은 그대로 청구한다', async () => {
+      txManager.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.startsWith('SELECT')
+            ? [{ startedAt: new Date('2026-01-01T00:00:00Z') }]
+            : undefined,
+        ),
+      );
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            inviteDeliveredAt: new Date('2026-01-01T00:10:00Z'),
+            requestedAt: new Date('2026-01-01T00:10:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+      ] as never);
+
+      await service.sweepStaleDuels();
+
+      expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
+        'user-b',
+        -DUEL_NO_RESPONSE_SCORE_PENALTY,
+        txManager,
+      );
+    });
+
+    /**
      * 한 charge의 실패가 배치 전체를 되돌리면, 그 회차의 무관한 결투들까지 PENDING으로
      * 되돌아가 다음 회차에 다시 걸린다. 장애로 백로그가 쌓이면 한 행이 배치를 계속 막는다.
      * FK 위반(탈퇴)만이 아니라 어떤 오류든 그 charge 하나만 건너뛰어야 한다.
@@ -1353,6 +1509,7 @@ describe('DuelsService', () => {
             challengerId: 'user-a',
             opponentId: 'user-b',
             inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
           },
         ]),
       );

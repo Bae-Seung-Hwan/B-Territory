@@ -288,6 +288,10 @@ export class RealtimeGateway
     // 페널티는 이 기록에만 근거한다 — 만료 시점에 소켓 생존을 다시 확인하는 방식은 끊김이
     // ping timeout만큼 늦게 드러나 창 후반부의 단절을 놓쳤고(만료가 30초인데 감지는 최대
     // 20초 지연), 서버 재시작으로 타이머가 유실된 신청은 확인할 방법조차 없었다.
+    //
+    // 이 판단도 socket.connected를 읽으므로 감지 지연 자체가 사라진 것은 아니다 — 창의
+    // 끝(30초 내내)에서 신청 시점 한 순간으로 좁아졌을 뿐이다. 남은 구멍과 그것을 닫는
+    // 방법(클라이언트 렌더 ack)은 socket-options.ts 주석에 정리해 두었다.
     const delivered = await this.notifyUser(
       dto.targetUserId,
       'duel:requested',

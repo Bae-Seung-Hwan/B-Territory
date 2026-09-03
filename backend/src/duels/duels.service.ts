@@ -160,6 +160,12 @@ type SweptDuelRow = {
  */
 type ExpiredDuelRow = SweptDuelRow & {
   inviteDeliveredAt: Date | string | null;
+  /**
+   * 신청 시각(DB 시계). 재시작을 사이에 둔 신청을 청구에서 빼는 데 쓴다
+   * (buildNoResponseCharges 주석). RETURNING에서 빠지면 Invalid Date가 되어 비교가
+   * 전부 false —  inviteDeliveredAt과 같이 "전부 미청구" 쪽으로 넘어진다.
+   */
+  requestedAt: Date | string;
 };
 
 /**
@@ -632,7 +638,9 @@ export class DuelsService {
     const granted = new Set(
       userIds.filter((_, i) => results[i].status === 'fulfilled'),
     );
-    const failed = results.length - granted.size;
+    // granted는 Set이라 크기로 빼면 안 된다 — 같은 유저가 두 번 들어오면(스윕 한 회차에
+    // 고아 PENDING이 겹친 경우) 중복이 실패로 집계돼 멀쩡한 경로가 실패 로그를 남긴다.
+    const failed = results.filter((r) => r.status === 'rejected').length;
     if (failed > 0) {
       this.logger.warn(
         `결투 보호막 설정 ${failed}건 실패 (해당 유저가 조금 일찍 다시 걸릴 뿐)`,
@@ -645,6 +653,14 @@ export class DuelsService {
    * 개인 점수 차감 + 원장 append를 한 번에 처리한다 (거절·무응답 공통).
    * **반드시 상태 전이 CAS와 같은 트랜잭션(manager)에서 호출할 것** — 상태만 넘어가고
    * 차감이 빠지거나 그 반대인 부분 반영을 만들지 않기 위해서다.
+   *
+   * `shouldSkip`은 호출부가 정한다. 스윕(배치)은 **어떤 오류든** 그 charge 하나만 건너뛴다
+   * — FK 위반만 걸러내면 나머지(일시적 DB 오류, 직렬화 실패 등)가 트랜잭션 전체를 되돌려
+   * 무관한 결투들의 PENDING→EXPIRED 전환까지 취소되고, 장애로 백로그가 쌓인 상황에서는
+   * 한 행이 배치를 계속 막는다. 반대로 거절·만료는 charge가 **1건뿐이라 지킬 배치가 없다**
+   * — 거기서까지 삼키면 상태만 REJECTED로 커밋되고 차감도 원장도 보호막도 없는 행이 남아
+   * 거절한 쪽이 영구 무료 통과한다. 그래서 단건 경로는 탈퇴(FK 위반)만 건너뛰고 나머지는
+   * 그대로 던져 전이까지 함께 롤백시킨다(호출부 주석 참고).
    *
    * charge 하나하나를 SAVEPOINT로 감싼다(runInSavepoint). Postgres는 실패한 문이 트랜잭션
    * 전체를 abort시키므로, 감싸지 않으면 한 건의 실패가 스윕 배치 회차 전부(그 회차의
@@ -659,6 +675,7 @@ export class DuelsService {
   private async chargeDuelPenalties(
     manager: EntityManager,
     charges: DuelPenaltyCharge[],
+    shouldSkip: (err: unknown) => boolean,
   ): Promise<DuelPenaltyCharge[]> {
     const applied: DuelPenaltyCharge[] = [];
     for (const charge of charges) {
@@ -695,12 +712,8 @@ export class DuelsService {
             duelId: charge.duelId,
           });
         },
-        // 여기서는 **어떤 오류든** 그 charge 하나만 건너뛴다. FK 위반만 걸러내면 나머지
-        // (일시적 DB 오류, 직렬화 실패 등)가 sweepStaleDuels의 트랜잭션 전체를 되돌려,
-        // 무관한 결투들의 PENDING→EXPIRED 전환까지 함께 취소된다. 그러면 그 결투들은 다음
-        // 회차에 다시 걸리고, 장애로 백로그가 쌓인 상황에서는 한 행이 배치를 계속 막는다.
-        // 페널티 한 건을 놓치는 쪽이 상태 전이 전체를 잃는 것보다 낫다.
-        () => true,
+        // 어디까지 건너뛸지는 호출부가 정한다 — 배치와 단건의 답이 정반대다(아래 주석).
+        shouldSkip,
       );
       if (outcome.applied) {
         applied.push(charge);
@@ -732,6 +745,16 @@ export class DuelsService {
    * 만료 경로가 둘(게이트웨이 타이머 expireDuel, 백스톱 sweepStaleDuels)이기 때문이다 —
    * 한쪽에만 두면 서버 재시작으로 타이머가 유실된 신청이 스윕에서 무조건 청구된다.
    *
+   * **전달됐더라도 답할 수 없었던 신청은 뺀다** — `answerableSince`(이 프로세스가 뜬
+   * 시각, DB 시계)보다 먼저 신청된 행이 그렇다. 초대가 화면에 뜬 직후 서버가 재배포되면
+   * 상대의 소켓이 이전 프로세스와 함께 죽어 모달이 사라지고, duel:requested는 ephemeral이라
+   * 재접속해도 재생되지 않는다(notifyUser 주석). 그 상태로 스윕이 청구하면 구조적으로 답할
+   * 방법이 없던 유저가 -2점과 30분 보호막을 문다. 재시작은 유저가 유발할 수 있는 일이 아니라
+   * "재시작 중에 무시하면 공짜"라는 회피 경로도 되지 않는다.
+   *
+   * 게이트웨이 타이머 경로(expireDuel)는 `null`을 넘긴다 — 그 타이머는 신청을 받은 바로 그
+   * 프로세스의 메모리에 있으므로, 발화했다는 것 자체가 재시작이 없었다는 뜻이다.
+   *
    * 팀은 원장에 남길 "이벤트 시점의 팀"이다. 이 조회는 상태 전이 CAS와 **같은 트랜잭션**
    * 안에서 일어나므로 manager를 반드시 넘긴다 — 기본 리포지토리로 읽으면 트랜잭션이
    * 커넥션을 쥔 채 풀에서 두 번째 커넥션을 잡아, 만료 타이머가 풀 크기만큼 동시에
@@ -740,10 +763,17 @@ export class DuelsService {
   private async buildNoResponseCharges(
     manager: EntityManager,
     allRows: ExpiredDuelRow[],
+    answerableSince: Date | null,
   ): Promise<DuelPenaltyCharge[]> {
     // `!= null`로 undefined까지 잡는다 — 타입이 RETURNING 누락을 컴파일 타임에 막지만,
     // 뚫렸을 때 "전부 청구"가 아니라 "전부 미청구"로 넘어지는 쪽이 안전하다.
-    const rows = allRows.filter((row) => row.inviteDeliveredAt != null);
+    const rows = allRows.filter(
+      (row) =>
+        row.inviteDeliveredAt != null &&
+        // Invalid Date(RETURNING 누락)와의 비교는 언제나 false — 미청구로 넘어진다.
+        (answerableSince === null ||
+          new Date(row.requestedAt) >= answerableSince),
+    );
     const responderIds = [
       ...new Set(
         rows
@@ -823,7 +853,11 @@ export class DuelsService {
         .execute();
       if (updateResult.affected === 0) return null;
 
-      return this.chargeDuelPenalties(manager, charges);
+      // 단건이라 지킬 배치가 없다 — 탈퇴(FK 위반)만 건너뛰고 나머지는 던져 REJECTED
+      // 전이까지 되돌린다. 삼키면 거절은 확정됐는데 차감·원장·보호막이 없는 행이 남아
+      // 거절한 쪽이 공짜로 빠져나간다. 던지면 결투가 PENDING으로 남아 30초 타이머의
+      // expireDuel이 같은 금액을 무응답으로 물리므로, 회피 경로가 되지 않는다.
+      return this.chargeDuelPenalties(manager, charges, isMissingUser);
     });
 
     if (applied === null) {
@@ -877,16 +911,23 @@ export class DuelsService {
           id: duelId,
           pending: DuelStatus.PENDING,
         })
-        .returning('id, "challengerId", "opponentId", "inviteDeliveredAt"')
+        .returning(
+          'id, "challengerId", "opponentId", "inviteDeliveredAt", "requestedAt"',
+        )
         .execute();
       if (updateResult.affected === 0) return null;
 
+      // rejectDuel과 같은 이유로 단건 정책을 쓴다. 여기서 던지면 결투가 PENDING으로
+      // 남고 백스톱(sweepStaleDuels)이 다음 회차에 같은 금액을 물린다.
       return this.chargeDuelPenalties(
         manager,
         await this.buildNoResponseCharges(
           manager,
           updateResult.raw as ExpiredDuelRow[],
+          // 이 타이머가 살아 있다는 것 자체가 재시작이 없었다는 증거다.
+          null,
         ),
+        isMissingUser,
       );
     });
     if (applied === null) return null;
@@ -1319,13 +1360,23 @@ export class DuelsService {
     // 컷오프는 DB 시계(now())로 계산한다. requestedAt은 @CreateDateColumn(DB now())으로
     // 기록되므로, 앱 서버와 DB의 타임존이 다르면(예: 로컬 KST 앱 + 컨테이너 UTC DB)
     // 앱에서 계산한 Date와 비교 시 수 시간이 어긋나 방금 만든 결투가 즉시 만료될 수 있다.
-    // 게이트웨이 타이머(expireDuel)와 같은 페널티를 여기서도 적용한다 — 서버 재시작 등으로
-    // 타이머가 유실된 신청만 이 경로로 오므로, 여기서 빠뜨리면 "재시작 중에 무시하면 공짜"가
-    // 된다. 상태 전이와 차감은 한 트랜잭션이라 둘 중 하나만 반영되는 일이 없다.
+    // 게이트웨이 타이머(expireDuel)와 같은 페널티를 여기서도 적용한다 — 타이머가 유실된
+    // 신청이 이 경로로 오므로, 여기서 빠뜨리면 "타이머만 놓치면 공짜"가 된다. 상태 전이와
+    // 차감은 한 트랜잭션이라 둘 중 하나만 반영되는 일이 없다.
     //
     // "전달된 초대만 청구한다"는 판정도 여기서 동일하게 적용된다 — 근거를 소켓 생존이 아니라
     // duels.inviteDeliveredAt에 두었기 때문에, 타이머가 사라진 뒤에도 같은 답이 나온다.
+    // 다만 재시작을 사이에 둔 신청은 청구에서 뺀다(buildNoResponseCharges 주석).
     const expired = await this.dataSource.transaction(async (manager) => {
+      // 이 프로세스가 뜬 시각을 **DB 시계로** 받는다. process.uptime()은 시각이 아니라
+      // 경과 초라 타임존이 없어, 앱과 DB의 타임존이 달라도 어긋나지 않는다 (위 컷오프가
+      // now()를 쓰는 것과 같은 이유). 내림해서 컷오프를 조금 늦게 잡는다 — 경계에서는
+      // 청구하지 않는 쪽으로 넘어지는 게 맞다.
+      const [{ startedAt }] = await manager.query<{ startedAt: Date }[]>(
+        'SELECT now() - make_interval(secs => $1) AS "startedAt"',
+        [Math.floor(process.uptime())],
+      );
+
       const result = await manager
         .createQueryBuilder()
         .update(Duel)
@@ -1337,13 +1388,17 @@ export class DuelsService {
             sec: DUEL_REQUEST_TTL + DUEL_SWEEP_GRACE,
           },
         )
-        .returning('id, "challengerId", "opponentId", "inviteDeliveredAt"')
+        .returning(
+          'id, "challengerId", "opponentId", "inviteDeliveredAt", "requestedAt"',
+        )
         .execute();
 
       const rows = result.raw as ExpiredDuelRow[];
       const charges = await this.chargeDuelPenalties(
         manager,
-        await this.buildNoResponseCharges(manager, rows),
+        await this.buildNoResponseCharges(manager, rows, startedAt),
+        // 배치라 한 행의 실패가 회차 전체의 상태 전이를 되돌리면 안 된다.
+        () => true,
       );
 
       // RETURNING은 차감 전 스냅샷이라 scoreDelta가 비어 있다. 실제로 깎인 행에만
