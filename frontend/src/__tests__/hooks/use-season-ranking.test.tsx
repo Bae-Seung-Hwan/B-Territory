@@ -5,6 +5,7 @@ import {
   useSeasonRanking,
   computeSeasonNavState,
   computeSeasonRefetchInterval,
+  computeCurrentSeasonNumberUpdate,
   resolveNextSeason,
 } from '@/hooks/use-season-ranking';
 import { fetchTeamRanking, fetchUserRanking } from '@/api/ranking';
@@ -70,8 +71,46 @@ describe('computeSeasonNavState', () => {
     expect(computeSeasonNavState(5, undefined).displaySeason).toBe(5);
   });
 
-  it('selectedSeason도 없고 data도 없으면 표시할 시즌이 없다', () => {
+  it('selectedSeason도 없고 data도 없고 currentSeasonNumber도 모르면 표시할 시즌이 없다', () => {
     expect(computeSeasonNavState(null, undefined).displaySeason).toBeNull();
+  });
+
+  it('selectedSeason·data가 없어도 currentSeasonNumber를 이미 알면 그 번호로 라벨을 채운다 (PR #49 3차 리뷰 지적 3번)', () => {
+    // scope를 처음 전환해 반대쪽 쿼리에 캐시가 없는(data===undefined) 가장 흔한 경로 —
+    // 9b74f38의 selectedSeason 폴백만으로는 selectedSeason도 null이라 구제되지 않았다.
+    expect(computeSeasonNavState(null, undefined, 5).displaySeason).toBe(5);
+  });
+
+  it('시즌 이동 중(placeholder가 이전 시즌을 가리키는 동안)에도 selectedSeason을 우선해 라벨을 채운다 (PR #49 3차 리뷰 지적 2번)', () => {
+    // keepPreviousData 때문에 data는 아직 이전 시즌(5)을 가리키지만, 사용자가 이미
+    // 선택한 시즌(4)을 헤더에 보여줘야 한다.
+    expect(
+      computeSeasonNavState(4, { season: 5, status: 'ongoing' }, 5).displaySeason,
+    ).toBe(4);
+  });
+});
+
+describe('computeCurrentSeasonNumberUpdate', () => {
+  it('현재 시즌을 조회한 결과로 currentSeasonNumber를 갱신한다', () => {
+    expect(computeCurrentSeasonNumberUpdate(null, { season: 5, status: 'ongoing' }, false, null)).toBe(
+      5,
+    );
+  });
+
+  it('selectedSeason이 명시적이면(과거 시즌 조회 중) 갱신하지 않는다', () => {
+    expect(computeCurrentSeasonNumberUpdate(3, { season: 3, status: 'ended' }, false, 5)).toBe(5);
+  });
+
+  it('placeholder 데이터(전환 중)로는 갱신하지 않는다 (PR #49 3차 리뷰 지적 4번)', () => {
+    // backToCurrent 직후 아직 fetch가 끝나기 전, placeholder가 여전히 과거 시즌(3)을
+    // 가리켜도 currentSeasonNumber(5)를 3으로 오염시키면 안 된다.
+    expect(computeCurrentSeasonNumberUpdate(null, { season: 3, status: 'ended' }, true, 5)).toBe(
+      5,
+    );
+  });
+
+  it('data가 없으면 갱신하지 않는다', () => {
+    expect(computeCurrentSeasonNumberUpdate(null, undefined, false, 5)).toBe(5);
   });
 });
 
@@ -198,5 +237,45 @@ describe('useSeasonRanking', () => {
 
     await waitFor(() => expect(result.current.isLiveSeason).toBe(true));
     expect(mockedFetchTeamRanking).not.toHaveBeenCalledWith(5);
+  });
+
+  it('연속 클릭 시 fetch가 끝나기 전에 눌러도 매 클릭이 다음 시즌으로 이동한다 (PR #49 3차 리뷰 지적 1번)', async () => {
+    // keepPreviousData 때문에 시즌 이동 fetch가 끝나기 전엔 query.data가 여전히
+    // 이전 시즌(5)을 가리킨다. resolvedSeason을 이동 기준으로 삼으면 두 번째 클릭도
+    // 5-1=4를 다시 계산해 시즌3에 도달하지 못했다 — 여기서는 이동 fetch를 의도적으로
+    // 끝내지 않은 채(가장 느린 회선을 재현) 연달아 두 번 누른다.
+    let resolveInitial: (value: unknown) => void = () => {};
+    mockedFetchTeamRanking.mockImplementation((season?: number) => {
+      if (season === undefined) {
+        return new Promise((resolve) => {
+          resolveInitial = resolve;
+        });
+      }
+      return new Promise(() => {});
+    });
+    queryClient = createQueryClient();
+    const { result } = await renderHook(() => useSeasonRanking('teams'), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await act(async () => {
+      resolveInitial({
+        season: 5,
+        status: 'ongoing',
+        start: '2026-01-01',
+        end: '2026-02-01',
+        ranking: [],
+      });
+    });
+    await waitFor(() => expect(result.current.resolvedSeason).toBe(5));
+
+    await act(async () => {
+      result.current.goToPrevious();
+    });
+    await act(async () => {
+      result.current.goToPrevious();
+    });
+
+    await waitFor(() => expect(mockedFetchTeamRanking).toHaveBeenCalledWith(3));
   });
 });
