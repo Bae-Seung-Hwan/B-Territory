@@ -107,7 +107,6 @@ export const en: Translations = {
   },
   chat: {
     title: 'Chat',
-    disabledBanner: 'Chat server integration coming soon',
     emptyState: 'No messages yet',
     inputPlaceholder: 'Type a message',
     send: 'Send',
@@ -278,6 +277,7 @@ export const en: Translations = {
     blockConfirmMessage: "Blocking {{nickname}} stops their messages from reaching you.",
     blockSuccess: 'Blocked',
     blockedUsersTitle: 'Manage Blocked Users',
+    retry: 'Retry',
     blockedUsersEmpty: 'No blocked users',
     blockedAtLabel: 'Blocked on',
     unblock: 'Unblock',

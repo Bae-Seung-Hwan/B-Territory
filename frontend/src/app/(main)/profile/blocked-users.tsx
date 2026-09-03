@@ -75,6 +75,7 @@ export default function BlockedUsersScreen() {
       {isError && (
         <TouchableOpacity style={styles.errorBox} onPress={() => refetch()}>
           <Text style={styles.errorText}>{t('moderation.errors.failed')}</Text>
+          <Text style={styles.retryText}>{t('moderation.retry')}</Text>
         </TouchableOpacity>
       )}
 
@@ -106,7 +107,8 @@ const styles = StyleSheet.create({
   headerSpacer: { width: 24 },
   loading: { marginTop: Spacing.five },
   errorBox: { alignItems: 'center', marginTop: Spacing.five },
-  errorText: { color: '#ccc', fontSize: 14 },
+  errorText: { color: '#ccc', fontSize: 14, marginBottom: 4 },
+  retryText: { color: BrandColors.accent, fontSize: 13, fontWeight: '600' },
   list: { padding: Spacing.three, gap: Spacing.two, flexGrow: 1 },
   emptyState: { color: '#555', fontSize: 14, textAlign: 'center', marginTop: 40 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

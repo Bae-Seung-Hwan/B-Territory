@@ -102,7 +102,6 @@ export const ko = {
   },
   chat: {
     title: '채팅',
-    disabledBanner: '채팅 서버 연동 준비 중입니다',
     emptyState: '아직 메시지가 없습니다',
     inputPlaceholder: '메시지를 입력하세요',
     send: '전송',
@@ -279,6 +278,7 @@ export const ko = {
     blockConfirmMessage: '{{nickname}}님을 차단하면 이후 메시지가 나에게 전달되지 않습니다.',
     blockSuccess: '차단되었습니다',
     blockedUsersTitle: '차단 관리',
+    retry: '다시 시도',
     blockedUsersEmpty: '차단한 사용자가 없습니다',
     blockedAtLabel: '차단일',
     unblock: '차단 해제',

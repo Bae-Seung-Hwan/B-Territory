@@ -16,7 +16,6 @@ import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { useChatSocket, type ChatSocketError } from '@/hooks/use-chat-socket';
 import { useChatStore, type ChatFeedItem } from '@/store/useChatStore';
-import { CHAT_ENABLED } from '@/config/feature-flags';
 import {
   MessageActionSheet,
   type MessageActionTarget,
@@ -120,12 +119,7 @@ export default function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {!CHAT_ENABLED && (
-        <View style={styles.banner}>
-          <Text style={styles.bannerText}>{t('chat.disabledBanner')}</Text>
-        </View>
-      )}
-      {CHAT_ENABLED && chatError && (
+      {chatError && (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{t(chatErrorKey(chatError))}</Text>
         </View>

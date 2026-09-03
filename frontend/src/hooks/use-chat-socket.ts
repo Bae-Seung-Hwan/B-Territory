@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useIsFocused } from 'expo-router';
+import { AppState } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/lib/api-client';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
-import { CHAT_ENABLED } from '@/config/feature-flags';
 import { useChatStore, type ChatFeedItem } from '@/store/useChatStore';
 import type { ChatMessageIncoming, ChatMessageOutgoing } from '@/types/chat-events';
 
@@ -34,18 +33,17 @@ const ACK_TIMEOUT_MS = 5_000;
 export type ChatSocketError = 'connection' | 'rateLimit' | 'unknown';
 
 /**
- * `/chat` 네임스페이스(PR #34, 아직 develop 미merge) 전용 소켓. 채팅 탭이 포커스를
- * 갖고 있는 동안에만 connect하고, 포커스를 잃으면(다른 탭으로 이동) disconnect한다
- * (전역 SocketProvider와 분리된 독립 생명주기 — realtime 소켓 작업과 서로 간섭하지
- * 않는다). expo-router의 Tabs는 방문한 화면을 언마운트하지 않으므로 "언마운트되면"이
- * 아니라 `useIsFocused()`로 판정해야 한다 — 그러지 않으면 채팅 탭을 한 번만 열어도
- * 앱 세션 내내 소켓이 연결된 채 남아 다른 탭에 있는 동안에도 모든 팀 메시지를 계속
- * 받아 스토어에 쌓는다(PR #50 2차 리뷰 지적 2번, PR #49의 랭킹 폴링과 같은 원인).
+ * `/chat` 네임스페이스(PR #34, develop에 이미 merge됨) 전용 소켓. 앱이 포그라운드에
+ * 있는 동안(다른 탭으로 이동한 것과 무관하게) connect 상태를 유지하고, 백그라운드로
+ * 가면 disconnect한다(전역 SocketProvider와 분리된 독립 생명주기 — realtime 소켓
+ * 작업과 서로 간섭하지 않는다).
  *
- * CHAT_ENABLED가 false인 동안은 소켓 인스턴스 자체를 만들지 않는다 — 백엔드에
- * `/chat` 게이트웨이가 없는 상태에서 연결을 시도해 콘솔에 재연결 에러를 반복 출력하지
- * 않기 위함. 이 상태에서도 전송 함수는 로컬 스토어에 낙관적으로만 반영되어 UI는
- * 그대로 동작한다.
+ * 이전에는 `useIsFocused()`로 "채팅 탭에 있을 때만" 연결했는데(PR #50 2차 리뷰 지적
+ * 2번), `ChatGateway`가 메시지를 DB에 저장하지 않는 순수 릴레이라 그 방식은 다른
+ * 탭에 잠깐만 있어도 그 사이 온 팀 메시지가 영영 사라지는 결과를 냈다 — 스토어가
+ * `MAX_MESSAGES`로 상한이 걸려 있어 "계속 쌓인다"는 애초에 걱정할 문제가 아니었다
+ * (PR #50 3차 리뷰 지적 3번). 판정 기준을 앱 전체의 포그라운드 여부(`AppState`)로
+ * 옮겨, 탭을 오가는 동안은 연결을 유지하고 앱이 실제로 백그라운드로 갈 때만 끊는다.
  */
 export function useChatSocket() {
   const socketRef = useRef<Socket | null>(null);
@@ -55,17 +53,39 @@ export function useChatSocket() {
   // 경우엔 더 이전 메시지를 잘못 짚을 수 있지만, 그래도 ACK_TIMEOUT_MS 시점에는
   // 결국 failed로 정리된다.
   const pendingIdRef = useRef<string | null>(null);
+  // 메시지 id별 "몇 번째 전송 시도인지"를 센다. retryMessage는 같은 id로 다시
+  // emitWithAck를 부르는데, 원래 시도의 ack/타임아웃 콜백이 그 이후에(레이트리밋으로
+  // 인한 뒤늦은 타임아웃, 혹은 아래 disconnect가 강제로 발화시키는 에러) 도착하면
+  // 이미 새 시도가 정한 상태(성공/전송 중)를 덮어쓴다 — 정상 전달된 메시지가 다시
+  // "전송 실패"로 표시되고, 사용자가 그걸 보고 또 재전송하면 팀 채팅에 같은 메시지가
+  // 두 번 나간다(PR #50 3차 리뷰 지적 1·2번). 콜백은 자신이 속한 시도가 여전히 그
+  // 메시지의 최신 시도일 때만 상태를 반영한다.
+  const attemptRef = useRef<Map<string, number>>(new Map());
   const addMessage = useChatStore((s) => s.addMessage);
   const setMessageStatus = useChatStore((s) => s.setMessageStatus);
   const { profile, isAuthenticated } = useAuth();
   const [chatError, setChatError] = useState<ChatSocketError | null>(null);
-  const isFocused = useIsFocused();
+  const [isForeground, setIsForeground] = useState(AppState.currentState === 'active');
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setIsForeground(state === 'active');
+    });
+    return () => subscription.remove();
+  }, []);
 
   // isAuthenticated에 의존해야 한다 — 마운트 시점에 Firebase 세션 복원이 아직 끝나지
   // 않았으면 auth.currentUser가 null이라 토큰을 못 읽는데, 이 값을 안 보면 세션이
   // 도착해도 effect가 다시 돌지 않아 영영 연결되지 않는다.
   useEffect(() => {
-    if (!CHAT_ENABLED || !isAuthenticated || !isFocused) return;
+    if (!isAuthenticated || !isForeground) return;
+
+    // attemptRef.current(Map)는 이 훅 생애주기 동안 재할당되지 않는 안정된 참조라,
+    // cleanup에서 그대로 다시 읽어도 최신 상태를 본다 — effect 시작 시점에 변수로
+    // 캡처해두는 건 오직 react-hooks/exhaustive-deps가 "cleanup에서 직접
+    // attemptRef.current를 읽으면 그 사이 바뀌었을 수 있다"고 오탐하는 것을 피하기
+    // 위함이다.
+    const attemptMap = attemptRef.current;
 
     const socket: Socket = io(`${API_BASE_URL}/chat`, {
       autoConnect: false,
@@ -112,10 +132,24 @@ export function useChatSocket() {
     socket.connect();
 
     return () => {
+      // disconnect()는 socket.io-client 내부에서 대기 중이던 ack을 즉시 Error로
+      // 강제 발화시킨다(_clearAcks). 하지만 채팅 핸들러는 ack을 돌려주기 전에 이미
+      // 동기적으로 릴레이를 마치므로, 그 순간 대기 중이던 메시지는 실제로는 대부분
+      // 전달됐다 — 강제 에러를 그대로 믿으면 정상 전달된 메시지가 "전송 실패"로
+      // 표시되고, 사용자가 재전송하면 팀 채팅에 같은 메시지가 두 번 나간다(PR #50
+      // 3차 리뷰 지적 2번). 여기서 먼저 성공으로 확정하고 시도 번호를 올려두면,
+      // disconnect()가 강제로 발화시키는 낡은 콜백은 emitWithAck의 시도 검사에
+      // 걸려 무시된다.
+      const pendingId = pendingIdRef.current;
+      if (pendingId) {
+        pendingIdRef.current = null;
+        attemptMap.set(pendingId, (attemptMap.get(pendingId) ?? 0) + 1);
+        setMessageStatus(pendingId, undefined);
+      }
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [addMessage, isAuthenticated, isFocused, setMessageStatus]);
+  }, [addMessage, isAuthenticated, isForeground, setMessageStatus]);
 
   // 'rateLimit'/'unknown'은 그 순간의 전송 1건이 실패했다는 일시적 신호일 뿐이라(레이트리밋은
   // 몇 초 후 자연히 풀린다), 배너로 영구히 남기지 않고 잠깐 보여준 뒤 스스로 지운다.
@@ -135,11 +169,15 @@ export function useChatSocket() {
    */
   const emitWithAck = useCallback(
     (id: string, payload: ChatMessageOutgoing) => {
+      const attempt = (attemptRef.current.get(id) ?? 0) + 1;
+      attemptRef.current.set(id, attempt);
       const socket = socketRef.current;
       if (!socket) {
-        // CHAT_ENABLED가 false라 소켓 자체가 없는 로컬 전용 모드 — 원래도 낙관적
-        // 표시만 하던 경로라 실패로 표시하지 않는다.
-        setMessageStatus(id, undefined);
+        // 소켓이 없다는 것은 실제로 아무것도 전송되지 않았다는 뜻이다(인증/포그라운드
+        // 조건이 아직 안 갖춰졌거나 재연결 대기 중) — 성공으로 표시하면 이 PR이 500자
+        // 제한·ack 확인으로 막은 것과 같은 "조용한 유실"이 여기 남는다(PR #50 3차
+        // 리뷰 지적 4번).
+        setMessageStatus(id, 'failed');
         return;
       }
       pendingIdRef.current = id;
@@ -147,6 +185,10 @@ export function useChatSocket() {
         .timeout(ACK_TIMEOUT_MS)
         .emit('chat:message', payload, (err: Error | null) => {
           if (pendingIdRef.current === id) pendingIdRef.current = null;
+          // 이 콜백이 만들어진 이후 같은 id로 재전송(retryMessage)됐거나 disconnect가
+          // 먼저 확정 지었으면, attemptRef의 시도 번호가 이미 올라가 있다 — 그 경우
+          // 이 낡은 콜백은 무시한다(PR #50 3차 리뷰 지적 1·2번).
+          if (attemptRef.current.get(id) !== attempt) return;
           setMessageStatus(id, err ? 'failed' : undefined);
         });
     },
