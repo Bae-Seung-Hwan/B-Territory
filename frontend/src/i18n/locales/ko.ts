@@ -106,7 +106,26 @@ export const ko = {
   },
   ranking: {
     title: '랭킹',
-    placeholder: '국가별 · 개인별 랭킹이 표시됩니다',
+    scope: {
+      teams: '국가별',
+      users: '개인별',
+    },
+    loadFailed: '랭킹을 불러오지 못했습니다',
+    retry: '다시 시도',
+    empty: '아직 랭킹이 없습니다',
+    seasonNav: {
+      previous: '이전 시즌',
+      next: '다음 시즌',
+      backToCurrent: '현재 시즌으로 돌아가기',
+      unknown: '—',
+      seasonLabel: '시즌 {{season}}',
+      range: '{{start}} ~ {{end}}',
+      status: {
+        upcoming: '예정',
+        ongoing: '진행 중',
+        ended: '종료',
+      },
+    },
   },
   profile: {
     title: '내정보',

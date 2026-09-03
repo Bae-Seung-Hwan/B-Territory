@@ -111,7 +111,26 @@ export const en: Translations = {
   },
   ranking: {
     title: 'Ranking',
-    placeholder: 'Rankings by country and by player will appear here',
+    scope: {
+      teams: 'By Country',
+      users: 'By Player',
+    },
+    loadFailed: 'Failed to load ranking',
+    retry: 'Retry',
+    empty: 'No ranking yet',
+    seasonNav: {
+      previous: 'Previous season',
+      next: 'Next season',
+      backToCurrent: 'Back to current season',
+      unknown: '—',
+      seasonLabel: 'Season {{season}}',
+      range: '{{start}} ~ {{end}}',
+      status: {
+        upcoming: 'Upcoming',
+        ongoing: 'Ongoing',
+        ended: 'Ended',
+      },
+    },
   },
   profile: {
     title: 'Profile',
