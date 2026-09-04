@@ -6,6 +6,8 @@ import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
+import { useDeleteAccountMutation, isDeleteAccountSessionDead } from '@/hooks/use-account';
+import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useTranslation } from '@/i18n';
 import { BrandColors, Spacing } from '@/constants/theme';
 import { getCountryList } from '@/constants/countries';
@@ -17,10 +19,12 @@ import { Badge } from '@/components/ui/Badge';
 export default function ProfileScreen() {
   const router = useRouter();
   const { t, locale } = useTranslation();
+  const handleAuthError = useHandleAuthError();
 
   // 인증 상태와 같은 소스(queryKeys.auth.me)를 그대로 읽는다 — 로그인 때 채워진
   // 캐시라 재요청 없이 즉시 표시된다.
   const { profile, isLoading } = useAuth();
+  const deleteAccountMutation = useDeleteAccountMutation();
 
   const countries = useMemo(() => getCountryList(locale), [locale]);
   const nationalityCountry = useMemo(
@@ -49,6 +53,35 @@ export default function ProfileScreen() {
         },
       },
     ]);
+  };
+
+  // 성공 시 signOut + 로그인 화면 이동은 useDeleteAccountMutation의 훅 옵션
+  // onSuccess/onError에서 처리한다 — mutate() 인자로 넘기면 signOut이 던지거나
+  // 화면이 언마운트됐을 때 조용히 스킵된다(PR #53 리뷰 지적 1·3번). 여기서는 "탈퇴
+  // 실패" 알림만 담당하고, 세션이 이미 죽은 경우(401·타임아웃)는 훅 쪽이 signOut+
+  // 이동으로 이미 처리하므로 알림을 띄우지 않는다 — 로그인 화면으로 옮겨진 사용자에게
+  // "탈퇴에 실패했다"는 혼란만 준다(리뷰 지적 2번).
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      t('profile.deleteAccountConfirmTitle'),
+      t('profile.deleteAccountConfirmMessage'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('profile.deleteAccount'),
+          style: 'destructive',
+          onPress: () => {
+            deleteAccountMutation.mutate(undefined, {
+              onError: (err) => {
+                if (!isDeleteAccountSessionDead(err)) {
+                  handleAuthError(err, 'profile.errors.deleteAccountFailed');
+                }
+              },
+            });
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -105,6 +138,25 @@ export default function ProfileScreen() {
         variant="danger"
         style={styles.logoutButton}
       />
+
+      {/* 로그아웃과 달리 되돌릴 수 없는 조작이라, 같은 무게의 버튼이 아니라 눈에 덜 띄는
+          텍스트 링크로 둔다 — 오터치 방어는 확인 Alert이 이미 맡고 있으므로, 여기서는
+          시각적 강조(밑줄)만 빼고 명도 대비는 WCAG AA(4.5:1) 기준을 만족시킨다. #666은
+          배경(#0A0A0F) 대비 3.44:1로 미달이었다 — Apple 5.1.1(v)가 계정 삭제 경로를
+          찾기 쉬울 것을 요구하기도 한다(PR #53 리뷰 지적 5번). */}
+      <TouchableOpacity
+        onPress={handleDeleteAccount}
+        disabled={deleteAccountMutation.isPending}
+        style={styles.deleteAccountLink}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: deleteAccountMutation.isPending }}
+      >
+        <Text style={styles.deleteAccountText}>
+          {deleteAccountMutation.isPending
+            ? t('profile.deleteAccountPending')
+            : t('profile.deleteAccount')}
+        </Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -145,4 +197,6 @@ const styles = StyleSheet.create({
   menuLabel: { color: '#fff', fontSize: 14, fontWeight: '600' },
   menuSubLabel: { color: '#888', fontSize: 12, marginTop: 2 },
   logoutButton: { width: '100%' },
+  deleteAccountLink: { marginTop: Spacing.three, padding: Spacing.two },
+  deleteAccountText: { color: '#999', fontSize: 13 },
 });

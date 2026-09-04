@@ -63,3 +63,14 @@ export async function clearVisitCheckin(spotId: number): Promise<void> {
   delete checkins[spotId];
   await saveAll(checkins);
 }
+
+/**
+ * 로그아웃·계정 전환·회원 탈퇴 시 이 기기에 남은 방문 창을 전부 지운다. STORAGE_KEY가
+ * 유저 구분 없는 단일 키라, 안 지우면 A가 체크인한 관광지를 같은 기기의 다음 사용자
+ * B가 24시간 안에 물려받아 실제 체크인 없이 리뷰 폼이 열린다(서버가 리뷰 제출 시점에
+ * requireVisit로 다시 검증해 결국 거부하지만, B는 그 전에 영문 모를 실패를 겪는다 —
+ * PR #53 리뷰 지적 6번). AuthProvider가 사용자 전환을 감지하는 지점에서 호출한다.
+ */
+export async function clearAllVisitCheckins(): Promise<void> {
+  await AsyncStorage.removeItem(STORAGE_KEY);
+}

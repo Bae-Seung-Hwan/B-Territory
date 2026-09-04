@@ -6,6 +6,7 @@ import { auth } from '@/lib/firebase';
 import { queryKeys } from '@/lib/query-keys';
 import { BrandColors } from '@/constants/theme';
 import { useChatStore } from '@/store/useChatStore';
+import { clearAllVisitCheckins } from '@/lib/visit-checkin';
 
 interface AuthSession {
   firebaseUser: User | null;
@@ -56,6 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // 끝나기 전까지 잠깐 보인다(3차 리뷰 지적 7번).
         useChatStore.getState().clear();
         queryClient.removeQueries({ queryKey: queryKeys.moderation.blocks });
+        // visit-checkin의 저장 키도 유저 구분이 없는 기기 스코프라 같은 문제를
+        // 겪는다 — 탈퇴·계정 전환 후에도 이전 사용자의 방문 체크인이 남아 다음
+        // 사용자에게 넘어간다(PR #53 리뷰 지적 6번).
+        void clearAllVisitCheckins();
       }
 
       setFirebaseUser(nextUser);

@@ -149,6 +149,14 @@ export const ko = {
     logoutConfirmMessage: '정말 로그아웃하시겠어요?',
     blockedUsersLink: '차단 관리',
     contactTitle: '문의하기',
+    deleteAccount: '회원 탈퇴',
+    deleteAccountPending: '탈퇴 처리 중…',
+    deleteAccountConfirmTitle: '정말 탈퇴하시겠어요?',
+    deleteAccountConfirmMessage:
+      '계정과 로그인 정보가 삭제되며 되돌릴 수 없습니다. 점령·결투 기록은 팀 점수 집계를 위해 유저 정보 없이 보존되며, 위치정보 이용·제공사실 확인자료는 관련 법령에 따라 탈퇴 후에도 6개월간 보존됩니다.',
+    errors: {
+      deleteAccountFailed: '탈퇴 처리에 실패했습니다. 잠시 후 다시 시도해주세요',
+    },
   },
   map: {
     hud: {
