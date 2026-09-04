@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/providers/AuthProvider';
 import { queryKeys } from '@/lib/query-keys';
 import { useChatStore } from '@/store/useChatStore';
+import { clearAllVisitCheckins } from '@/lib/visit-checkin';
 
 type AuthStateCallback = (user: { uid: string } | null) => void;
 
@@ -18,6 +19,9 @@ jest.mock('firebase/auth', () => ({
   }),
 }));
 jest.mock('@/lib/firebase', () => ({ auth: {} }));
+jest.mock('@/lib/visit-checkin', () => ({ clearAllVisitCheckins: jest.fn() }));
+
+const mockedClearAllVisitCheckins = clearAllVisitCheckins as jest.Mock;
 
 function Wrapper({ queryClient }: { queryClient: QueryClient }) {
   return (
@@ -36,11 +40,12 @@ describe('AuthProvider', () => {
     authCallback = null;
     queryClient = new QueryClient();
     useChatStore.setState({ messages: [] });
+    mockedClearAllVisitCheckins.mockClear();
   });
 
   it(
-    '사용자가 바뀌면(로그아웃·계정 전환) 이전 사용자의 프로필·채팅·차단목록 캐시를 지운다 ' +
-      '(PR #50 3차 리뷰 지적 6·7번)',
+    '사용자가 바뀌면(로그아웃·계정 전환) 이전 사용자의 프로필·채팅·차단목록 캐시와 ' +
+      '방문 체크인 기록을 지운다 (PR #50 3차 리뷰 지적 6·7번, PR #53 리뷰 지적 6번)',
     async () => {
       queryClient.setQueryData(queryKeys.auth.me, { id: 'old-profile' });
       queryClient.setQueryData(queryKeys.moderation.blocks, [{ userId: 'x' }]);
@@ -62,6 +67,7 @@ describe('AuthProvider', () => {
       await act(async () => authCallback?.({ uid: 'A' }));
       expect(queryClient.getQueryData(queryKeys.auth.me)).toEqual({ id: 'old-profile' });
       expect(useChatStore.getState().messages).toHaveLength(1);
+      expect(mockedClearAllVisitCheckins).not.toHaveBeenCalled();
 
       // 계정 전환: A -> B. 직전 사용자(A)가 있었고 다음 사용자(B)와 다르므로 정리 대상이다.
       await act(async () => authCallback?.({ uid: 'B' }));
@@ -69,6 +75,9 @@ describe('AuthProvider', () => {
       expect(queryClient.getQueryData(queryKeys.auth.me)).toBeUndefined();
       expect(queryClient.getQueryData(queryKeys.moderation.blocks)).toBeUndefined();
       expect(useChatStore.getState().messages).toHaveLength(0);
+      // visit-checkin은 유저 구분 없는 기기 스코프 키라, 안 지우면 다음 사용자가
+      // 이전 사용자의 방문 체크인을 그대로 물려받는다(PR #53 리뷰 지적 6번).
+      expect(mockedClearAllVisitCheckins).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -80,5 +89,6 @@ describe('AuthProvider', () => {
     await act(async () => authCallback?.({ uid: 'A' }));
 
     expect(queryClient.getQueryData(queryKeys.auth.me)).toEqual({ id: 'fresh-profile' });
+    expect(mockedClearAllVisitCheckins).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/use-auth';
-import { useDeleteAccountMutation } from '@/hooks/use-account';
+import { useDeleteAccountMutation, isDeleteAccountSessionDead } from '@/hooks/use-account';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useTranslation } from '@/i18n';
 import { BrandColors, Spacing } from '@/constants/theme';
@@ -55,9 +55,12 @@ export default function ProfileScreen() {
     ]);
   };
 
-  // 백엔드가 계정을 완전히 삭제한 뒤라 서버 쪽 세션은 이미 무효다. signOut은 이 기기의
-  // 로컬 Firebase 세션만 정리하는 것이고, 로그아웃과 마찬가지로 캐시 정리는 AuthProvider가
-  // 세션 변경을 보고 처리한다.
+  // 성공 시 signOut + 로그인 화면 이동은 useDeleteAccountMutation의 훅 옵션
+  // onSuccess/onError에서 처리한다 — mutate() 인자로 넘기면 signOut이 던지거나
+  // 화면이 언마운트됐을 때 조용히 스킵된다(PR #53 리뷰 지적 1·3번). 여기서는 "탈퇴
+  // 실패" 알림만 담당하고, 세션이 이미 죽은 경우(401·타임아웃)는 훅 쪽이 signOut+
+  // 이동으로 이미 처리하므로 알림을 띄우지 않는다 — 로그인 화면으로 옮겨진 사용자에게
+  // "탈퇴에 실패했다"는 혼란만 준다(리뷰 지적 2번).
   const handleDeleteAccount = () => {
     Alert.alert(
       t('profile.deleteAccountConfirmTitle'),
@@ -69,11 +72,11 @@ export default function ProfileScreen() {
           style: 'destructive',
           onPress: () => {
             deleteAccountMutation.mutate(undefined, {
-              onSuccess: async () => {
-                await signOut(auth);
-                router.replace('/(auth)/login');
+              onError: (err) => {
+                if (!isDeleteAccountSessionDead(err)) {
+                  handleAuthError(err, 'profile.errors.deleteAccountFailed');
+                }
               },
-              onError: (err) => handleAuthError(err, 'profile.errors.deleteAccountFailed'),
             });
           },
         },
@@ -137,11 +140,16 @@ export default function ProfileScreen() {
       />
 
       {/* 로그아웃과 달리 되돌릴 수 없는 조작이라, 같은 무게의 버튼이 아니라 눈에 덜 띄는
-          텍스트 링크로 둔다 — 오터치로 탈퇴 확인창까지 가는 일을 줄이기 위함. */}
+          텍스트 링크로 둔다 — 오터치 방어는 확인 Alert이 이미 맡고 있으므로, 여기서는
+          시각적 강조(밑줄)만 빼고 명도 대비는 WCAG AA(4.5:1) 기준을 만족시킨다. #666은
+          배경(#0A0A0F) 대비 3.44:1로 미달이었다 — Apple 5.1.1(v)가 계정 삭제 경로를
+          찾기 쉬울 것을 요구하기도 한다(PR #53 리뷰 지적 5번). */}
       <TouchableOpacity
         onPress={handleDeleteAccount}
         disabled={deleteAccountMutation.isPending}
         style={styles.deleteAccountLink}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: deleteAccountMutation.isPending }}
       >
         <Text style={styles.deleteAccountText}>
           {deleteAccountMutation.isPending
@@ -190,5 +198,5 @@ const styles = StyleSheet.create({
   menuSubLabel: { color: '#888', fontSize: 12, marginTop: 2 },
   logoutButton: { width: '100%' },
   deleteAccountLink: { marginTop: Spacing.three, padding: Spacing.two },
-  deleteAccountText: { color: '#666', fontSize: 13, textDecorationLine: 'underline' },
+  deleteAccountText: { color: '#999', fontSize: 13 },
 });

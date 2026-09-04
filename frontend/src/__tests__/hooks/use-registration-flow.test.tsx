@@ -24,6 +24,16 @@ jest.mock('@/hooks/use-firebase-email-verification', () => ({
 
 jest.mock('@/api/auth', () => ({ registerUser: jest.fn(), getMe: jest.fn() }));
 
+// use-registration-flow.ts -> use-auth.ts -> AuthProvider.tsx -> visit-checkin.ts가
+// 실제 AsyncStorage 네이티브 모듈을 require한다(PR #53 리뷰 지적 6번 대응으로 추가된
+// import). 이 테스트는 AuthProvider의 컴포넌트 로직을 렌더하지 않지만, 모듈을
+// require하는 시점에 그 체인이 그대로 실행돼 목이 없으면 네이티브 모듈 에러로 깨진다.
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn(),
+  setItem: jest.fn(),
+  removeItem: jest.fn(),
+}));
+
 const mockedAuth = auth as unknown as { currentUser: unknown };
 const mockedCreateUser = createUserWithEmailAndPassword as jest.Mock;
 const mockedSignIn = signInWithEmailAndPassword as jest.Mock;
