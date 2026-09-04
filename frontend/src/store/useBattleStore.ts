@@ -20,6 +20,8 @@ interface BattleStore {
   /** BATTLE_ENEMY_STALE_MS 이상 갱신이 없던 항목을 제거한다 — SocketProvider의 주기 스윕이 호출한다. */
   pruneStale: (now: number) => void;
   setPendingChallengeTargetId: (userId: string | null) => void;
+  /** 로그아웃·계정 전환 시 전부 비운다 — AuthProvider가 사용자 전환을 감지하는 지점에서 호출한다. */
+  reset: () => void;
 }
 
 export const useBattleStore = create<BattleStore>((set, get) => ({
@@ -49,6 +51,7 @@ export const useBattleStore = create<BattleStore>((set, get) => ({
     set({ enemiesById: Object.fromEntries(fresh.map((e) => [e.userId, e])) });
   },
   setPendingChallengeTargetId: (userId) => set({ pendingChallengeTargetId: userId }),
+  reset: () => set({ enemiesById: {}, pendingChallengeTargetId: null }),
 }));
 
 /** lastSeenAt 내림차순(최근 감지 순)으로 정렬된 배열 셀렉터. */

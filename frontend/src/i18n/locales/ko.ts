@@ -233,6 +233,7 @@ export const ko = {
       DUEL_ALREADY_HANDLED: '이미 처리된 결투입니다',
       DUEL_NOT_FOUND: '결투를 찾을 수 없습니다',
       DUEL_NOT_ACCEPTED: '수락되지 않은 결투입니다',
+      MINIGAME_START_FAILED: '미니게임을 시작하지 못했습니다. 잠시 후 다시 시도해주세요',
       UNAUTHENTICATED_CONNECTION: '인증이 만료됐습니다. 다시 로그인해주세요',
     },
     duelOutcome: {
@@ -250,16 +251,17 @@ export const ko = {
       waitingOpponent: '제출 완료! 상대를 기다리는 중...',
       opponentAlreadySubmitted: '상대는 이미 제출했어요. 마저 제출해주세요!',
       roundLabel: '라운드 {{round}}/{{maxRounds}}',
+      timeLeft: '남은 시간 {{seconds}}초',
       rematch: '무승부! 재경기를 시작합니다',
       tapBattle: {
-        instruction: '5초 동안 최대한 많이 탭하세요',
+        instruction: '{{seconds}}초 동안 최대한 많이 탭하세요',
         tapCount: '{{count}}회',
         tap: '탭!',
       },
       reaction: {
         instructionWait: '초록불이 켜지면 최대한 빨리 탭하세요',
         go: '지금 탭!',
-        tooSoon: '너무 빨랐어요! 다시 탭해서 재시작하세요',
+        tooSoon: '너무 빨랐어요! 부정출발로 제출됩니다...',
       },
       quiz: {
         instruction: '정답을 맞히면 승리합니다',

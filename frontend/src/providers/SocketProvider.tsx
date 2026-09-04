@@ -38,6 +38,32 @@ interface WsExceptionPayload {
   message: string | string[];
 }
 
+/**
+ * exception 페이로드엔 어떤 emit에 대한 실패인지 알려줄 duelId가 없다(WsExceptionPayload
+ * 참고) — 그래서 "DUEL_ 코드면 무조건 지금 열려 있는 결투를 지운다"고 하면, 내 새
+ * duel:request가 (예: DUEL_ALREADY_PENDING으로) 실패한 순간 마침 열려 있던 **남의**
+ * 결투(수락 대기 시트 등)까지 함께 날아간다(PR #54 리뷰 지적 4번).
+ *
+ * 이 목록은 requestDuel()(duels.service.ts)이 "새 결투를 못 열었다"는 뜻으로만 던지는
+ * 코드다 — 이런 코드는 애초에 overlay 상태에 아무것도 쓴 적이 없으므로(성공 ack가 와야만
+ * BattleEnemyRow가 duelId를 채운다) resetDuel()이 지울 내 것이 없고, 혹시 다른 결투가
+ * 열려 있었다면 그건 반드시 남의 것이다. 목록에 없는 DUEL_ 코드(duel:accept/reject/
+ * game:submit 실패 등)는 내가 지금 들고 있는 duelId에 대한 응답이 거의 확실하므로 그대로
+ * resetDuel()한다.
+ */
+const DUEL_REQUEST_ONLY_CODES = new Set([
+  'DUEL_SELF_CHALLENGE',
+  'DUEL_TARGET_NOT_FOUND',
+  'DUEL_SAME_TEAM',
+  'DUEL_CHALLENGER_PENALTY',
+  'DUEL_TARGET_PENALTY',
+  'DUEL_TARGET_UNAVAILABLE',
+  'DUEL_TARGET_LOCATION_UNKNOWN',
+  'DUEL_OUT_OF_RANGE',
+  'DUEL_ALREADY_ACTIVE',
+  'DUEL_ALREADY_PENDING',
+]);
+
 interface DuelCompleted {
   duelId: number;
   winnerId: string;
@@ -143,16 +169,29 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleDuelRequested = (payload: DuelRequested) => {
       const store = useOverlayStore.getState();
+      // 내가 보낸 duel:request의 ack 왕복 구간(emit~ack)도 바쁜 것으로 쳐야 한다.
+      // isDuelBusy(OverlayStore)는 이 구간을 모른다 — pendingChallengeTargetId는
+      // useBattleStore에 있어서다. 이 구간이 안 잡히면: 내가 Challenge를 누른 직후
+      // 상대의 duel:requested가 도착해 수락 시트가 열리고, 뒤이어 내 ack이 성공해
+      // duelId/showDuelPending을 덮어써 방금 연 수락 시트가 고아가 된다(리뷰 지적
+      // 5번) — 그 상태에서 ack이 DUEL_ALREADY_PENDING 등으로 실패하면 handleException이
+      // resetDuel()로 그 고아 상태(=원래는 남의 결투)를 지워버리는 지적 4번으로 이어진다.
+      const requestInFlight = useBattleStore.getState().pendingChallengeTargetId != null;
       // 이미 다른 결투가 진행 중이면 새 신청을 받지 않는다 — 서버엔 별도 "거절"을
       // 보내지 않으므로, 신청자 쪽에서는 30초 후 duel:expired로 자연스럽게 정리된다.
-      if (isDuelBusy(store)) return;
+      if (isDuelBusy(store) || requestInFlight) return;
 
       store.setDuelId(payload.duelId);
       store.setDuelRole('recipient');
       store.setChallengerNickname(payload.fromNickname);
       // MiniGame의 승자 판정(handleFinish)이 상대 userId를 필요로 한다 — duel:requested엔
       // team이 없어 nationality는 채우지 못하지만(DuelRequest 시트는 안 씀), userId는 있어야 한다.
-      store.setEnemyInfo({ userId: payload.fromUserId, nationality: '', distance: ENCOUNTER_RADIUS_M });
+      store.setEnemyInfo({
+        userId: payload.fromUserId,
+        nickname: payload.fromNickname,
+        nationality: '',
+        distance: ENCOUNTER_RADIUS_M,
+      });
       store.setShowDuelRequest(true);
     };
 
@@ -164,10 +203,25 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       store.setShowMiniGame(true);
     };
 
+    // 신청 성공 시 BattleEnemyRow가 목록에서 지운 상대를, 거부·만료로 결투가 무산되면
+    // 되살린다 — 그러지 않으면 서버가 같은 쌍에 대해 encounter:detected를 재발송하지
+    // 않는 60초 쿨다운 동안 목록에서 사라진 채로 남아, 실제로는 지금 바로 재도전
+    // 가능한데도 재도전할 방법이 없었다(PR #54 리뷰 지적 11번). 신청자(challenger)
+    // 쪽에서만 의미가 있다 — 수신자의 배틀 탭엔 애초에 이 상대가 없었을 수 있다.
+    const restoreChallengedEnemy = (store: ReturnType<typeof useOverlayStore.getState>) => {
+      if (store.duelRole !== 'challenger' || !store.enemyInfo) return;
+      useBattleStore.getState().upsertEnemy({
+        userId: store.enemyInfo.userId,
+        nickname: store.enemyInfo.nickname,
+        team: store.enemyInfo.nationality,
+      });
+    };
+
     const handleDuelRejected = (payload: DuelIdPayload) => {
       const store = useOverlayStore.getState();
       if (store.duelId !== payload.duelId) return;
       const wasChallenger = store.duelRole === 'challenger';
+      restoreChallengedEnemy(store);
       store.resetDuel();
       // 거부한 당사자에게는 자기 행동을 다시 알려줄 필요가 없다 — 신청자에게만 안내한다.
       if (wasChallenger) Alert.alert(i18n.t('overlay.duelOutcome.title'), i18n.t('overlay.duelOutcome.rejected'));
@@ -176,6 +230,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const handleDuelExpired = (payload: DuelIdPayload) => {
       const store = useOverlayStore.getState();
       if (store.duelId !== payload.duelId) return;
+      restoreChallengedEnemy(store);
       store.resetDuel();
       Alert.alert(i18n.t('overlay.duelOutcome.title'), i18n.t('overlay.duelOutcome.expired'));
     };
@@ -263,6 +318,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   // 이걸 구독하지 않으면 ack가 오지 않는 실패 경로에서 오버레이가 영영 열린 채 멈춘다.
   useEffect(() => {
     const handleException = (payload: WsExceptionPayload) => {
+      // DUEL_ 접두사가 아닌 예외(예: location:update 검증 오류, Redis 장애로 인한
+      // INTERNAL_SERVER_ERROR)는 결투와 무관하다 — 예전엔 코드와 무관하게 항상 Alert를
+      // 띄워, LocationBroadcaster의 60초 하트비트가 실패할 때마다 "결투 실패" 모달이
+      // 반복해서 떴다(PR #54 리뷰 지적 2번). 이런 예외는 사용자에게 보여줄 결투 문맥이
+      // 없으므로 조용히 무시한다 — pendingChallengeTargetId는 이제 duel:request의 자체
+      // .timeout()이 책임지므로(BattleEnemyRow) 더 이상 여기서 비울 필요가 없다.
+      if (!payload.code.startsWith('DUEL_')) return;
+
       const known = `overlay.duelError.${payload.code}`;
       const translated = i18n.t(known);
       // i18n-js는 없는 키에 대해 "[missing ...]" 문자열을 돌려준다 — 아직 매핑하지 않은
@@ -271,14 +334,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         ? [payload.message].flat().join('\n')
         : translated;
 
-      // 결투 관련 실패면 진행 중이던 오버레이를 정리한다 — location:update 검증 오류 같은
-      // 무관한 예외까지 결투를 취소시키지 않도록 코드 접두사로 구분한다.
-      if (payload.code.startsWith('DUEL_')) {
+      // duel:request 전용 실패는 "새 결투를 못 열었다"는 뜻이라, 우연히 열려 있는 다른
+      // (남의) 결투를 지우면 안 된다(리뷰 지적 4번) — 목록 밖의 DUEL_ 코드만 resetDuel한다.
+      if (!DUEL_REQUEST_ONLY_CODES.has(payload.code)) {
         useOverlayStore.getState().resetDuel();
-        // duel:request가 이 실패의 원인이었을 수 있다 — BattleEnemyRow의 Challenge 버튼이
-        // pendingChallengeTargetId에 갇혀 재시도 불가능해지지 않도록 여기서 함께 비운다
-        // (ack 콜백이 아예 안 오는 실패 경로라 BattleEnemyRow 스스로는 알 방법이 없다).
-        useBattleStore.getState().setPendingChallengeTargetId(null);
       }
 
       Alert.alert(i18n.t('overlay.duelError.title'), message);

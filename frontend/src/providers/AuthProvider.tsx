@@ -5,6 +5,8 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { queryKeys } from '@/lib/query-keys';
 import { BrandColors } from '@/constants/theme';
+import { useBattleStore } from '@/store/useBattleStore';
+import { useOverlayStore } from '@/store/useOverlayStore';
 
 interface AuthSession {
   firebaseUser: User | null;
@@ -46,6 +48,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const hadPreviousUser = previousUid !== undefined && previousUid !== null;
       if (hadPreviousUser && previousUid !== nextUid) {
         queryClient.removeQueries({ queryKey: queryKeys.auth.me });
+        // useBattleStore/useOverlayStore는 모듈 스코프 zustand라 (main) 라우트 그룹보다
+        // 오래 산다 — 로그아웃은 signOut 후 라우팅일 뿐 JS 컨텍스트가 유지되는 한 이전
+        // 사용자 주변에 있던 상대(userId·닉네임)가 BATTLE_ENEMY_STALE_MS(2분)까지 배틀
+        // 탭에 그대로 남고, 남아 있던 duelId가 isDuelBusy를 참으로 만들어 새로 로그인한
+        // 사용자에게 온 duel:requested를 조용히 삼킨다(PR #54 리뷰 지적 10번).
+        useBattleStore.getState().reset();
+        useOverlayStore.getState().resetDuel();
       }
 
       setFirebaseUser(nextUser);

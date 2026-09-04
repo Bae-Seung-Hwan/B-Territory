@@ -42,7 +42,9 @@ export function TapBattle({ durationSec, onSubmit }: TapBattleProps) {
   if (phase === 'ready') {
     return (
       <View style={styles.container}>
-        <Text style={styles.instruction}>{t('overlay.miniGame.tapBattle.instruction')}</Text>
+        <Text style={styles.instruction}>
+          {t('overlay.miniGame.tapBattle.instruction', { seconds: durationSec })}
+        </Text>
         <TouchableOpacity
           style={styles.startBtn}
           onPress={() => {

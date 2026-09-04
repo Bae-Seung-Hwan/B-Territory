@@ -30,14 +30,14 @@
 
 - 구현 위치: `src/providers/SocketProvider.tsx`
 - 앱 루트(`src/app/_layout.tsx`)에서 QueryClient와 함께 최상단에 마운트
-- `useSocket()`으로 소켓 인스턴스를 꺼내 쓸 수 있는 Context를 제공. `/realtime` 네임스페이스로 접속하며(백엔드 `RealtimeGateway`와 일치), 로그인 상태(`useAuth().isAuthenticated`)를 따라 `connect()`/`disconnect()`가 자동으로 트리거된다 — `auth.currentUser.getIdToken()`으로 매 연결 시도마다 토큰을 새로 읽고, `connect_error` 시 강제 갱신(`getIdToken(true)`) 후 재시도한다
-- `encounter:detected`는 Provider 레벨에서 배선돼 있다 — 수신 시 `useOverlayStore.setEnemyInfo(...)` + `setShowEnemyAlert(true)`를 호출해 `EnemyDetectionAlert`를 띄운다(이미 결투 진행 중이면 무시). 페이로드에 정확한 거리값이 없어 `constants/game.ts`의 `ENCOUNTER_RADIUS_M`(100m)을 근사값으로 표시한다
-- `useLocation()`(`src/hooks/use-location.ts`)은 지도 화면(`src/app/(main)/map/index.tsx`)에서 좌표가 바뀔 때마다 `location:update`를 emit한다 — 별도 쓰로틀링 없이 `watchPositionAsync`의 `distanceInterval:10m`/`timeInterval:5000ms`에 의존
+- `useSocket()`으로 소켓 인스턴스를 꺼내 쓸 수 있는 Context를 제공. `/realtime` 네임스페이스로 접속하며(백엔드 `RealtimeGateway`와 일치), 로그인 상태(`useAuth().isAuthenticated`)를 따라 `connect()`/`disconnect()`가 자동으로 트리거된다 — 토큰은 함수형 `auth` 옵션(`realtimeAuth`)이 매 연결·재연결 시도 직전에 `getIdToken()`으로 새로 읽으므로, `connect_error`마다 별도로 강제 갱신하거나 직접 `connect()`를 다시 부르지 않는다(그러면 socket.io의 지수 백오프를 건너뛰고 토큰 갱신을 무한 반복한다 — 아래 "안정성 관련 구현 메모" 참고)
+- `encounter:detected`는 Provider 레벨에서 배선돼 있다 — 수신 시 `useBattleStore.upsertEnemy(...)`를 호출해 배틀 탭의 근처 상대 목록에 추가/갱신한다. 결투 진행 여부와 무관하게 항상 갱신하며(목록은 "지금 근처에 있는 상대"를 보여줄 뿐이라 진행 중인 결투와 충돌하지 않는다), 서버가 같은 쌍에 대해 60초간 재발송하지 않으므로 클라이언트가 `BATTLE_ENEMY_STALE_MS`(2분)마다 주기적으로 오래된 항목을 걷어낸다
+- `useLocation()`(`src/hooks/use-location.ts`)은 앱 루트의 `LocationBroadcaster`가 좌표가 바뀔 때 + 60초 주기로 `location:update`를 emit한다(특정 탭에 묶지 않는 이유는 아래 "안정성 관련 구현 메모" 참고) — 별도 쓰로틀링 없이 `watchPositionAsync`의 `distanceInterval:10m`/`timeInterval:5000ms`에 의존
 - 결투 신청/수락/거부/만료/완료/무효 전체 생명주기가 Provider 레벨에 배선돼 있다(`SocketProvider.tsx`):
-  - 신청자(challenger)는 `EnemyDetectionAlert`의 "결투 신청"에서 `duel:request`를 emit하고, ack로 받은 `duelId`로 `DuelPending`(응답 대기 화면, 취소 버튼 없음 — 백엔드에 `duel:cancel`이 없어 30초 자동 만료에 맡김)을 띄운다
+  - 신청자(challenger)는 배틀 탭의 `BattleEnemyRow`에서 `duel:request`를 emit하고, ack로 받은 `duelId`로 `DuelPending`(응답 대기 화면, 취소 버튼 없음 — 백엔드에 `duel:cancel`이 없어 30초 자동 만료에 맡김)을 띄운다
   - 수신자(recipient)는 `duel:requested` 수신 시 `DuelRequest` 시트가 뜨고, 수락/거부가 각각 `duel:accept`/`duel:reject`를 emit한다(서버 확인 전엔 MiniGame을 열지 않는다)
   - `duel:accepted`는 양쪽 모두에게 와서 `MiniGame`을 연다. `duel:rejected`/`duel:expired`/`duel:completed`/`duel:voided`는 열려있는 오버레이를 `useOverlayStore.resetDuel()`로 정리하고 결과를 `Alert`로 안내한다(`duelId`가 현재 진행 중인 것과 일치할 때만 반응)
-- 미니게임 판정 계약(`game:start`/`game:go`/`game:submit`)은 바로 아래 섹션 참고 — `MiniGame`이 아직 이 계약이 아니라 폐기된 `duel:result` 자가신고를 보내고 있어(개발 중, PR #46 프론트 반영 미완료) 서버가 응답하지 않는다.
+- 미니게임 판정 계약(`game:start`/`game:go`/`game:submit`)은 바로 아래 섹션 참고 — `MiniGame`은 이 계약에 맞춰 구현돼 있다(PR #46 프론트 반영 완료, 폐기된 `duel:result` 자가신고는 제거됨).
 
 ### 결투 미니게임 (`feature/Bae/duel-minigame`)
 
@@ -89,7 +89,6 @@
 양쪽 언어를 모두 보낸다). 선택지는 서버가 매번 섞고, 정답은 서버 세션에만 있어 페이로드에
 실리지 않는다.
 
-**알려진 이슈 (프론트)**
 ### 안정성 관련 구현 메모
 
 리뷰에서 드러난 아래 함정들은 수정됐다. 같은 실수를 반복하지 않도록 이유를 남긴다.
@@ -104,6 +103,12 @@
 ### 필요 작업 (TODO)
 
 - [ ] `DuelPending`에 취소 수단이 없다(백엔드에 `duel:cancel`이 없어 30초 만료에 의존) — 백엔드 협의 시 함께 논의
+- [ ] `src/hooks/use-location.ts`가 `feature/Ryu/team-chat`(PR #50)과 서로 다른 방향으로
+      되돌리고 있다 — 이 브랜치는 모듈 스코프 공유 구독을 유지(근거: map + `LocationBroadcaster`
+      두 소비자), PR #50은 훅 인스턴스별 구독으로 되돌림(근거: 채팅의 위치 공유 기능 제거로
+      소비자가 map 하나뿐 + 로그아웃 후 이전 사용자 좌표 잔존). 각 브랜치 안에서는 둘 다 맞지만
+      나중에 merge되는 쪽이 상대의 근거를 조용히 무효화하므로, merge 순서를 정하거나 한쪽으로
+      합의가 필요하다(PR #54 리뷰 지적 9번).
 
 ## Firebase Authentication
 

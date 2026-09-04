@@ -89,7 +89,62 @@ describe('MiniGame', () => {
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
-  it('상대가 먼저 제출한 뒤 내가 제출하면 대기 문구가 달라진다', async () => {
+  it(
+    '상대가 먼저 제출했는데 나는 아직이면, 아직 제출 전인 지금 재촉 문구가 뜬다 ' +
+      '(PR #54 리뷰 지적 8번 — 예전엔 이 문구가 정반대로 "내가 이미 제출한 뒤"에만 떴다)',
+    async () => {
+      useOverlayStore.getState().startGameRound({
+        gameType: 'QUIZ',
+        round: 1,
+        maxRounds: 1,
+        deadlineAt: Date.now() + 45_000,
+        quiz: { question: { ko: 'Q', en: 'Q' }, choices: [{ ko: 'A', en: 'A' }] },
+      });
+      useOverlayStore.getState().setOpponentSubmitted(true);
+
+      const { getByText } = await render(<MiniGame />);
+
+      // 아직 내가 제출하기 전(퀴즈 선택지가 그대로 보이는 시점)에 재촉 문구가 함께 보여야
+      // 의미가 있다 — 이미 낸 뒤엔 재촉할 이유가 없다.
+      expect(getByText('Your opponent already submitted. Go ahead!')).toBeTruthy();
+      expect(getByText('Q')).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.press(getByText('A'));
+      });
+
+      // 제출한 뒤엔 상대가 먼저 냈든 아니든 같은 대기 문구로 통일된다.
+      expect(getByText('Submitted! Waiting for opponent...')).toBeTruthy();
+    },
+  );
+
+  it(
+    '남은 시간을 초 단위로 보여주고 시간이 흐르면 줄어든다 (PR #54 리뷰 지적 6번 — ' +
+      '예전엔 gameDeadlineAt을 저장만 하고 아무도 쓰지 않아 45초 마감이 화면에 전혀 없었다)',
+    async () => {
+      jest.useFakeTimers();
+      const now = Date.now();
+      useOverlayStore.getState().startGameRound({
+        gameType: 'TAP',
+        round: 1,
+        maxRounds: 1,
+        deadlineAt: now + 10_000,
+        tap: { durationSec: 5 },
+      });
+
+      const { getByText } = await render(<MiniGame />);
+      await waitFor(() => expect(getByText('10s left')).toBeTruthy());
+
+      await act(async () => {
+        jest.advanceTimersByTime(3_000);
+      });
+
+      expect(getByText('7s left')).toBeTruthy();
+      jest.useRealTimers();
+    },
+  );
+
+  it('내가 먼저 제출하고 상대가 아직이면(재촉할 대상이 나) 재촉 문구가 뜨지 않는다', async () => {
     useOverlayStore.getState().startGameRound({
       gameType: 'QUIZ',
       round: 1,
@@ -97,14 +152,14 @@ describe('MiniGame', () => {
       deadlineAt: Date.now() + 45_000,
       quiz: { question: { ko: 'Q', en: 'Q' }, choices: [{ ko: 'A', en: 'A' }] },
     });
-    useOverlayStore.getState().setOpponentSubmitted(true);
 
-    const { getByText } = await render(<MiniGame />);
+    const { getByText, queryByText } = await render(<MiniGame />);
     await act(async () => {
       fireEvent.press(getByText('A'));
     });
 
-    expect(getByText('Your opponent already submitted. Go ahead!')).toBeTruthy();
+    expect(getByText('Submitted! Waiting for opponent...')).toBeTruthy();
+    expect(queryByText('Your opponent already submitted. Go ahead!')).toBeNull();
   });
 
   it('새 라운드(재경기)가 시작되면 제출 상태가 다시 초기화된다', async () => {

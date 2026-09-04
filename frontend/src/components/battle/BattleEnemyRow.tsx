@@ -32,17 +32,29 @@ export function BattleEnemyRow({ enemy, socket }: BattleEnemyRowProps) {
   const handleDuel = () => {
     if (!socket || blocked) return;
     useBattleStore.getState().setPendingChallengeTargetId(enemy.userId);
-    socket.emit(
+    // .timeout()이 없으면 두 가지 실패 경로에서 이 콜백이 영영 호출되지 않는다 — (1) 서버
+    // 핸들러가 throw로 끝나면(사거리 이탈·페널티 등) NestJS가 ack을 아예 보내지 않고
+    // exception 이벤트만 오는데, 그 코드가 DUEL_ 접두사가 아니면(Redis 장애로 인한
+    // INTERNAL_SERVER_ERROR, 유효성 검증 실패로 인한 BAD_REQUEST 등) 전역 handleException도
+    // pendingChallengeTargetId를 비우지 않는다. (2) 소켓이 그 사이 끊기면 socket.io-client의
+    // _clearAcks는 .timeout()으로 등록되지 않은(withError가 없는) ack을 에러 호출 없이
+    // 조용히 버린다(socket.js#_clearAcks) — 지하철 등에서 끊기면 콜백이 영영 안 온다.
+    // 두 경우 모두 앱을 재시작하기 전엔 버튼이 스피너에 갇혔다(PR #54 리뷰 지적 1번).
+    // .timeout()을 걸면 서버가 ack을 보내지 않아도 최대 5초 뒤 스스로 에러를 만들어
+    // 콜백에 넘기므로, 실패 원인과 무관하게 버튼이 항상 복구된다.
+    socket.timeout(5000).emit(
       'duel:request',
       { targetUserId: enemy.userId },
-      (ack: DuelRequestAck) => {
+      (err: Error | null, ack?: DuelRequestAck) => {
         useBattleStore.getState().setPendingChallengeTargetId(null);
-        // 서버가 거부(예: 상대가 이미 다른 결투 중)하면 duelId가 안 온다 — 이 경우
-        // 목록에 그대로 남겨 재시도할 수 있게 둔다.
-        if (ack.status !== 'ok' || ack.duelId == null) return;
+        // 실패(타임아웃 포함)거나 서버가 거부(예: 상대가 이미 다른 결투 중)해 duelId가
+        // 안 왔으면 목록에 그대로 남겨 재시도할 수 있게 둔다. 실패 사유 안내는 exception을
+        // 구독하는 SocketProvider가 DUEL_* 코드에 한해 Alert로 담당한다.
+        if (err || !ack || ack.status !== 'ok' || ack.duelId == null) return;
 
         useOverlayStore.getState().setEnemyInfo({
           userId: enemy.userId,
+          nickname: enemy.nickname,
           nationality: enemy.team,
           distance: ENCOUNTER_RADIUS_M,
         });

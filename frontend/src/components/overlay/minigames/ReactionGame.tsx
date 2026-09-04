@@ -17,10 +17,14 @@ interface ReactionGameProps {
 
 type Phase = 'waiting' | 'go' | 'tooSoon';
 
+// 신호 전 탭을 실제로 제출하기 전에 "너무 빨랐어요" 안내를 잠깐 보여주는 시간(ms).
+const FALSE_START_ANNOUNCE_MS = 600;
+
 export function ReactionGame({ goSignal, onSubmit }: ReactionGameProps) {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<Phase>('waiting');
   const submittedRef = useRef(false);
+  const falseStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 마운트 시점의 goSignal을 기준선으로 잡아, 그 이후의 변화(= 이번 라운드의 game:go)에만
   // 반응한다 — 값 자체가 아니라 "바뀌었다"는 사실이 신호다.
   const baselineRef = useRef(goSignal);
@@ -29,19 +33,36 @@ export function ReactionGame({ goSignal, onSubmit }: ReactionGameProps) {
     if (goSignal !== baselineRef.current) setPhase('go');
   }, [goSignal]);
 
+  // 언마운트 후 타이머가 발화해 onSubmit을 부르지 않도록 정리한다(재경기 등으로
+  // 컴포넌트가 일찍 사라지는 경우).
+  useEffect(() => {
+    return () => {
+      if (falseStartTimerRef.current) clearTimeout(falseStartTimerRef.current);
+    };
+  }, []);
+
   const handlePress = () => {
     if (phase === 'waiting') {
-      // game:go 전에 보낸 제출은 서버가 부정출발로 최하점 처리한다(재제출도 안 됨) — 그래서
-      // 신호 전 탭은 서버로 보내지 않고 로컬에서만 "너무 빨랐어요"로 잡는다.
       setPhase('tooSoon');
-    } else if (phase === 'tooSoon') {
-      setPhase('waiting');
+      // game:go 전에 보낸 제출은 서버가 부정출발(FALSE_START_PRIMARY)로 최하점
+      // 처리하도록 그대로 전달한다 — 예전엔 로컬에서 완전히 삼켜(서버로 안 보냄)
+      // 페널티 없이 연타를 반복하다 game:go 직후 첫 탭으로 제출하는 게 무위험
+      // 전략이 됐다(REACTION_MIN_MS=80보다 빠르게 반응한 것처럼 보임 — PR #54
+      // 리뷰 지적 7번). "너무 빨랐어요" 안내를 잠깐 보여준 뒤 제출한다 — 재제출은
+      // 서버가 HSETNX로 막으므로 한 번만 보낸다.
+      falseStartTimerRef.current = setTimeout(() => {
+        if (!submittedRef.current) {
+          submittedRef.current = true;
+          onSubmit();
+        }
+      }, FALSE_START_ANNOUNCE_MS);
     } else if (phase === 'go') {
       if (!submittedRef.current) {
         submittedRef.current = true;
         onSubmit();
       }
     }
+    // 'tooSoon' 상태에서의 추가 탭은 무시한다 — 제출이 이미 예약돼 있다.
   };
 
   const label =

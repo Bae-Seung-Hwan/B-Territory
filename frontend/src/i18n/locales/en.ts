@@ -230,6 +230,7 @@ export const en: Translations = {
       DUEL_ALREADY_HANDLED: 'This duel was already handled',
       DUEL_NOT_FOUND: 'Duel not found',
       DUEL_NOT_ACCEPTED: 'This duel has not been accepted',
+      MINIGAME_START_FAILED: 'Could not start the mini-game. Please try again shortly',
       UNAUTHENTICATED_CONNECTION: 'Your session expired. Please log in again',
     },
     duelOutcome: {
@@ -247,16 +248,17 @@ export const en: Translations = {
       waitingOpponent: 'Submitted! Waiting for opponent...',
       opponentAlreadySubmitted: 'Your opponent already submitted. Go ahead!',
       roundLabel: 'Round {{round}}/{{maxRounds}}',
+      timeLeft: '{{seconds}}s left',
       rematch: "It's a tie! Starting a rematch",
       tapBattle: {
-        instruction: 'Tap as many times as you can in 5 seconds',
+        instruction: 'Tap as many times as you can in {{seconds}} seconds',
         tapCount: '{{count}} taps',
         tap: 'TAP!',
       },
       reaction: {
         instructionWait: 'Tap as fast as you can when it turns green',
         go: 'TAP NOW!',
-        tooSoon: 'Too soon! Tap again to restart',
+        tooSoon: 'Too soon! Submitting as a false start...',
       },
       quiz: {
         instruction: 'Answer correctly to win',

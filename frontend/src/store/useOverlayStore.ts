@@ -18,6 +18,10 @@ interface EnemyInfo {
   userId: string;
   nationality: string;
   distance: number;
+  // 신청이 거부/만료됐을 때 배틀 탭 목록에 되살리기 위해 들고 있는다(PR #54 리뷰 지적
+  // 11번) — duel:rejected/duel:expired 페이로드엔 duelId뿐이라 이 값이 유일한 출처다.
+  // 수신자 쪽(duel:requested 처리)은 페이로드에 닉네임이 없어 null일 수 있다.
+  nickname: string | null;
 }
 
 interface OverlayStore {
