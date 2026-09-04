@@ -107,7 +107,17 @@ export const en: Translations = {
   },
   chat: {
     title: 'Chat',
-    placeholder: 'Team chat will appear here',
+    emptyState: 'No messages yet',
+    inputPlaceholder: 'Type a message',
+    send: 'Send',
+    sending: 'Sending…',
+    messageFailed: 'Failed to send',
+    retry: 'Retry',
+    errors: {
+      connection: 'Chat connection failed. Retrying…',
+      rateLimit: 'You sent messages too quickly. Please try again shortly',
+      unknown: 'Failed to send message',
+    },
   },
   ranking: {
     title: 'Ranking',
@@ -142,6 +152,8 @@ export const en: Translations = {
     logout: 'Log Out',
     logoutConfirmTitle: 'Log Out',
     logoutConfirmMessage: 'Are you sure you want to log out?',
+    blockedUsersLink: 'Manage Blocked Users',
+    contactTitle: 'Contact Us',
   },
   map: {
     hud: {
@@ -238,6 +250,46 @@ export const en: Translations = {
     miniGame: {
       title: 'Mini Game',
       placeholder: 'The mini-game UI will be implemented here',
+    },
+  },
+  // Shared by the chat long-press menu (report/block) and the profile "manage blocks" screen.
+  moderation: {
+    // Title for success alerts. Reusing the error title (auth.errors.title = 'Error')
+    // would show "Error" on a successful report, which reads as a failure.
+    noticeTitle: 'Notice',
+    actionsSheetTitle: 'Message actions',
+    report: 'Report',
+    block: 'Block',
+    cancel: 'Cancel',
+    reportTitle: 'Choose a reason',
+    reportReason: {
+      SPAM: 'Spam / Ads',
+      ABUSE: 'Abuse / Harassment',
+      SEXUAL: 'Sexual content',
+      HATE: 'Hate speech',
+      OTHER: 'Other',
+    },
+    reportContentLabel: 'Reported message',
+    detailPlaceholder: 'Add details (optional, up to 500 characters)',
+    submitReport: 'Submit report',
+    reportSuccess: 'Report submitted',
+    blockConfirmTitle: 'Block this user?',
+    blockConfirmMessage: "Blocking {{nickname}} stops their messages from reaching you.",
+    blockSuccess: 'Blocked',
+    blockedUsersTitle: 'Manage Blocked Users',
+    retry: 'Retry',
+    blockedUsersEmpty: 'No blocked users',
+    blockedAtLabel: 'Blocked on',
+    unblock: 'Unblock',
+    unblockConfirmTitle: 'Unblock this user?',
+    unblockConfirmMessage: "You'll start receiving messages from {{nickname}} again.",
+    errors: {
+      blockSelf: 'You cannot block yourself',
+      reportSelf: 'You cannot report yourself',
+      reportRateLimit: 'Too many reports. Please try again shortly',
+      userNotFound: 'User not found',
+      userNotRegistered: 'Your account is not registered yet',
+      failed: 'Something went wrong',
     },
   },
 };
