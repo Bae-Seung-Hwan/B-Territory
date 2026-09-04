@@ -47,29 +47,41 @@ export type ChatSocketError = 'connection' | 'rateLimit' | 'unknown';
  */
 export function useChatSocket() {
   const socketRef = useRef<Socket | null>(null);
+  // 현재 ack 대기 중인 메시지 id 전체를 담는다(단일 슬롯이 아니다) — 열악한 회선에서
+  // 이전 메시지의 ack이 몇 초씩 걸리는 동안 다음 메시지를 보내면 둘 다 동시에 대기
+  // 상태가 되는데, 단일 슬롯이면 나중 것만 기억해 disconnect 시 앞 메시지가 구제
+  // 대상에서 빠진다(PR #50 4차 리뷰 지적 1번).
+  const pendingIdsRef = useRef<Set<string>>(new Set());
   // exception이 어떤 emit을 거부한 것인지 서버가 알려주지 않는다({ code }만 온다) —
   // 레이트리밋은 그 순간 보낸 메시지가 임계값을 넘겨서 걸리므로, 가장 최근에 보낸
-  // ack 대기 중 메시지가 거부 대상이라고 본다. 두 메시지가 동시에 대기 중인 드문
-  // 경우엔 더 이전 메시지를 잘못 짚을 수 있지만, 그래도 ACK_TIMEOUT_MS 시점에는
-  // 결국 failed로 정리된다.
-  const pendingIdRef = useRef<string | null>(null);
+  // 메시지가 거부 대상이라고 본다. 두 메시지가 동시에 대기 중인 드문 경우엔 더 이전
+  // 메시지를 잘못 짚을 수 있지만, 그래도 ACK_TIMEOUT_MS 시점에는 결국 failed로
+  // 정리된다. pendingIdsRef와 분리한 이유는 이 값이 "지금 대기 중인 것들"이 아니라
+  // "가장 최근에 보낸 것 하나"를 가리켜야 하기 때문이다.
+  const lastSentIdRef = useRef<string | null>(null);
   // 메시지 id별 "몇 번째 전송 시도인지"를 센다. retryMessage는 같은 id로 다시
   // emitWithAck를 부르는데, 원래 시도의 ack/타임아웃 콜백이 그 이후에(레이트리밋으로
   // 인한 뒤늦은 타임아웃, 혹은 아래 disconnect가 강제로 발화시키는 에러) 도착하면
   // 이미 새 시도가 정한 상태(성공/전송 중)를 덮어쓴다 — 정상 전달된 메시지가 다시
   // "전송 실패"로 표시되고, 사용자가 그걸 보고 또 재전송하면 팀 채팅에 같은 메시지가
   // 두 번 나간다(PR #50 3차 리뷰 지적 1·2번). 콜백은 자신이 속한 시도가 여전히 그
-  // 메시지의 최신 시도일 때만 상태를 반영한다.
+  // 메시지의 최신 시도일 때만 상태를 반영하고, 상태가 확정되는 시점에 자기 항목을
+  // 지운다 — 그러지 않으면 훅이 살아 있는 동안(=앱 실행 내내) 계속 쌓인다(PR #50
+  // 4차 리뷰 지적 4번).
   const attemptRef = useRef<Map<string, number>>(new Map());
   const addMessage = useChatStore((s) => s.addMessage);
   const setMessageStatus = useChatStore((s) => s.setMessageStatus);
   const { profile, isAuthenticated } = useAuth();
   const [chatError, setChatError] = useState<ChatSocketError | null>(null);
-  const [isForeground, setIsForeground] = useState(AppState.currentState === 'active');
+  // 'active'만 포그라운드로 인정하면 iOS의 'inactive'(제어센터·알림센터를 내리거나
+  // 앱 스위처를 띄우는 등, 화면은 그대로인 짧은 전환)까지 백그라운드로 오판해 매번
+  // 불필요하게 disconnect/reconnect한다 — 'background'일 때만 아니라고 본다(PR #50
+  // 4차 리뷰 지적 2번). Android는 'inactive'를 보내지 않아 이 구분이 영향을 주지 않는다.
+  const [isForeground, setIsForeground] = useState(AppState.currentState !== 'background');
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      setIsForeground(state === 'active');
+      setIsForeground(state !== 'background');
     });
     return () => subscription.remove();
   }, []);
@@ -80,12 +92,13 @@ export function useChatSocket() {
   useEffect(() => {
     if (!isAuthenticated || !isForeground) return;
 
-    // attemptRef.current(Map)는 이 훅 생애주기 동안 재할당되지 않는 안정된 참조라,
-    // cleanup에서 그대로 다시 읽어도 최신 상태를 본다 — effect 시작 시점에 변수로
-    // 캡처해두는 건 오직 react-hooks/exhaustive-deps가 "cleanup에서 직접
-    // attemptRef.current를 읽으면 그 사이 바뀌었을 수 있다"고 오탐하는 것을 피하기
-    // 위함이다.
+    // attemptRef.current(Map)/pendingIdsRef.current(Set)는 이 훅 생애주기 동안
+    // 재할당되지 않는 안정된 참조라, cleanup에서 그대로 다시 읽어도 최신 상태를
+    // 본다 — effect 시작 시점에 변수로 캡처해두는 건 오직 react-hooks/exhaustive-deps가
+    // "cleanup에서 직접 ref.current를 읽으면 그 사이 바뀌었을 수 있다"고 오탐하는
+    // 것을 피하기 위함이다.
     const attemptMap = attemptRef.current;
+    const pendingIds = pendingIdsRef.current;
 
     const socket: Socket = io(`${API_BASE_URL}/chat`, {
       autoConnect: false,
@@ -118,10 +131,11 @@ export function useChatSocket() {
       // exception은 ack 콜백과 달리 즉시 도착한다 — ACK_TIMEOUT_MS(5초)까지 기다리지
       // 않고 바로 failed로 넘겨야, 배너(4초 뒤 자동 소거)가 사라지고도 1초 뒤에야
       // 말풍선이 이유 없이 실패로 바뀌는 일이 없다(PR #50 2차 리뷰 지적 1번).
-      const pendingId = pendingIdRef.current;
-      if (pendingId) {
-        pendingIdRef.current = null;
-        setMessageStatus(pendingId, 'failed');
+      const failedId = lastSentIdRef.current;
+      if (failedId && pendingIdsRef.current.has(failedId)) {
+        pendingIdsRef.current.delete(failedId);
+        attemptRef.current.delete(failedId);
+        setMessageStatus(failedId, 'failed');
       }
     });
 
@@ -137,15 +151,15 @@ export function useChatSocket() {
       // 동기적으로 릴레이를 마치므로, 그 순간 대기 중이던 메시지는 실제로는 대부분
       // 전달됐다 — 강제 에러를 그대로 믿으면 정상 전달된 메시지가 "전송 실패"로
       // 표시되고, 사용자가 재전송하면 팀 채팅에 같은 메시지가 두 번 나간다(PR #50
-      // 3차 리뷰 지적 2번). 여기서 먼저 성공으로 확정하고 시도 번호를 올려두면,
-      // disconnect()가 강제로 발화시키는 낡은 콜백은 emitWithAck의 시도 검사에
+      // 3차 리뷰 지적 2번). 대기 중이던 메시지 전부(단일 슬롯이 아니다 — 4차 리뷰
+      // 지적 1번)를 먼저 성공으로 확정하고 시도 기록을 지워두면, disconnect()가
+      // 강제로 발화시키는 낡은 콜백은 emitWithAck의 시도 검사에서 "기록 없음"으로
       // 걸려 무시된다.
-      const pendingId = pendingIdRef.current;
-      if (pendingId) {
-        pendingIdRef.current = null;
-        attemptMap.set(pendingId, (attemptMap.get(pendingId) ?? 0) + 1);
+      for (const pendingId of pendingIds) {
+        attemptMap.delete(pendingId);
         setMessageStatus(pendingId, undefined);
       }
+      pendingIds.clear();
       socket.disconnect();
       socketRef.current = null;
     };
@@ -177,18 +191,23 @@ export function useChatSocket() {
         // 조건이 아직 안 갖춰졌거나 재연결 대기 중) — 성공으로 표시하면 이 PR이 500자
         // 제한·ack 확인으로 막은 것과 같은 "조용한 유실"이 여기 남는다(PR #50 3차
         // 리뷰 지적 4번).
+        attemptRef.current.delete(id);
         setMessageStatus(id, 'failed');
         return;
       }
-      pendingIdRef.current = id;
+      pendingIdsRef.current.add(id);
+      lastSentIdRef.current = id;
       socket
         .timeout(ACK_TIMEOUT_MS)
         .emit('chat:message', payload, (err: Error | null) => {
-          if (pendingIdRef.current === id) pendingIdRef.current = null;
           // 이 콜백이 만들어진 이후 같은 id로 재전송(retryMessage)됐거나 disconnect가
-          // 먼저 확정 지었으면, attemptRef의 시도 번호가 이미 올라가 있다 — 그 경우
-          // 이 낡은 콜백은 무시한다(PR #50 3차 리뷰 지적 1·2번).
+          // 먼저 확정 지었으면, attemptRef의 시도 번호가 이미 바뀌어(또는 지워져)
+          // 있다 — 그 경우 이 낡은 콜백은 무시한다. pendingIdsRef도 건드리지 않는다 —
+          // 더 최신 시도가 아직 그 id로 추적 중일 수 있다(PR #50 3차 리뷰 지적
+          // 1·2번, 4차 리뷰 지적 1번).
           if (attemptRef.current.get(id) !== attempt) return;
+          pendingIdsRef.current.delete(id);
+          attemptRef.current.delete(id);
           setMessageStatus(id, err ? 'failed' : undefined);
         });
     },

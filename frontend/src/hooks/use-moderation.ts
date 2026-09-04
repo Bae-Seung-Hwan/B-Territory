@@ -62,6 +62,8 @@ export function moderationErrorMessage(error: unknown, t: Translate): string {
       return t('moderation.errors.reportRateLimit');
     case 'USER_NOT_FOUND':
       return t('moderation.errors.userNotFound');
+    case 'USER_NOT_REGISTERED':
+      return t('moderation.errors.userNotRegistered');
   }
 
   if (error.response.status === 401) return t('auth.errors.sessionExpired');

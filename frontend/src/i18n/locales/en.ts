@@ -288,6 +288,7 @@ export const en: Translations = {
       reportSelf: 'You cannot report yourself',
       reportRateLimit: 'Too many reports. Please try again shortly',
       userNotFound: 'User not found',
+      userNotRegistered: 'Your account is not registered yet',
       failed: 'Something went wrong',
     },
   },

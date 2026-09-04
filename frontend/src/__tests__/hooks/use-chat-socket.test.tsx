@@ -33,7 +33,7 @@ jest.mock('react-native/Libraries/AppState/AppState', () => ({
   },
 }));
 
-function setAppState(state: 'active' | 'background') {
+function setAppState(state: 'active' | 'inactive' | 'background') {
   mockAppState.currentState = state;
   mockAppState.listener?.(state);
 }
@@ -306,6 +306,60 @@ describe('useChatSocket', () => {
         pendingAck(new Error('socket has been disconnected'));
       });
       expect(useChatStore.getState().messages[0].status).toBeUndefined();
+
+      await act(async () => unmount());
+    },
+  );
+
+  it(
+    '앱이 백그라운드로 갈 때 대기 중인 메시지가 둘 이상이면 전부 성공으로 확정한다 ' +
+      '(PR #50 4차 리뷰 지적 1번 — 단일 슬롯이던 pendingId를 집합으로 확장)',
+    async () => {
+      const { result, unmount } = await renderHook(() => useChatSocket());
+
+      // 열악한 회선에서 앞 메시지의 ack이 오기 전에 다음 메시지를 보내면 둘 다 동시에
+      // 대기 상태가 된다 — 단일 슬롯이면 나중 것만 기억해 앞 메시지가 구제에서 빠진다.
+      await act(async () => {
+        result.current.sendMessage('먼저 보낸 메시지');
+      });
+      await act(async () => {
+        result.current.sendMessage('나중에 보낸 메시지');
+      });
+      expect(useChatStore.getState().messages).toHaveLength(2);
+      expect(useChatStore.getState().messages[0].status).toBe('sending');
+      expect(useChatStore.getState().messages[1].status).toBe('sending');
+
+      const firstAck: AckCallback = fakeSocket.__emitWithAck.mock.calls[0][2];
+      const secondAck: AckCallback = fakeSocket.__emitWithAck.mock.calls[1][2];
+
+      await act(async () => setAppState('background'));
+      expect(useChatStore.getState().messages[0].status).toBeUndefined();
+      expect(useChatStore.getState().messages[1].status).toBeUndefined();
+
+      // disconnect()가 강제 발화시키는 낡은 ack을 둘 다 나중에 받아도 무시해야 한다.
+      await act(async () => {
+        firstAck(new Error('socket has been disconnected'));
+        secondAck(new Error('socket has been disconnected'));
+      });
+      expect(useChatStore.getState().messages[0].status).toBeUndefined();
+      expect(useChatStore.getState().messages[1].status).toBeUndefined();
+
+      await act(async () => unmount());
+    },
+  );
+
+  it(
+    "iOS의 'inactive' 전환은 백그라운드로 취급하지 않는다 " +
+      '(PR #50 4차 리뷰 지적 2번 — 제어센터·앱 스위처 등으로 소켓이 불필요하게 끊기던 문제)',
+    async () => {
+      const { unmount } = await renderHook(() => useChatSocket());
+      expect(mockedIo).toHaveBeenCalledTimes(1);
+
+      await act(async () => setAppState('inactive'));
+      expect(fakeSocket.disconnect).not.toHaveBeenCalled();
+
+      await act(async () => setAppState('background'));
+      expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
 
       await act(async () => unmount());
     },

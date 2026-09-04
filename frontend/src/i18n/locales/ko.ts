@@ -289,6 +289,7 @@ export const ko = {
       reportSelf: '자기 자신은 신고할 수 없습니다',
       reportRateLimit: '신고가 너무 잦습니다. 잠시 후 다시 시도해주세요',
       userNotFound: '사용자를 찾을 수 없습니다',
+      userNotRegistered: '아직 가입되지 않은 계정입니다',
       failed: '처리에 실패했습니다',
     },
   },

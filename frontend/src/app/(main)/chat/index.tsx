@@ -148,6 +148,11 @@ export default function ChatScreen() {
             placeholder={t('chat.inputPlaceholder')}
             placeholderTextColor="#666"
             onSubmitEditing={handleSend}
+            // TextInput은 단일 행에서 blurOnSubmit 기본값이 true라, 엔터로 보낼 때마다
+            // 포커스가 풀려 키보드가 내려간다 — 연속으로 여러 줄 보내는 게 기본 동작인
+            // 화면이라 매번 다시 탭해야 했다(PR #50 4차 리뷰 지적 6번).
+            blurOnSubmit={false}
+            returnKeyType="send"
             // 백엔드 ChatMessageDto의 @Length(1, 500)과 맞춘다 — 없으면 500자를 넘긴
             // 메시지가 낙관적으로는 "보낸 메시지"로 표시되고 실제로는 서버 검증에서
             // 거부돼 조용히 유실된다(use-chat-socket.ts의 sendMessage 가드도 참고).
