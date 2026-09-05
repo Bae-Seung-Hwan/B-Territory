@@ -5,6 +5,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { queryKeys } from '@/lib/query-keys';
 import { BrandColors } from '@/constants/theme';
+import { useChatStore } from '@/store/useChatStore';
 
 interface AuthSession {
   firebaseUser: User | null;
@@ -46,6 +47,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const hadPreviousUser = previousUid !== undefined && previousUid !== null;
       if (hadPreviousUser && previousUid !== nextUid) {
         queryClient.removeQueries({ queryKey: queryKeys.auth.me });
+        // useChatStore는 (main) 라우트 그룹보다 오래 사는 모듈 스코프 zustand라,
+        // 로그아웃은 signOut 후 라우팅일 뿐 JS 컨텍스트가 유지되는 한 이전 사용자의
+        // 팀 채팅 피드가 그대로 남는다 — 같은 기기에서 계정을 바꾸면 A가 보낸 메시지가
+        // mine:true인 채로 B 자신의 말풍선처럼 오른쪽 정렬돼 보인다(PR #50 3차 리뷰
+        // 지적 6번). moderation.blocks도 위 auth.me와 같은 이유로 함께 지운다 — 안
+        // 지우면 gcTime(기본 5분) 동안 A가 차단한 사용자 목록이 B의 화면에 리페치가
+        // 끝나기 전까지 잠깐 보인다(3차 리뷰 지적 7번).
+        useChatStore.getState().clear();
+        queryClient.removeQueries({ queryKey: queryKeys.moderation.blocks });
       }
 
       setFirebaseUser(nextUser);
