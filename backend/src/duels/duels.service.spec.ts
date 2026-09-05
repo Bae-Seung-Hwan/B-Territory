@@ -7,7 +7,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { DuelsService } from './duels.service';
+import { DuelsService, duelPenaltyPayload } from './duels.service';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { ErrorCode } from '../common/errors/error-code';
@@ -18,6 +18,9 @@ import { ScoreEventType } from '../scores/entities/score-event.entity';
 import {
   BASE_DUEL_SCORE,
   ALLY_BONUS_MULTIPLIER,
+  DUEL_NO_RESPONSE_SCORE_PENALTY,
+  DUEL_REJECT_SCORE_PENALTY,
+  DUEL_SHIELD_TTL,
   DUEL_RESULT_TTL,
   DUEL_SWEEP_GRACE,
 } from './constants';
@@ -39,6 +42,7 @@ describe('DuelsService', () => {
     exists: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    update: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
   let redis: jest.Mocked<
@@ -50,6 +54,9 @@ describe('DuelsService', () => {
       | 'tryAcquireLock'
       | 'releaseLock'
       | 'extendLock'
+      | 'setDuelShield'
+      | 'getDuelShieldTtl'
+      | 'clearDuelShield'
       | 'geoPos'
       | 'geoPosMany'
       | 'geoSearch'
@@ -76,12 +83,22 @@ describe('DuelsService', () => {
     } as unknown as jest.Mocked<Repository<Duel>>;
 
     txManager = {
-      query: jest.fn().mockResolvedValue(undefined),
+      // SAVEPOINT류는 반환값이 없고, sweepStaleDuels의 "이 프로세스가 뜬 시각" 조회만
+      // 행을 돌려준다. 기본값을 1970으로 두면 모든 신청이 부팅 이후로 읽혀 기존 기대치가
+      // 그대로 유지되고, 재시작 경계를 검증하는 테스트만 이 값을 덮어쓴다.
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(
+            sql.startsWith('SELECT') ? [{ startedAt: new Date(0) }] : undefined,
+          ),
+        ),
       exists: jest.fn().mockResolvedValue(false),
       create: jest.fn((_entity: unknown, data: Partial<Duel>) => data as Duel),
       save: jest.fn((duel: Duel) =>
         Promise.resolve({ ...duel, id: duel.id ?? 1 }),
       ),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       createQueryBuilder: jest.fn(() => createQueryBuilderMock(1)),
     };
 
@@ -99,6 +116,10 @@ describe('DuelsService', () => {
       tryAcquireLock: jest.fn().mockResolvedValue(true),
       releaseLock: jest.fn().mockResolvedValue(undefined),
       extendLock: jest.fn().mockResolvedValue(true),
+      setDuelShield: jest.fn().mockResolvedValue(undefined),
+      // 기본값: 아무도 거절 보호 중이 아님.
+      getDuelShieldTtl: jest.fn().mockResolvedValue(0),
+      clearDuelShield: jest.fn().mockResolvedValue(false),
       geoPos: jest.fn().mockResolvedValue({ lat: 35.1, lng: 129.05 }),
       geoPosMany: jest.fn().mockResolvedValue(new Map()),
       geoSearch: jest.fn().mockResolvedValue([]),
@@ -281,6 +302,93 @@ describe('DuelsService', () => {
         String(duel.id),
       );
     });
+
+    it('상대가 거절 보호 중이면 결투를 신청할 수 없다', async () => {
+      redis.getDuelShieldTtl.mockResolvedValue(300);
+
+      const err = await service
+        .requestDuel(challenger, opponentId)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: ErrorCode.DUEL_TARGET_SHIELDED,
+      });
+      // 보호막 판정은 위치 검증(PostGIS)보다 앞이라 불필요한 왕복이 없어야 한다.
+      expect(dataSource.query).not.toHaveBeenCalled();
+      expect(txManager.save).not.toHaveBeenCalled();
+    });
+
+    // 보호막은 "남이 나에게 못 건다"일 뿐이다 — 내가 거는 건 막지 않고, 대신 그 순간 걷힌다.
+    it('신청이 성립하면 신청자 본인의 보호막은 해제한다', async () => {
+      redis.clearDuelShield.mockResolvedValue(true);
+
+      await service.requestDuel(challenger, opponentId);
+
+      expect(redis.clearDuelShield).toHaveBeenCalledWith(challenger.id);
+      // 상대 보호막만 확인하고, 본인 것은 조회로 막지 않는다.
+      expect(redis.getDuelShieldTtl).toHaveBeenCalledWith(opponentId);
+      expect(redis.getDuelShieldTtl).not.toHaveBeenCalledWith(challenger.id);
+    });
+
+    // 사거리 밖·중복 신청 같은 실패한 시도까지 "공격"으로 세면 실수 한 번에 보호가 날아간다.
+    it('신청이 튕기면 신청자 보호막은 그대로 둔다', async () => {
+      dataSource.query.mockResolvedValue([{ id: opponentId, within: false }]);
+
+      await expect(service.requestDuel(challenger, opponentId)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(redis.clearDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 결투는 이미 만들어졌고 락도 잡힌 뒤다. 여기서 던지면 신청자만 500을 받고
+    // 결투는 만료(30초)까지 살아 있어 아무것도 못 하게 된다.
+    it('보호막 해제가 실패해도 신청 자체는 성공시킨다', async () => {
+      redis.clearDuelShield.mockRejectedValue(new Error('redis down'));
+
+      const duel = await service.requestDuel(challenger, opponentId);
+
+      expect(duel.status).toBe(DuelStatus.PENDING);
+    });
+  });
+
+  /**
+   * 이 스탬프가 무응답 청구의 유일한 근거다(duel.entity.ts#inviteDeliveredAt) —
+   * 게이트웨이가 duel:requested를 살아 있는 소켓으로 emit한 직후에만 호출한다.
+   */
+  describe('markInviteDelivered', () => {
+    it('PENDING인 결투에만 전달 시각을 찍는다', async () => {
+      const qb = createQueryBuilderMock(1);
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(qb);
+
+      await service.markInviteDelivered(7);
+
+      // 앱 시계가 아니라 DB 시계로 찍어야 requestedAt(@CreateDateColumn)과 같은 기준이
+      // 된다 — 앱과 DB의 타임존이 다르면 두 값이 수 시간 어긋난다(sweepStaleDuels 주석).
+      const setArg = (
+        qb.set.mock.calls[0] as [{ inviteDeliveredAt: () => string }]
+      )[0];
+      expect(setArg.inviteDeliveredAt()).toBe('CURRENT_TIMESTAMP');
+      // emit과 이 UPDATE 사이에 상대가 이미 응답했다면 무응답 판정 대상이 아니다 —
+      // status 조건이 빠지면 REJECTED/ACCEPTED 행에도 스탬프가 찍힌다.
+      expect(qb.where).toHaveBeenCalledWith(
+        expect.stringContaining('status = :pending'),
+        { id: 7, pending: DuelStatus.PENDING },
+      );
+    });
+
+    /**
+     * 초대는 이미 상대 화면에 떴고 결투도 살아 있는데 여기서 던지면 신청자만 에러 ack를
+     * 받는다. 기록을 놓친 대가는 "이번 무응답을 청구하지 못한다"로, 반대 방향의 오류
+     * (받은 적 없는 초대에 청구)보다 훨씬 가볍다.
+     */
+    it('기록에 실패해도 예외를 올리지 않는다', async () => {
+      (duelRepo.createQueryBuilder as jest.Mock).mockImplementationOnce(() => {
+        throw new Error('db down');
+      });
+
+      await expect(service.markInviteDelivered(7)).resolves.toBeUndefined();
+    });
   });
 
   describe('respondDuel', () => {
@@ -324,6 +432,177 @@ describe('DuelsService', () => {
 
       expect(duel.status).toBe(DuelStatus.REJECTED);
       expect(redis.releaseLock).toHaveBeenCalledWith(expect.any(String), '1');
+    });
+
+    it('거절하면 거절한 쪽의 개인 점수를 깎고 원장에 남긴다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duel.scoreDelta).toBe(DUEL_REJECT_SCORE_PENALTY);
+      expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
+        opponentId,
+        -DUEL_REJECT_SCORE_PENALTY,
+        txManager,
+      );
+      // 신청자 쪽은 아무 변동이 없다 — 거절에는 승자가 없다.
+      expect(usersService.applyScoreDelta).toHaveBeenCalledTimes(1);
+      expect(scoresService.record).toHaveBeenCalledWith(
+        txManager,
+        expect.objectContaining({
+          userId: opponentId,
+          type: ScoreEventType.DUEL_REJECT,
+          personalPoints: -DUEL_REJECT_SCORE_PENALTY,
+          // 결투 점수는 팀 점수에 절대 포함되지 않는다 (기획 확정).
+          teamPoints: 0,
+          duelId: 1,
+        }),
+      );
+    });
+
+    it('거절하면 거절한 쪽에 보호 기간을 건다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+
+      await service.respondDuel(1, opponentId, false);
+
+      expect(redis.setDuelShield).toHaveBeenCalledWith(
+        opponentId,
+        DUEL_SHIELD_TTL,
+      );
+    });
+
+    it('수락에는 점수 차감도 보호 기간도 없다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+
+      await service.respondDuel(1, opponentId, true);
+
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 상태 전이(CAS)와 점수 차감은 한 트랜잭션이다. CAS가 밀리면 차감도 원장도 남으면 안 된다.
+    it('이미 처리된 결투를 거절하면 점수도 보호막도 건드리지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      await expect(service.respondDuel(1, opponentId, false)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(scoresService.record).not.toHaveBeenCalled();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 거절과 -2점은 이미 커밋됐다. 여기서 던지면 응답자는 에러 ack만 받고 duel:rejected를
+    // 못 받으며, 재시도는 409·30초 타이머는 null이라 양쪽이 대기 화면에 갇힌다.
+    it('보호막 설정이 실패해도 거절 자체는 성공시킨다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      redis.setDuelShield.mockRejectedValue(new Error('redis down'));
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duel.status).toBe(DuelStatus.REJECTED);
+      expect(redis.releaseLock).toHaveBeenCalledWith(expect.any(String), '1');
+    });
+
+    /**
+     * setDuelShield는 실패를 삼키는 베스트 에포트다(위 테스트). 그 실패가 알림에 반영되지
+     * 않으면 "-2점 깎였고 30분간 안전합니다"라고 안내한 직후 신청자의 재신청이 그대로
+     * 통과한다 — 재신청 판정은 requestDuel이 Redis를 다시 읽어 내리는데 거기엔 키가 없다.
+     * 차감은 이미 커밋됐으니 그대로 두고, 걸리지 않은 보호막만 안내에서 뺀다.
+     */
+    it('보호막 설정이 실패하면 차감은 유지하되 보호 기간을 안내하지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      redis.setDuelShield.mockRejectedValue(new Error('redis down'));
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duel.scoreDelta).toBe(DUEL_REJECT_SCORE_PENALTY);
+      expect(duelPenaltyPayload(duel)).toEqual({
+        duelId: 1,
+        scorePenalty: DUEL_REJECT_SCORE_PENALTY,
+        penalizedUserId: opponentId,
+        shieldUntil: null,
+      });
+    });
+
+    // 반대쪽 — 정상 경로에서까지 null이 되면 보호 기간 UI가 통째로 죽는다.
+    it('보호막이 실제로 걸렸으면 shieldUntil을 실어 보낸다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duelPenaltyPayload(duel).shieldUntil).toEqual(expect.any(String));
+    });
+
+    /**
+     * 배치(스윕)와 정반대다 — charge가 1건뿐이라 지킬 나머지가 없다. 여기서 삼키면
+     * REJECTED만 커밋되고 차감·원장·보호막이 없는 행이 남아 거절한 쪽이 영구 무료
+     * 통과한다. 던져서 전이까지 되돌리면 결투가 PENDING으로 남고, 30초 타이머의
+     * expireDuel이 같은 금액을 무응답으로 물린다.
+     */
+    it('거절의 페널티가 FK 위반이 아닌 오류로 실패하면 전이까지 되돌린다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message: 'could not serialize access due to concurrent update',
+          code: '40001',
+        } as unknown as Error),
+      );
+
+      await expect(service.respondDuel(1, opponentId, false)).rejects.toThrow(
+        QueryFailedError,
+      );
+      // 세이브포인트는 정리하고 나간다 — 그래야 트랜잭션 롤백이 깨끗하다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'ROLLBACK TO SAVEPOINT duel_penalty_ledger',
+      );
+      // 커밋되지 않았으므로 보호막도 주지 않는다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 탈퇴(FK 위반)는 예상된 경로다 — 이건 여전히 건너뛰고 거절 자체는 성립시킨다.
+    it('상대가 탈퇴해 FK 위반이 나면 거절은 그대로 성립시킨다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message:
+            'insert or update on table "score_events" violates foreign key constraint',
+          code: '23503',
+        } as unknown as Error),
+      );
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duel.status).toBe(DuelStatus.REJECTED);
+      expect(duel.scoreDelta).toBeNull();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    it('락 해제가 실패해도 거절 자체는 성공시킨다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      redis.releaseLock.mockRejectedValue(new Error('redis down'));
+
+      await expect(
+        service.respondDuel(1, opponentId, false),
+      ).resolves.toMatchObject({ status: DuelStatus.REJECTED });
+    });
+
+    // 상대가 이미 탈퇴했으면 깎을 대상이 없다 — 그런데도 scoreDelta를 박으면
+    // 일어나지 않은 차감이 DB와 알림에 남는다.
+    it('깎을 대상이 없으면 scoreDelta를 남기지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      usersService.findById.mockResolvedValue(null);
+
+      const duel = await service.respondDuel(1, opponentId, false);
+
+      expect(duel.scoreDelta).toBeNull();
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
     });
   });
 
@@ -672,17 +951,239 @@ describe('DuelsService', () => {
     });
   });
 
+  describe('expireDuel (무응답 만료)', () => {
+    const buildPendingDuel = (): Duel =>
+      ({
+        id: 1,
+        challengerId: challenger.id,
+        opponentId,
+        status: DuelStatus.PENDING,
+      }) as Duel;
+
+    // inviteDeliveredAt이 채워진 행 = 초대가 상대 화면에 실제로 떴다 = 무응답 청구 대상.
+    const stubExpireUpdate = (
+      affected: number,
+      inviteDeliveredAt: Date | null = new Date('2026-01-01T00:00:00Z'),
+    ) => {
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(
+          affected,
+          affected > 0
+            ? [
+                {
+                  id: 1,
+                  challengerId: challenger.id,
+                  opponentId,
+                  inviteDeliveredAt,
+                },
+              ]
+            : [],
+        ),
+      );
+    };
+
+    it('무응답도 거절과 같은 금액을 응답하지 않은 쪽에서 깎는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+
+      const duel = await service.expireDuel(1);
+
+      expect(duel?.status).toBe(DuelStatus.EXPIRED);
+      expect(duel?.scoreDelta).toBe(DUEL_NO_RESPONSE_SCORE_PENALTY);
+      expect(DUEL_NO_RESPONSE_SCORE_PENALTY).toBe(DUEL_REJECT_SCORE_PENALTY);
+      expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
+        opponentId,
+        -DUEL_NO_RESPONSE_SCORE_PENALTY,
+        txManager,
+      );
+      expect(scoresService.record).toHaveBeenCalledWith(
+        txManager,
+        expect.objectContaining({
+          userId: opponentId,
+          type: ScoreEventType.DUEL_NO_RESPONSE,
+          teamPoints: 0,
+        }),
+      );
+    });
+
+    /**
+     * 보호막이 없으면 만료 직후 페어 락이 풀리고 활성 결투도 없어져, 같은 신청자가
+     * 30초마다 다시 걸 수 있다 — 비용 0으로 상대 점수만 시간당 240점씩 빨아낸다.
+     */
+    it('무응답으로 깎인 유저에게도 보호 기간을 준다 (반복 신청 파밍 차단)', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+
+      await service.expireDuel(1);
+
+      expect(redis.setDuelShield).toHaveBeenCalledWith(
+        opponentId,
+        DUEL_SHIELD_TTL,
+      );
+    });
+
+    // 거절과 같은 이유 — 만료 알림도 걸리지 않은 보호막을 걸렸다고 말하면 안 된다.
+    it('보호막 설정이 실패하면 만료 알림도 보호 기간을 안내하지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+      redis.setDuelShield.mockRejectedValue(new Error('redis down'));
+
+      const duel = await service.expireDuel(1);
+
+      expect(duel?.scoreDelta).toBe(DUEL_NO_RESPONSE_SCORE_PENALTY);
+      expect(duelPenaltyPayload(duel!).shieldUntil).toBeNull();
+    });
+
+    // rejectDuel과 같은 이유 — 단건이라 삼키면 EXPIRED만 남고 무응답이 공짜가 된다.
+    // 던지면 PENDING으로 남아 백스톱(sweepStaleDuels)이 다음 회차에 다시 물린다.
+    it('만료의 페널티가 FK 위반이 아닌 오류로 실패하면 전이까지 되돌린다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message: 'could not serialize access due to concurrent update',
+          code: '40001',
+        } as unknown as Error),
+      );
+
+      await expect(service.expireDuel(1)).rejects.toThrow(QueryFailedError);
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 팀 조회가 기본 리포지토리로 새면 트랜잭션이 커넥션을 쥔 채 두 번째를 잡아,
+    // 만료 타이머가 풀 크기만큼 동시에 발화하면 전원이 서로를 기다리다 멈춘다.
+    it('원장용 팀 조회를 트랜잭션 커넥션으로 한다 (커넥션 풀 데드락 차단)', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+
+      await service.expireDuel(1);
+
+      expect(usersService.findByIds).toHaveBeenCalledWith(
+        [opponentId],
+        txManager,
+      );
+    });
+
+    it('이미 처리된 결투는 점수도 보호막도 건드리지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(0);
+
+      await expect(service.expireDuel(1)).resolves.toBeNull();
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 상대가 이미 탈퇴했으면 깎을 대상이 없다 — 그런데도 scoreDelta를 박으면
+    // DB와 알림이 "아무도 아닌 사람이 2점 깎였다"고 주장하게 된다.
+    it('깎을 대상이 없으면 scoreDelta를 남기지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([]);
+
+      const duel = await service.expireDuel(1);
+
+      expect(duel?.status).toBe(DuelStatus.EXPIRED);
+      expect(duel?.scoreDelta).toBeNull();
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 원장 insert가 FK 위반으로 롤백되면 그 charge는 아무것도 반영되지 않은 것이다.
+     * 사라진 유저에 대한 applyScoreDelta는 0행 매칭이라 실제 차감도 없으므로,
+     * duels.scoreDelta나 보호막이 남으면 일어나지 않은 차감을 주장하게 된다.
+     */
+    it('원장 append가 FK 위반으로 롤백되면 차감을 주장하지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message:
+            'insert or update on table "score_events" violates foreign key constraint',
+          code: '23503',
+        } as unknown as Error),
+      );
+
+      const duel = await service.expireDuel(1);
+
+      expect(duel?.status).toBe(DuelStatus.EXPIRED);
+      expect(duel?.scoreDelta).toBeNull();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+      // scoreDelta 쓰기까지 되돌아가도록 세이브포인트가 charge 전체를 감싼다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'ROLLBACK TO SAVEPOINT duel_penalty_ledger',
+      );
+      // 롤백은 세이브포인트를 파괴하지 않는다 — 루프 누적을 막으려면 RELEASE가 따라야 한다.
+      expect(txManager.query).toHaveBeenCalledWith(
+        'RELEASE SAVEPOINT duel_penalty_ledger',
+      );
+    });
+
+    /**
+     * 상대가 접속해 있지 않아 duel:requested가 큐에만 쌓였다면 초대는 화면에 뜬 적이 없다.
+     * 받은 적 없는 초대에 "무응답"을 물릴 수는 없다 — 판단 근거는 만료 시점의 소켓 생존이
+     * 아니라 emit 시점에 찍힌 inviteDeliveredAt이다(감지 지연에 의존하지 않는다).
+     */
+    it('전달되지 않은 초대(inviteDeliveredAt=null)는 EXPIRED로만 넘기고 점수·원장·보호막을 건드리지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1, null);
+      usersService.findByIds.mockResolvedValue([
+        { id: opponentId, team: 'JP' },
+      ] as never);
+
+      const duel = await service.expireDuel(1);
+
+      expect(duel?.status).toBe(DuelStatus.EXPIRED);
+      expect(duel?.scoreDelta).toBeNull();
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(scoresService.record).not.toHaveBeenCalled();
+      // 보호막은 차감의 짝이다 — 깎지 않았으면 주지도 않는다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 만료는 이미 커밋됐다. 여기서 던지면 아무도 duel:expired를 못 보내 양쪽이 갇힌다.
+    it('락 해제가 실패해도 만료 결과를 돌려준다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      stubExpireUpdate(1);
+      redis.releaseLock.mockRejectedValue(new Error('redis down'));
+
+      await expect(service.expireDuel(1)).resolves.toMatchObject({
+        status: DuelStatus.EXPIRED,
+      });
+    });
+  });
+
   describe('sweepStaleDuels', () => {
     it('오래된 PENDING은 EXPIRED로, 오래된 ACCEPTED는 VOID로 전이하고 건수를 반환한다', async () => {
+      // PENDING 전이는 차감과 함께 트랜잭션 안에서 돈다 (txManager), VOID 전이는 밖이다.
       const pendingQb = createQueryBuilderMock(2);
       const acceptedQb = createQueryBuilderMock(3);
-      (duelRepo.createQueryBuilder as jest.Mock)
-        .mockReturnValueOnce(pendingQb)
-        .mockReturnValueOnce(acceptedQb);
+      txManager.createQueryBuilder.mockReturnValueOnce(pendingQb);
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        acceptedQb,
+      );
 
       const result = await service.sweepStaleDuels();
 
       expect(result).toEqual({ expiredPending: 2, voidedAccepted: 3 });
+      // scoreDelta는 전이 UPDATE가 아니라 실제 차감이 일어난 행에만 따로 찍힌다.
       expect(pendingQb.set).toHaveBeenCalledWith({
         status: DuelStatus.EXPIRED,
       });
@@ -707,9 +1208,12 @@ describe('DuelsService', () => {
     });
 
     it('방치된 결투가 없으면 0건을 반환한다', async () => {
-      (duelRepo.createQueryBuilder as jest.Mock)
-        .mockReturnValueOnce(createQueryBuilderMock(0))
-        .mockReturnValueOnce(createQueryBuilderMock(0));
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
 
       const result = await service.sweepStaleDuels();
 
@@ -720,30 +1224,319 @@ describe('DuelsService', () => {
       const notifier = jest.fn().mockResolvedValue(undefined);
       service.setNotifier(notifier);
 
+      // RETURNING은 차감 전 스냅샷이라 scoreDelta가 비어 있고, 차감이 실제로 적용된 뒤
+      // 서비스가 채워 넣는다 — user-b의 팀을 읽을 수 있어야 차감 대상이 된다.
       const expiredRow = {
         id: 7,
         challengerId: 'user-a',
         opponentId: 'user-b',
+        inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+        requestedAt: new Date('2026-01-01T00:00:00Z'),
       };
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+      ] as never);
       const voidedRow = { id: 8, challengerId: 'user-c', opponentId: 'user-d' };
-      (duelRepo.createQueryBuilder as jest.Mock)
-        .mockReturnValueOnce(createQueryBuilderMock(1, [expiredRow]))
-        .mockReturnValueOnce(createQueryBuilderMock(1, [voidedRow]));
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [expiredRow]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(1, [voidedRow]),
+      );
 
       await service.sweepStaleDuels();
 
-      expect(notifier).toHaveBeenCalledWith('user-a', 'duel:expired', {
+      // 무응답 만료 payload는 양쪽에 동일하고, 깎인 쪽만 penalizedUserId로 지목한다.
+      const expiredPayload = {
         duelId: 7,
-      });
+        scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
+        penalizedUserId: 'user-b',
+        // 큐잉되어도 낡지 않도록 남은 초가 아니라 절대 시각으로 나간다.
+        shieldUntil: expect.any(String) as unknown as string,
+      };
+      expect(notifier).toHaveBeenCalledWith(
+        'user-a',
+        'duel:expired',
+        expiredPayload,
+      );
+      expect(notifier).toHaveBeenCalledWith(
+        'user-b',
+        'duel:expired',
+        expiredPayload,
+      );
+      // VOID는 차감이 없다 — scoreDelta가 비어 penalizedUserId도 null이다.
+      const voidedPayload = {
+        duelId: 8,
+        scorePenalty: 0,
+        penalizedUserId: null,
+        shieldUntil: null,
+      };
+      expect(notifier).toHaveBeenCalledWith(
+        'user-c',
+        'duel:voided',
+        voidedPayload,
+      );
+      expect(notifier).toHaveBeenCalledWith(
+        'user-d',
+        'duel:voided',
+        voidedPayload,
+      );
+    });
+
+    /**
+     * 스윕은 한 회차에 여러 결투를 처리한다 — 보호막이 유저별로 따로 실패할 수 있으므로,
+     * 실패한 유저의 알림에서만 shieldUntil이 빠지고 나머지는 그대로 안내돼야 한다.
+     * (실패를 행 단위로 가르지 않고 회차 전체를 null로 만들면 정상 보호막까지 숨는다.)
+     */
+    it('스윕 알림은 보호막이 실패한 유저에게만 shieldUntil을 비운다', async () => {
+      const notifier = jest.fn().mockResolvedValue(undefined);
+      service.setNotifier(notifier);
+
+      const deliveredAt = new Date('2026-01-01T00:00:00Z');
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(2, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            inviteDeliveredAt: deliveredAt,
+            requestedAt: deliveredAt,
+          },
+          {
+            id: 9,
+            challengerId: 'user-e',
+            opponentId: 'user-f',
+            inviteDeliveredAt: deliveredAt,
+            requestedAt: deliveredAt,
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+        { id: 'user-f', team: 'KR' },
+      ] as never);
+      // user-b의 보호막만 실패시킨다.
+      redis.setDuelShield.mockImplementation((userId: string) =>
+        userId === 'user-b'
+          ? Promise.reject(new Error('redis down'))
+          : Promise.resolve(undefined),
+      );
+
+      await service.sweepStaleDuels();
+
+      // 차감은 두 건 다 커밋됐으므로 scorePenalty는 그대로 나간다.
       expect(notifier).toHaveBeenCalledWith('user-b', 'duel:expired', {
         duelId: 7,
+        scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
+        penalizedUserId: 'user-b',
+        shieldUntil: null,
       });
-      expect(notifier).toHaveBeenCalledWith('user-c', 'duel:voided', {
-        duelId: 8,
+      const shieldedPayload = {
+        duelId: 9,
+        scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
+        penalizedUserId: 'user-f',
+        shieldUntil: expect.any(String) as unknown as string,
+      };
+      expect(notifier).toHaveBeenCalledWith(
+        'user-f',
+        'duel:expired',
+        shieldedPayload,
+      );
+    });
+
+    it('무응답으로 만료된 신청은 응답하지 않은 쪽의 점수를 깎고 원장에 남긴다', async () => {
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            scoreDelta: 2,
+            inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+      ] as never);
+
+      await service.sweepStaleDuels();
+
+      expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
+        'user-b',
+        -DUEL_NO_RESPONSE_SCORE_PENALTY,
+        txManager,
+      );
+      // 신청자는 아무 손해가 없다 — 응답하지 않은 쪽만 문다.
+      expect(usersService.applyScoreDelta).toHaveBeenCalledTimes(1);
+      expect(scoresService.record).toHaveBeenCalledWith(
+        txManager,
+        expect.objectContaining({
+          userId: 'user-b',
+          type: ScoreEventType.DUEL_NO_RESPONSE,
+          personalPoints: -DUEL_NO_RESPONSE_SCORE_PENALTY,
+          teamPoints: 0,
+          duelId: 7,
+        }),
+      );
+    });
+
+    /**
+     * 스윕은 게이트웨이 타이머가 유실된 신청(서버 재시작 등)만 처리한다. 그 경로에는
+     * 소켓이 살아 있는지 물어볼 대상 자체가 없으므로, 전달 여부를 DB에 남겨두지 않으면
+     * "재시작 중에 끊겨 있던 유저"까지 무조건 청구하게 된다.
+     */
+    it('전달되지 않은 초대는 스윕에서도 EXPIRED로만 넘기고 청구하지 않는다', async () => {
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            inviteDeliveredAt: null,
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+      ] as never);
+
+      const result = await service.sweepStaleDuels();
+
+      expect(result.expiredPending).toBe(1);
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(scoresService.record).not.toHaveBeenCalled();
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 초대가 화면에 뜬 직후 서버가 재배포되면 상대의 소켓이 이전 프로세스와 함께 죽어
+     * 모달이 사라지고, duel:requested는 ephemeral이라 재접속해도 재생되지 않는다.
+     * 답할 방법이 구조적으로 없던 신청이므로 스윕이 청구하면 안 된다.
+     */
+    it('재시작을 사이에 둔 신청은 EXPIRED로만 넘기고 청구하지 않는다', async () => {
+      // 프로세스는 2026-01-01 00:10에 떴고, 신청은 그 10분 전에 들어왔다.
+      txManager.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.startsWith('SELECT')
+            ? [{ startedAt: new Date('2026-01-01T00:10:00Z') }]
+            : undefined,
+        ),
+      );
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            // 전달까지 됐지만 그 뒤 재시작으로 상대의 소켓이 죽었다.
+            inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      await expect(service.sweepStaleDuels()).resolves.toEqual({
+        expiredPending: 1,
+        voidedAccepted: 0,
       });
-      expect(notifier).toHaveBeenCalledWith('user-d', 'duel:voided', {
-        duelId: 8,
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(scoresService.record).not.toHaveBeenCalled();
+      // 보호막은 차감의 짝이다 — 깎지 않았으면 주지도 않는다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    // 반대쪽 — 부팅 이후 신청은 그대로 청구된다(가드가 전부를 막아버리면 안 된다).
+    it('프로세스가 뜬 뒤 들어온 신청은 그대로 청구한다', async () => {
+      txManager.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.startsWith('SELECT')
+            ? [{ startedAt: new Date('2026-01-01T00:00:00Z') }]
+            : undefined,
+        ),
+      );
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            inviteDeliveredAt: new Date('2026-01-01T00:10:00Z'),
+            requestedAt: new Date('2026-01-01T00:10:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+      ] as never);
+
+      await service.sweepStaleDuels();
+
+      expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
+        'user-b',
+        -DUEL_NO_RESPONSE_SCORE_PENALTY,
+        txManager,
+      );
+    });
+
+    /**
+     * 한 charge의 실패가 배치 전체를 되돌리면, 그 회차의 무관한 결투들까지 PENDING으로
+     * 되돌아가 다음 회차에 다시 걸린다. 장애로 백로그가 쌓이면 한 행이 배치를 계속 막는다.
+     * FK 위반(탈퇴)만이 아니라 어떤 오류든 그 charge 하나만 건너뛰어야 한다.
+     */
+    it('페널티 한 건이 FK 위반이 아닌 오류로 실패해도 나머지 상태 전이는 커밋한다', async () => {
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-b', team: 'JP' },
+      ] as never);
+      scoresService.record.mockRejectedValue(
+        new QueryFailedError('INSERT ...', [], {
+          name: 'error',
+          message: 'could not serialize access due to concurrent update',
+          code: '40001',
+        } as unknown as Error),
+      );
+
+      // 던지지 않고 전이 건수를 그대로 돌려준다.
+      await expect(service.sweepStaleDuels()).resolves.toEqual({
+        expiredPending: 1,
+        voidedAccepted: 0,
       });
+      expect(txManager.query).toHaveBeenCalledWith(
+        'ROLLBACK TO SAVEPOINT duel_penalty_ledger',
+      );
+      // 차감이 되돌아갔으므로 보호막도 주지 않는다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
     });
   });
 
@@ -838,11 +1631,19 @@ describe('DuelsService', () => {
         '8',
       );
 
+      // 탈퇴로 끝난 결투는 아무도 응답을 회피한 게 아니라 차감이 없다 — scoreDelta가
+      // 비어 있어 payload도 0/null로 나간다.
       expect(notifier).toHaveBeenCalledWith('user-b', 'duel:expired', {
         duelId: 7,
+        scorePenalty: 0,
+        penalizedUserId: null,
+        shieldUntil: null,
       });
       expect(notifier).toHaveBeenCalledWith('user-c', 'duel:voided', {
         duelId: 8,
+        scorePenalty: 0,
+        penalizedUserId: null,
+        shieldUntil: null,
       });
       // 탈퇴자에게는 보내지 않는다 — 큐는 곧 purgeUserKeys가 지운다.
       expect(notifier).not.toHaveBeenCalledWith(

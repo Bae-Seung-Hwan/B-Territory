@@ -160,6 +160,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
       duelsService as unknown as DuelsService,
       minigameService as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
     const error = jest
       .spyOn(gateway['logger'], 'error')
@@ -260,6 +262,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
         discardSession: jest.fn(),
       } as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
 
     await gateway.handleDuelAccept(mockSocket() as never, { duelId: duel.id });
@@ -299,6 +303,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
         }),
       } as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
 
     const result = await gateway.handleGameSubmit(mockSocket() as never, {
@@ -364,5 +370,127 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+/**
+ * 무응답 페널티는 "초대를 받고도 응답하지 않았다"에 대한 청구다.
+ *
+ * 그 전제는 **emit 시점에** 확정된다 — duel:requested가 살아 있는 소켓으로 나갔으면
+ * 초대는 화면에 떴고, 큐로 갔으면 뜬 적이 없다. 예전에는 만료 시점(T+30s)에 소켓 생존을
+ * 다시 읽어 판단했는데, 끊김은 ping timeout만큼 늦게 드러나므로 창 후반부의 단절을
+ * 놓쳤고 타이머가 유실되면 확인할 방법조차 없었다. 이제 게이트웨이는 전달 여부만
+ * 기록하고(markInviteDelivered), 청구 판단은 DB 값을 보는 expireDuel이 한다.
+ */
+describe('duel:requested 전달 기록', () => {
+  const duelId = 11;
+  const targetUserId = 'user-2';
+
+  function make(opponentSocket: { connected: boolean } | undefined) {
+    const socket = opponentSocket && { ...opponentSocket, emit: jest.fn() };
+    const queueNotification = jest.fn().mockResolvedValue(undefined);
+    const markInviteDelivered = jest.fn().mockResolvedValue(undefined);
+    const requestDuel = jest.fn().mockResolvedValue({ id: duelId });
+    const gateway = new RealtimeGateway(
+      {} as unknown as FirebaseService,
+      {} as unknown as UsersService,
+      {
+        getUserMeta: jest.fn().mockResolvedValue({
+          team: 'JP',
+          socketId: 'sock-opponent',
+        }),
+        queueNotification,
+      } as unknown as RedisService,
+      {
+        setNotifier: jest.fn(),
+        requestDuel,
+        markInviteDelivered,
+      } as unknown as DuelsService,
+      { start: jest.fn(), discardSession: jest.fn() } as never,
+      { record: jest.fn() } as never,
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
+    );
+    gateway.server = {
+      sockets: new Map(socket ? [['sock-opponent', socket]] : []),
+    } as never;
+    const client = {
+      data: { user: { id: 'user-1', team: 'KR', nickname: 'me' } },
+    } as never;
+    return { gateway, client, markInviteDelivered, queueNotification, socket };
+  }
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('살아 있는 소켓으로 초대가 나가면 전달로 기록한다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered, socket } = make({
+      connected: true,
+    });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(socket!.emit).toHaveBeenCalledWith(
+      'duel:requested',
+      expect.objectContaining({ duelId }),
+    );
+    expect(markInviteDelivered).toHaveBeenCalledWith(duelId);
+  });
+
+  // 메타 TTL(120초)이 남아 있어 신청 자체는 통과했지만, 정작 소켓은 사라진 케이스다.
+  it('상대 소켓이 사라지면 전달로 기록하지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered } = make(undefined);
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+  });
+
+  // ping 타임아웃 전이라 Map에는 남아 있지만 connected가 내려간 소켓.
+  it('소켓이 남아 있어도 connected가 아니면 전달로 기록하지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered } = make({ connected: false });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 초대는 30초(DUEL_REQUEST_TTL)짜리인데 알림 큐는 30분(NOTIFICATION_QUEUE_TTL)을 보관한다.
+   * 큐에 넣으면 20분 뒤 접속한 유저가 이미 EXPIRED된 결투의 초대 모달을 받고, 곧이어
+   * 재생되는 duel:expired에 그 모달이 사라진다.
+   */
+  it('전달하지 못한 초대는 큐에 쌓지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, queueNotification } = make(undefined);
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(queueNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * markInviteDelivered는 실패해도 삼키는 부수적 쓰기다 — 그걸 await한 뒤에 타이머를 걸면
+   * DB가 느린 만큼 만료가 30초보다 늦게 발화한다(startGameRound가 같은 이유로 emit보다
+   * 타이머를 먼저 건다).
+   */
+  it('만료 타이머를 전달 기록보다 먼저 건다', async () => {
+    jest.useFakeTimers();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const { gateway, client, markInviteDelivered } = make({ connected: true });
+    let timerArmedWhenMarked: boolean | null = null;
+    markInviteDelivered.mockImplementation(() => {
+      timerArmedWhenMarked = setTimeoutSpy.mock.calls.length > 0;
+      return Promise.resolve();
+    });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(markInviteDelivered).toHaveBeenCalled();
+    expect(timerArmedWhenMarked).toBe(true);
+    setTimeoutSpy.mockRestore();
   });
 });

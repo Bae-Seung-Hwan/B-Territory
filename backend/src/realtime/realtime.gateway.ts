@@ -22,10 +22,18 @@ import {
   wsValidationPipe,
 } from '../common/ws/ws-auth';
 import {
+  SOCKET_PING_INTERVAL_MS,
+  SOCKET_PING_TIMEOUT_MS,
+} from '../common/ws/socket-options';
+import {
   userRoomOf,
   WsSessionsService,
 } from '../common/ws/ws-sessions.service';
-import { DuelsService } from '../duels/duels.service';
+import {
+  DuelsService,
+  duelPenaltyPayload,
+  duelVoidPayload,
+} from '../duels/duels.service';
 import { LocationUpdateDto } from '../duels/dto/location-update.dto';
 import { DuelRequestDto } from '../duels/dto/duel-request.dto';
 import { DuelRespondDto } from '../duels/dto/duel-respond.dto';
@@ -52,7 +60,12 @@ import { LocationLogsService } from '../location-logs/location-logs.service';
 import { LocationServiceCode } from '../location-logs/constants';
 
 @UseFilters(WsExceptionsFilter)
-@WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
+@WebSocketGateway({
+  namespace: '/realtime',
+  cors: { origin: '*' },
+  pingInterval: SOCKET_PING_INTERVAL_MS,
+  pingTimeout: SOCKET_PING_TIMEOUT_MS,
+})
 export class RealtimeGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
@@ -73,9 +86,10 @@ export class RealtimeGateway
     private readonly sessions: WsSessionsService,
   ) {
     // 정리 잡(duel-cleanup)이 스윕한 결투의 참가자에게 알림을 보낼 수 있도록 콜백 주입
-    this.duelsService.setNotifier((userId, event, payload) =>
-      this.notifyUser(userId, event, payload),
-    );
+    // 스윕 알림은 전달 여부를 쓰지 않는다 — 큐잉만 돼도 재접속 때 재생되면 충분하다.
+    this.duelsService.setNotifier(async (userId, event, payload) => {
+      await this.notifyUser(userId, event, payload);
+    });
   }
 
   /**
@@ -83,35 +97,58 @@ export class RealtimeGateway
    * 순간적 재접속 등) Redis 큐에 쌓아둔다 — DB에는 이미 반영된 결투 상태/점수를 클라이언트가
    * 영영 못 받는 일이 없도록, 다음 접속 시 drainNotifications로 재생한다.
    */
+  /**
+   * 메타의 socketId가 가리키는 소켓이 실제로 살아있을 때만 돌려준다.
+   *
+   * 네트워크 단절 후 ping 타임아웃으로 disconnect가 발화하기 전까지 메타는 죽은 소켓을
+   * 가리킨다. 이 확인 없이 emit하면 알림이 큐잉조차 되지 않고 소실된다.
+   *
+   * **단일 인스턴스 전제다.** 이 인스턴스의 `server.sockets`만 보므로, 다른 프로세스에
+   * 붙은 유저는 "미접속"으로 읽혀 알림이 큐로 간다(그리고 결투 초대는 전달되지 않은 것으로
+   * 기록돼 무응답 청구 대상에서 빠진다). 알림 유실은 아니지만 — 접속 중인 유저는 큐를
+   * 드레인하지 않으므로 — 실시간성이 사라진다. 스케일아웃하려면 socket.io Redis adapter를
+   * 먼저 붙여야 하고, 그 전까지 결투/알림 경로는 인스턴스 1개를 전제로 한다.
+   */
+  private async getLiveSocket(userId: string): Promise<Socket | undefined> {
+    const meta = await this.redis.getUserMeta(userId);
+    const socket = meta ? this.server.sockets.get(meta.socketId) : undefined;
+    return socket?.connected ? socket : undefined;
+  }
+
   private async notifyUser(
     userId: string,
     event: string,
     payload: unknown,
     /**
-     * 라운드가 살아 있는 동안에만 의미가 있는 이벤트(game:start·game:go)는 큐에 넣지
-     * 않는다. 큐 보관은 30분(NOTIFICATION_QUEUE_TTL = PENALTY_TTL)인데 라운드는 45초라,
-     * 수락 시점에 잠깐 끊겼던 참가자가 한참 뒤 재접속해서 이미 지난 deadlineAt을 가진
-     * game:start를 재생받고 끝난 결투의 게임 화면을 연다. 못 받으면 미제출로 기권패인데,
-     * 그건 원래 정의된 결과다.
+     * 수명이 짧아 큐에 넣으면 안 되는 이벤트를 위한 플래그. 큐 보관은 30분
+     * (NOTIFICATION_QUEUE_TTL = PENALTY_TTL)이라, 그보다 훨씬 빨리 의미를 잃는 이벤트를
+     * 큐잉하면 한참 뒤 재접속한 클라이언트가 이미 끝난 일에 대한 화면을 연다.
+     *
+     * - game:start·game:go — 라운드가 45초다. 수락 시점에 잠깐 끊겼던 참가자가 한참 뒤
+     *   재접속해 이미 지난 deadlineAt을 가진 game:start를 재생받고 끝난 결투의 게임 화면을
+     *   연다. 못 받으면 미제출로 기권패인데, 그건 원래 정의된 결과다.
+     * - duel:requested — 초대가 30초(DUEL_REQUEST_TTL)라 격차가 가장 크다. 큐잉하면 20분 뒤
+     *   접속한 유저가 이미 EXPIRED된 결투의 초대 모달을 받고, 곧이어 재생되는 duel:expired에
+     *   그 모달이 사라진다. 큐잉하지 않으면 "전달 안 됨 = 큐잉 안 함 = 무응답으로 청구하지
+     *   않음"이 한 줄로 맞아떨어진다(duel.entity.ts#inviteDeliveredAt).
      */
     ephemeral = false,
-  ): Promise<void> {
-    // 메타의 socketId가 살아있는 소켓인지 확인한다 — 네트워크 단절 후 ping 타임아웃으로
-    // disconnect가 발화하기 전까지 메타는 죽은 소켓을 가리키므로, 무조건 emit하면
-    // 알림이 큐잉조차 되지 않고 소실된다. (단일 인스턴스 전제 — 스케일아웃 시 어댑터 필요)
-    const meta = await this.redis.getUserMeta(userId);
-    const socket = meta ? this.server.sockets.get(meta.socketId) : undefined;
-    if (socket?.connected) {
+  ): Promise<boolean> {
+    const socket = await this.getLiveSocket(userId);
+    if (socket) {
       socket.emit(event, payload);
-      return;
+      return true;
     }
-    if (ephemeral) return;
+    if (ephemeral) return false;
     await this.redis.queueNotification(
       userId,
       event,
       payload,
       NOTIFICATION_QUEUE_TTL,
     );
+    // 큐잉은 "지금 화면에 뜨지 않았다"는 뜻이다. 결투 초대처럼 전달 여부가 과금을 가르는
+    // 이벤트가 이 값을 본다(handleDuelRequest).
+    return false;
   }
 
   /**
@@ -247,15 +284,34 @@ export class RealtimeGateway
     const user = getSocketUser(client);
     const duel = await this.duelsService.requestDuel(user, dto.targetUserId);
 
-    await this.notifyUser(dto.targetUserId, 'duel:requested', {
-      duelId: duel.id,
-      fromUserId: user.id,
-      fromNickname: user.nickname,
-    });
+    // 초대가 상대의 살아 있는 소켓으로 실제 나갔는지를 여기서 확정해 기록한다. 무응답
+    // 페널티는 이 기록에만 근거한다 — 만료 시점에 소켓 생존을 다시 확인하는 방식은 끊김이
+    // ping timeout만큼 늦게 드러나 창 후반부의 단절을 놓쳤고(만료가 30초인데 감지는 최대
+    // 20초 지연), 서버 재시작으로 타이머가 유실된 신청은 확인할 방법조차 없었다.
+    //
+    // 이 판단도 socket.connected를 읽으므로 감지 지연 자체가 사라진 것은 아니다 — 창의
+    // 끝(30초 내내)에서 신청 시점 한 순간으로 좁아졌을 뿐이다. 남은 구멍과 그것을 닫는
+    // 방법(클라이언트 렌더 ack)은 socket-options.ts 주석에 정리해 두었다.
+    const delivered = await this.notifyUser(
+      dto.targetUserId,
+      'duel:requested',
+      {
+        duelId: duel.id,
+        fromUserId: user.id,
+        fromNickname: user.nickname,
+      },
+      // 초대는 30초짜리라 큐에 넣지 않는다 (notifyUser의 ephemeral 주석 참고).
+      true,
+    );
 
+    // 타이머를 전달 기록보다 **먼저** 건다. markInviteDelivered는 실패해도 삼키는 부수적
+    // 쓰기인데 그걸 await한 뒤에 타이머를 걸면, DB가 느린 만큼 만료가 30초보다 늦게
+    // 발화한다. startGameRound가 같은 이유로 emit보다 타이머를 먼저 건다.
     setTimeout(() => {
       void this.expireAndNotify(duel.id, user.id, dto.targetUserId);
     }, DUEL_REQUEST_TTL * 1000);
+
+    if (delivered) await this.duelsService.markInviteDelivered(duel.id);
 
     return { status: 'ok', duelId: duel.id };
   }
@@ -268,9 +324,15 @@ export class RealtimeGateway
     opponentId: string,
   ): Promise<void> {
     try {
+      // 청구 여부는 여기서 판단하지 않는다 — 초대가 실제로 전달됐는지는 emit 시점에 이미
+      // 확정돼 duels.inviteDeliveredAt에 기록돼 있고, expireDuel이 그것만 보고 가른다.
+      // (만료 시점에 소켓 생존을 다시 읽던 이전 방식은 두 가지가 어긋났다: 끊김이 ping
+      // timeout만큼 늦게 드러나 30초 창의 후반부를 못 덮었고, 이 조회가 Redis 오류로
+      // 실패하면 만료 자체가 스킵돼 결국 스윕이 무조건 청구했다.)
       const expired = await this.duelsService.expireDuel(duelId);
       if (!expired) return;
-      const payload = { duelId };
+      // 무응답도 거절과 같은 금액이 깎인다 — 응답하지 않은 쪽(opponentId)이 대상이다.
+      const payload = duelPenaltyPayload(expired);
       await Promise.all([
         this.notifyUser(challengerId, 'duel:expired', payload),
         this.notifyUser(opponentId, 'duel:expired', payload),
@@ -301,7 +363,12 @@ export class RealtimeGateway
     const duel = await this.duelsService.respondDuel(duelId, user.id, accept);
 
     const event = accept ? 'duel:accepted' : 'duel:rejected';
-    const payload = { duelId: duel.id };
+    // 거절 payload는 양쪽에 동일하다 — 누가 점수를 깎이고 보호막을 얻었는지는
+    // penalizedUserId로 실어보내고 클라이언트가 자기 id와 비교한다(duelPenaltyPayload 주석).
+    // shieldUntil은 클라이언트 타이머용 안내값이고, 재신청 가능 여부 판정은 언제나
+    // requestDuel이 Redis를 다시 읽어 내린다. 그래도 보호막 설정이 실패했으면 null로
+    // 나간다 — 안내와 실제 판정이 어긋나면 "30분간 안전하다"를 믿은 쪽이 곧바로 다시 걸린다.
+    const payload = accept ? { duelId: duel.id } : duelPenaltyPayload(duel);
     client.emit(event, payload);
     await this.notifyUser(duel.challengerId, event, payload);
 
@@ -347,9 +414,11 @@ export class RealtimeGateway
       // 세션을 남기면 이미 걸린 go 타이머가 VOID된 결투에 game:go를 쏜다.
       await this.minigameService.discardSession(participants.id);
       await this.duelsService.voidByGame(participants.id);
-      await this.emitToBoth(participants, 'duel:voided', {
-        duelId: participants.id,
-      });
+      await this.emitToBoth(
+        participants,
+        'duel:voided',
+        duelVoidPayload(participants.id),
+      );
     } catch (err) {
       this.logger.error(
         `미니게임 시작 실패 후 무효 처리도 실패 duelId=${participants.id} — 스윕에 맡긴다`,
@@ -539,7 +608,7 @@ export class RealtimeGateway
     }
 
     await this.emitToBoth(participants, 'duel:voided', {
-      duelId: participants.id,
+      ...duelVoidPayload(participants.id),
       scores: outcome.scores,
     });
   }
