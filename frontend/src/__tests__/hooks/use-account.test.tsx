@@ -3,7 +3,11 @@ import { renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
-import { useDeleteAccountMutation, isDeleteAccountSessionDead } from '@/hooks/use-account';
+import {
+  useDeleteAccountMutation,
+  isDeleteAccountSessionDead,
+  isDeleteAccountTimeout,
+} from '@/hooks/use-account';
 import * as accountApi from '@/api/account';
 
 jest.mock('@/api/account', () => ({ deleteAccount: jest.fn() }));
@@ -46,6 +50,16 @@ describe('isDeleteAccountSessionDead', () => {
   });
 });
 
+describe('isDeleteAccountTimeout', () => {
+  it('타임아웃(ECONNABORTED)은 true를 반환한다 — 실제 삭제 여부가 불확실하다', () => {
+    expect(isDeleteAccountTimeout({ isAxiosError: true, code: 'ECONNABORTED' })).toBe(true);
+  });
+
+  it('401은 확정된 세션 사망이라 타임아웃으로 보지 않는다', () => {
+    expect(isDeleteAccountTimeout({ isAxiosError: true, response: { status: 401 } })).toBe(false);
+  });
+});
+
 describe('useDeleteAccountMutation', () => {
   let queryClient: QueryClient;
   let replace: jest.Mock;
@@ -80,19 +94,28 @@ describe('useDeleteAccountMutation', () => {
     },
   );
 
-  it('signOut이 실패해도 로그인 화면 이동은 반드시 실행된다', async () => {
-    (accountApi.deleteAccount as jest.Mock).mockResolvedValue(undefined);
-    mockedSignOut.mockRejectedValue(new Error('local signOut failed'));
-    queryClient = createQueryClient();
+  it(
+    'signOut이 실패해도 로그인 화면 이동은 반드시 실행되고, 탈퇴 자체는 성공으로 ' +
+      '남는다 — signOut 실패를 삼키지 않으면 이미 삭제된 계정에 "탈퇴 실패" 알림이 ' +
+      '뜬다 (2차 리뷰 지적 1번)',
+    async () => {
+      (accountApi.deleteAccount as jest.Mock).mockResolvedValue(undefined);
+      mockedSignOut.mockRejectedValue(new Error('local signOut failed'));
+      queryClient = createQueryClient();
 
-    const { result } = await renderHook(() => useDeleteAccountMutation(), {
-      wrapper: createWrapper(queryClient),
-    });
+      const { result } = await renderHook(() => useDeleteAccountMutation(), {
+        wrapper: createWrapper(queryClient),
+      });
 
-    result.current.mutate();
+      const onError = jest.fn();
+      result.current.mutate(undefined, { onError });
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith('/(auth)/login'));
-  });
+      await waitFor(() => expect(replace).toHaveBeenCalledWith('/(auth)/login'));
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(result.current.isError).toBe(false);
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
 
   it(
     '401로 실패하면(계정이 이미 삭제된 뒤의 요청) 세션이 죽은 것으로 보고 signOut + ' +

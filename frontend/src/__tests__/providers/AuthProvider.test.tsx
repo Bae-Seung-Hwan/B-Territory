@@ -19,7 +19,9 @@ jest.mock('firebase/auth', () => ({
   }),
 }));
 jest.mock('@/lib/firebase', () => ({ auth: {} }));
-jest.mock('@/lib/visit-checkin', () => ({ clearAllVisitCheckins: jest.fn() }));
+jest.mock('@/lib/visit-checkin', () => ({
+  clearAllVisitCheckins: jest.fn().mockResolvedValue(undefined),
+}));
 
 const mockedClearAllVisitCheckins = clearAllVisitCheckins as jest.Mock;
 
