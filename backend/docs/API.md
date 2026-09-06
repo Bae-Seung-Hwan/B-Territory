@@ -387,3 +387,24 @@ curl http://localhost:3000/api/spots/930
 | 상황 | code | 메시지 |
 |---|---|---|
 | 상대가 보호 기간 중 | `DUEL_TARGET_SHIELDED` | `상대가 결투 거절 보호 중입니다. (약 N분 후 해제)` |
+
+**`encounter:detected` payload (필드 추가)**
+
+```json
+{
+  "userId": "…",
+  "nickname": "…",
+  "team": "KR",
+  "shieldUntil": "2026-08-27T02:41:07.000Z"
+}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `shieldUntil` | 이 `userId`가 보호 기간 중이면 끝나는 **절대 시각**(ISO), 아니면 `null` |
+
+> 값이 있으면 결투 신청 버튼을 잠가두세요. 열어두면 보호막이 풀릴 때까지 `duel:request`가
+> 계속 `DUEL_TARGET_SHIELDED`로 실패합니다. 보호 중이라고 조우 알림 자체를 빼지는 않습니다 —
+> 같은 쌍의 조우 쿨다운(60초)이 이미 소모된 뒤라, 여기서 빼면 보호막이 풀린 뒤에도 한동안
+> 조우가 다시 뜨지 않기 때문입니다. `duel:rejected`의 `shieldUntil`과 마찬가지로 **UI 힌트**일
+> 뿐이고, 실제 판정은 `duel:request` 시점에 서버가 다시 내립니다.

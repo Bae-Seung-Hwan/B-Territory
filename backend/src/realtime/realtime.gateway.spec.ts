@@ -494,3 +494,108 @@ describe('duel:requested 전달 기록', () => {
     setTimeoutSpy.mockRestore();
   });
 });
+
+/**
+ * 보호막이 걸린 유저에게는 requestDuel이 DUEL_TARGET_SHIELDED로 막는다. 조우 payload가
+ * 그 사실을 싣지 않으면 클라이언트는 30분 내내 실패할 신청 버튼을 열어둔 채 왕복만 한다.
+ */
+describe('RealtimeGateway 조우 알림의 보호막 안내', () => {
+  const me = { id: 'user-1', team: 'KR', nickname: '나' };
+  const opponentId = 'user-2';
+
+  function make(shieldTtlByUser: Record<string, number>) {
+    const queueNotification = jest.fn().mockResolvedValue(undefined);
+    const gateway = new RealtimeGateway(
+      {} as unknown as FirebaseService,
+      {
+        findByIds: jest
+          .fn()
+          .mockResolvedValue([{ id: opponentId, nickname: '상대' }]),
+      } as unknown as UsersService,
+      {
+        geoAdd: jest.fn().mockResolvedValue(undefined),
+        // 쿨다운을 처음 잡는 상황 = 새 조우로 알림이 나가는 경로.
+        tryAcquireLock: jest.fn().mockResolvedValue(true),
+        getDuelShieldTtl: jest
+          .fn()
+          .mockImplementation((id: string) =>
+            Promise.resolve(shieldTtlByUser[id] ?? 0),
+          ),
+        // 상대 소켓을 못 찾게 두면 payload가 큐로 흘러 그대로 확인할 수 있다.
+        getUserMeta: jest.fn().mockResolvedValue(null),
+        queueNotification,
+      } as unknown as RedisService,
+      {
+        setNotifier: jest.fn(),
+        findNearbyOpponents: jest
+          .fn()
+          .mockResolvedValue([{ userId: opponentId, team: 'JP' }]),
+      } as unknown as DuelsService,
+      {} as never,
+      { record: jest.fn() } as never,
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
+    );
+    const client = { ...mockSocket(), data: { user: me } };
+    return { gateway, client, queueNotification };
+  }
+
+  const update = (gateway: RealtimeGateway, client: unknown) =>
+    gateway.handleLocationUpdate(client as never, {
+      lat: 37.5,
+      lng: 127,
+    });
+
+  interface EncounterPayload {
+    userId: string;
+    shieldUntil: string | null;
+  }
+
+  /** 내 화면으로 나간 조우 payload (client.emit(event, payload)). */
+  const emitted = (client: MockSocket): EncounterPayload =>
+    (client.emit.mock.calls as unknown[][]).find(
+      (call) => call[0] === 'encounter:detected',
+    )?.[1] as EncounterPayload;
+
+  /** 상대에게 나간 조우 payload (queueNotification(userId, event, payload, ttl)). */
+  const queued = (queueNotification: jest.Mock): EncounterPayload =>
+    (queueNotification.mock.calls as unknown[][]).find(
+      (call) => call[1] === 'encounter:detected',
+    )?.[2] as EncounterPayload;
+
+  it('보호 중인 상대의 조우에는 shieldUntil을 실어보낸다', async () => {
+    const { gateway, client } = make({ [opponentId]: 600 });
+
+    await update(gateway, client);
+
+    const payload = emitted(client);
+    expect(payload.userId).toBe(opponentId);
+    // 남은 초가 아니라 절대 시각이어야 한다(duelPenaltyPayload와 같은 표현).
+    expect(Date.parse(payload.shieldUntil as string)).toBeGreaterThan(
+      Date.now(),
+    );
+  });
+
+  // 상대에게 가는 payload의 주체는 나다 — 여기에 상대의 보호막을 실으면 "못 건다"의
+  // 대상이 뒤바뀐다.
+  it('상대에게 보내는 조우에는 내 보호막을 싣는다', async () => {
+    const { gateway, client, queueNotification } = make({ [me.id]: 600 });
+
+    await update(gateway, client);
+
+    const toOpponent = queued(queueNotification);
+    expect(toOpponent.userId).toBe(me.id);
+    expect(Date.parse(toOpponent.shieldUntil as string)).toBeGreaterThan(
+      Date.now(),
+    );
+    // 상대는 보호 중이 아니므로 내 화면의 신청 버튼은 열려 있어야 한다.
+    expect(emitted(client).shieldUntil).toBeNull();
+  });
+
+  it('보호막이 없으면 null로 나간다', async () => {
+    const { gateway, client } = make({});
+
+    await update(gateway, client);
+
+    expect(emitted(client).shieldUntil).toBeNull();
+  });
+});

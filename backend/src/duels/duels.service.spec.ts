@@ -22,6 +22,7 @@ import {
   DUEL_REJECT_SCORE_PENALTY,
   DUEL_SHIELD_TTL,
   DUEL_RESULT_TTL,
+  DUEL_SWEEP_BATCH,
   DUEL_SWEEP_GRACE,
 } from './constants';
 
@@ -1086,6 +1087,18 @@ describe('DuelsService', () => {
       expect(redis.setDuelShield).not.toHaveBeenCalled();
     });
 
+    // 이 타이머는 모든 신청에 걸려 수락·거절된 건에도 발화한다. 조건부 UPDATE가 어차피
+    // 걸러내지만, 트랜잭션을 열고 나서 거르면 만료 타이머가 몰릴 때 커넥션 풀만 축낸다.
+    it('이미 끝난 결투에는 트랜잭션조차 열지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue({
+        ...buildPendingDuel(),
+        status: DuelStatus.ACCEPTED,
+      });
+
+      await expect(service.expireDuel(1)).resolves.toBeNull();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
     // 상대가 이미 탈퇴했으면 깎을 대상이 없다 — 그런데도 scoreDelta를 박으면
     // DB와 알림이 "아무도 아닌 사람이 2점 깎였다"고 주장하게 된다.
     it('깎을 대상이 없으면 scoreDelta를 남기지 않는다', async () => {
@@ -1190,6 +1203,12 @@ describe('DuelsService', () => {
       expect(pendingQb.where).toHaveBeenCalledWith(
         expect.stringContaining('requestedAt'),
         expect.objectContaining({ pending: DuelStatus.PENDING }),
+      );
+      // 대상 행을 서브쿼리에서 먼저 잠그고 건수를 제한해야 한다. SKIP LOCKED가 빠지면
+      // duels→users 순으로 잠그는 이 트랜잭션과 단건 종료 경로 사이에 데드락이 생긴다.
+      expect(pendingQb.where).toHaveBeenCalledWith(
+        expect.stringContaining('FOR UPDATE SKIP LOCKED'),
+        expect.objectContaining({ batch: DUEL_SWEEP_BATCH }),
       );
       expect(acceptedQb.set).toHaveBeenCalledWith(
         expect.objectContaining({ status: DuelStatus.VOID }),
@@ -1458,6 +1477,30 @@ describe('DuelsService', () => {
       expect(scoresService.record).not.toHaveBeenCalled();
       // 보호막은 차감의 짝이다 — 깎지 않았으면 주지도 않는다.
       expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 위 가드는 startedAt과 requestedAt을 JS에서 비교하는데, requestedAt은 timestamp
+     * **without** time zone이라 node-postgres가 앱 로컬 타임존으로 해석한다. 캐스팅 없이
+     * now()를 받으면 timestamptz(절대시각)로 와서, 앱과 DB의 타임존이 다를 때 두 Date의
+     * 기준이 달라져 가드가 통째로 어긋난다(KST 앱 + UTC DB면 부팅 후 9시간 동안 무응답
+     * 페널티가 아예 안 걸린다). 목이 진짜 Date를 돌려주는 유닛 테스트로는 그 어긋남을
+     * 재현할 수 없으므로, 표현형을 맞추는 캐스팅이 쿼리에 남아 있는지를 직접 고정한다.
+     */
+    it('부팅 시각을 requestedAt과 같은 표현형(timestamp)으로 받는다', async () => {
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      await service.sweepStaleDuels();
+
+      expect(txManager.query).toHaveBeenCalledWith(
+        expect.stringContaining('::timestamp'),
+        [expect.any(Number)],
+      );
     });
 
     // 반대쪽 — 부팅 이후 신청은 그대로 청구된다(가드가 전부를 막아버리면 안 된다).

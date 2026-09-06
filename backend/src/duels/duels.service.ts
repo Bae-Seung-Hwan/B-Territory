@@ -25,6 +25,7 @@ import {
   DUEL_SHIELD_TTL,
   DUEL_REQUEST_TTL,
   DUEL_RESULT_TTL,
+  DUEL_SWEEP_BATCH,
   DUEL_SWEEP_GRACE,
   ENCOUNTER_RADIUS_M,
   PENALTY_TTL,
@@ -755,6 +756,10 @@ export class DuelsService {
    * 게이트웨이 타이머 경로(expireDuel)는 `null`을 넘긴다 — 그 타이머는 신청을 받은 바로 그
    * 프로세스의 메모리에 있으므로, 발화했다는 것 자체가 재시작이 없었다는 뜻이다.
    *
+   * `answerableSince`는 반드시 `requestedAt`과 **같은 표현형**(timestamp without time
+   * zone)으로 읽어와야 한다. 여기서 두 Date를 직접 비교하는데, 표현형이 다르면 앱과 DB의
+   * 타임존 차이만큼 한쪽만 밀려 이 판정이 통째로 뒤집힌다(sweepStaleDuels의 ::timestamp 주석).
+   *
    * 팀은 원장에 남길 "이벤트 시점의 팀"이다. 이 조회는 상태 전이 CAS와 **같은 트랜잭션**
    * 안에서 일어나므로 manager를 반드시 넘긴다 — 기본 리포지토리로 읽으면 트랜잭션이
    * 커넥션을 쥔 채 풀에서 두 번째 커넥션을 잡아, 만료 타이머가 풀 크기만큼 동시에
@@ -894,6 +899,12 @@ export class DuelsService {
   async expireDuel(duelId: number): Promise<PenalizedDuel | null> {
     const duel = await this.duelRepo.findOne({ where: { id: duelId } });
     if (!duel) return null;
+    // 이 타이머는 모든 신청에 걸리므로 2초 만에 수락·거절된 건에도 발화한다. 아래 조건부
+    // UPDATE가 어차피 affected=0으로 걸러내지만, 그러려면 커넥션을 잡고 BEGIN~COMMIT을
+    // 도는 비용을 이미 치른 뒤다. status는 방금 읽은 행에 이미 있으니 여기서 끊는다 —
+    // 만료 타이머가 한꺼번에 발화할 때 풀이 마르는 걸 걱정한 경로다(findByIds 주석).
+    // 아래 CAS가 졌을 때와 반환값(null)이 같아 호출자 입장에서 달라지는 건 없다.
+    if (duel.status !== DuelStatus.PENDING) return null;
 
     // 무응답도 거절과 같은 금액을 깎는다 — 그렇지 않으면 "무시가 더 싸다"가 되어
     // 거절 페널티를 회피하는 지배 전략이 생긴다(constants.ts 참고). 보호 기간도 거절과
@@ -1352,6 +1363,10 @@ export class DuelsService {
    * 각 컷오프는 해당 락 TTL + 여유(grace)보다 뒤이므로, 이 시점에 Redis 페어 락은 이미
    * 자연 만료되어 별도 락 해제가 필요 없다. 상태 전이는 respondDuel/resolveDuel과 동일한
    * 조건부 UPDATE라 진행 중인 정상 처리와 경합해도 한쪽만 반영된다.
+   *
+   * PENDING 전이는 한 회차에 DUEL_SWEEP_BATCH건까지만 처리한다. 따라서 반환하는
+   * expiredPending은 "밀린 총량"이 아니라 이번 회차 처리량이며, 남은 건은 컷오프가 시간
+   * 기준이라 다음 회차가 그대로 이어받는다.
    */
   async sweepStaleDuels(): Promise<{
     expiredPending: number;
@@ -1372,20 +1387,40 @@ export class DuelsService {
       // 경과 초라 타임존이 없어, 앱과 DB의 타임존이 달라도 어긋나지 않는다 (위 컷오프가
       // now()를 쓰는 것과 같은 이유). 내림해서 컷오프를 조금 늦게 잡는다 — 경계에서는
       // 청구하지 않는 쪽으로 넘어지는 게 맞다.
+      //
+      // ::timestamp 캐스팅이 반드시 필요하다. 이 값은 JS에서 requestedAt과 비교되는데
+      // (buildNoResponseCharges), requestedAt은 timestamp **without** time zone이라
+      // node-postgres가 앱 프로세스의 로컬 타임존으로 해석한다. 캐스팅 없이 now()를 그대로
+      // 두면 timestamptz(절대시각)로 와서, 앱과 DB의 타임존이 다를 때 두 Date가 서로 다른
+      // 기준으로 만들어져 오프셋만큼 통째로 어긋난다 — 이 가드가 방어하려던 바로 그 조합
+      // (KST 앱 + UTC DB)에서 무응답 페널티가 아예 안 걸리거나, 반대 조합에서는 재시작으로
+      // 답할 수 없었던 유저까지 전부 청구된다. 캐스팅하면 양쪽 모두 "DB 세션 타임존의
+      // 벽시계 → 앱 로컬 타임존의 Date"라는 같은 변환을 거치므로 오프셋이 상쇄되어
+      // 대소 비교가 보존된다.
       const [{ startedAt }] = await manager.query<{ startedAt: Date }[]>(
-        'SELECT now() - make_interval(secs => $1) AS "startedAt"',
+        'SELECT (now() - make_interval(secs => $1))::timestamp AS "startedAt"',
         [Math.floor(process.uptime())],
       );
 
+      // 대상 행을 서브쿼리에서 먼저 잠그고 건수를 제한한다(DUEL_SWEEP_BATCH 주석).
+      // SKIP LOCKED가 데드락을 끊는다 — 이 트랜잭션은 duels를 잠근 뒤 차감에서 users를
+      // 잠그고, expireDuel/rejectDuel은 단건 duels → users 순으로 잠근다. 대기가 가능하면
+      // "스윕이 duel A·user X 보유 → duel B 대기" / "expireDuel이 duel B 보유 → user X
+      // 대기"로 순환이 생긴다. 잠긴 행은 이미 다른 경로가 처리 중이므로 건너뛰어도 되고,
+      // 그 경로가 실패해 PENDING으로 남으면 다음 회차가 같은 컷오프로 다시 집는다.
       const result = await manager
         .createQueryBuilder()
         .update(Duel)
         .set({ status: DuelStatus.EXPIRED })
         .where(
-          'status = :pending AND "requestedAt" < now() - make_interval(secs => :sec)',
+          'id IN (SELECT id FROM duels' +
+            ' WHERE status = :pending' +
+            ' AND "requestedAt" < now() - make_interval(secs => :sec)' +
+            ' ORDER BY id LIMIT :batch FOR UPDATE SKIP LOCKED)',
           {
             pending: DuelStatus.PENDING,
             sec: DUEL_REQUEST_TTL + DUEL_SWEEP_GRACE,
+            batch: DUEL_SWEEP_BATCH,
           },
         )
         .returning(

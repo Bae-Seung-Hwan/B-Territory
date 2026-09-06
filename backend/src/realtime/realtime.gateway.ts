@@ -59,6 +59,15 @@ import {
 import { LocationLogsService } from '../location-logs/location-logs.service';
 import { LocationServiceCode } from '../location-logs/constants';
 
+/**
+ * 남은 보호막 TTL(초)을 클라이언트 타이머용 ISO 시각으로 바꾼다. 보호막이 없으면 null —
+ * duelPenaltyPayload의 shieldUntil과 같은 표현이라 클라이언트가 두 경로를 같게 다룬다.
+ */
+const shieldUntilOf = (ttlSeconds: number): string | null =>
+  ttlSeconds > 0
+    ? new Date(Date.now() + ttlSeconds * 1000).toISOString()
+    : null;
+
 @UseFilters(WsExceptionsFilter)
 @WebSocketGateway({
   namespace: '/realtime',
@@ -251,23 +260,37 @@ export class RealtimeGateway
     ).filter((o) => o !== null);
 
     if (newEncounters.length > 0) {
-      const nicknameById = new Map(
-        (
-          await this.usersService.findByIds(newEncounters.map((o) => o.userId))
-        ).map((u) => [u.id, u.nickname]),
-      );
+      // 보호막이 걸린 상대에게는 requestDuel이 DUEL_TARGET_SHIELDED로 막는다. 그 사실을
+      // 조우 payload에 함께 실어, 클라이언트가 30분 내내 실패할 신청 버튼을 열어두지 않게
+      // 한다. 목록에서 아예 빼지 않는 이유는 위에서 쿨다운 락을 이미 소모했기 때문이다 —
+      // 여기서 걸러내면 그 쌍은 보호막이 풀린 뒤에도 ENCOUNTER_COOLDOWN_TTL 동안 조우가
+      // 다시 뜨지 않는다. 판정 자체는 언제나 requestDuel이 Redis를 다시 읽어 내리고,
+      // 이 값은 duel:rejected의 shieldUntil과 같은 성격의 안내값이다.
+      const [users, selfShieldTtl, opponentShieldTtls] = await Promise.all([
+        this.usersService.findByIds(newEncounters.map((o) => o.userId)),
+        this.redis.getDuelShieldTtl(user.id),
+        Promise.all(
+          newEncounters.map((o) => this.redis.getDuelShieldTtl(o.userId)),
+        ),
+      ]);
+      const nicknameById = new Map(users.map((u) => [u.id, u.nickname]));
+      // 내 보호막은 상대에게 보내는 payload에 실린다 — "이 사람에게는 지금 못 건다"를
+      // 알려주는 값이라, 각 payload의 주체(userId)와 짝이 맞아야 한다.
+      const selfShieldUntil = shieldUntilOf(selfShieldTtl);
 
       await Promise.all(
-        newEncounters.map((opponent) => {
+        newEncounters.map((opponent, i) => {
           client.emit('encounter:detected', {
             userId: opponent.userId,
             nickname: nicknameById.get(opponent.userId) ?? null,
             team: opponent.team,
+            shieldUntil: shieldUntilOf(opponentShieldTtls[i]),
           });
           return this.notifyUser(opponent.userId, 'encounter:detected', {
             userId: user.id,
             nickname: user.nickname,
             team: user.team,
+            shieldUntil: selfShieldUntil,
           });
         }),
       );

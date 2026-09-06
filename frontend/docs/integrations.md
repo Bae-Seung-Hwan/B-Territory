@@ -38,7 +38,7 @@
 - `useLocation()`(`src/hooks/use-location.ts`)은 지도 화면(`map/index.tsx`)에서 호출돼 좌표를 얻고 있지만, 그 좌표를 `location:update`로 보내는 쪽이 없어 서버는 여전히 위치를 모름
 - 백엔드가 제공하는 이벤트
   - 송신: `location:update`, `duel:request`, `duel:accept`, `duel:reject`, `game:submit`
-  - 수신: `encounter:detected`, `duel:requested`, `duel:accepted`, `duel:rejected`, `duel:expired`, `game:start`, **`game:go`**, `game:opponent:submitted`, `game:round:result`, `duel:completed`, `duel:voided`
+  - 수신: `encounter:detected`, **`duel:requested`(큐잉 안 됨 — 아래 페널티 절 참고)**, `duel:accepted`, `duel:rejected`, `duel:expired`, `game:start`, **`game:go`**, `game:opponent:submitted`, `game:round:result`, `duel:completed`, `duel:voided`
   - 실제 배선 시 백엔드 코드(`backend/src/realtime/realtime.gateway.ts`)에서 페이로드 스키마 재확인 필요
 
 ### 결투 미니게임 (`feature/Bae/duel-minigame`)
@@ -59,6 +59,7 @@
    - `game:start`·`game:go`는 **오프라인일 때 큐잉되지 않는다**(라운드 45초, 큐 보관 30분).
      소켓이 끊긴 사이 수락이 진행되면 그 라운드는 미제출로 기권패다 — 재접속 후 지난
      `game:start`가 재생되는 일은 없다. `duel:completed`/`duel:voided`는 기존대로 큐에 남는다.
+     `duel:requested`도 같은 이유로 큐잉되지 않는다(아래 페널티 절).
 2. 플레이 후 `game:submit` `{ duelId, round, value? }`
 3. 먼저 낸 쪽은 대기 — 상대에겐 `game:opponent:submitted`만 간다 (점수는 공개되지 않는다)
 4. 양쪽 제출 또는 마감(45초) → 서버 정산
@@ -90,6 +91,29 @@
 `quiz.question`·`quiz.choices`는 `{ ko, en }` 형태로 내려온다(소켓에 lang 파라미터가 없어
 양쪽 언어를 모두 보낸다). 선택지는 서버가 매번 섞고, 정답은 서버 세션에만 있어 페이로드에
 실리지 않는다.
+
+### 결투 거절·무응답 페널티 (`feature/Bae/duel-reject-penalty`)
+
+신청을 **성립시키지 않은 쪽**(거절하거나 30초를 그냥 넘긴 쪽)은 개인 점수 2점을 잃고,
+그 대가로 30분간 아무도 그 사람에게 결투를 걸 수 없는 **보호막**을 받는다.
+
+- `duel:rejected` / `duel:expired` / `duel:voided`의 payload가 공통으로 바뀌었다
+  `{ duelId, scorePenalty, penalizedUserId, shieldUntil }`
+  - `penalizedUserId`는 **깎인 쪽의 id**다. 양쪽에 같은 payload가 가므로 클라이언트가
+    자기 id와 비교해 "-2점" 문구를 띄울지 정한다. 차감이 없으면 `scorePenalty: 0`,
+    `penalizedUserId: null` (VOID·탈퇴 종료가 그렇다).
+  - `shieldUntil`은 남은 초가 아니라 **절대 시각(ISO)**이다. 알림이 최대 30분 큐에
+    남아 있다가 재접속 때 오므로 상대 초를 쓰면 카운트다운이 어긋난다. 보호막 설정이
+    실패했으면 `null`로 온다 — 그때는 안내를 띄우지 말 것(서버는 신청을 통과시킨다).
+- `encounter:detected`에 `shieldUntil`이 추가됐다(상대가 보호 중이면 ISO 시각, 아니면 `null`).
+  값이 있으면 결투 신청 버튼을 잠가둘 것 — 열어두면 30분 내내 `duel:request` ack가
+  `{ status: 'error', code: 'DUEL_TARGET_SHIELDED' }`로 실패한다. **판정은 서버가 다시
+  하므로 이 값은 UI 힌트일 뿐이다** (내가 먼저 신청하면 내 보호막은 즉시 걷힌다).
+- `duel:requested`는 **오프라인일 때 큐잉되지 않는다**(`game:start`와 같은 이유 — 응답
+  창이 30초인데 큐 보관은 30분이라, 재생하면 이미 만료된 초대의 모달이 뒤늦게 뜬다).
+  재접속해도 지난 초대는 재생되지 않으니, 놓친 신청을 기다리는 UI를 만들지 말 것.
+  - 이 정책 덕분에 **화면에 뜬 적 없는 초대에는 무응답 페널티가 붙지 않는다** — 서버가
+    실제 emit 여부를 `duels.inviteDeliveredAt`에 기록하고 그것만 청구한다.
 
 ## Firebase Authentication
 
