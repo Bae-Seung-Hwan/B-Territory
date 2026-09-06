@@ -68,6 +68,46 @@ describe('MiniGame', () => {
     expect(emit).toHaveBeenCalledWith('game:submit', { duelId: 1, round: 1, value: 0 });
   });
 
+  it(
+    'MINIGAME_INVALID_SCORE로 mySubmitted가 되돌아오면 같은 라운드에 다시 제출할 수 있다 ' +
+      '(PR #54 3차 리뷰 지적 1번 — 되돌림을 이 코드 하나로 좁힌 뒤에도 재제출 경로 자체는 ' +
+      '살아 있어야 한다)',
+    async () => {
+      useOverlayStore.getState().startGameRound({
+        gameType: 'QUIZ',
+        round: 1,
+        maxRounds: 2,
+        deadlineAt: Date.now() + 45_000,
+        quiz: {
+          question: { ko: '테스트 문제', en: 'Test question' },
+          choices: [
+            { ko: '보기1', en: 'Choice1' },
+            { ko: '보기2', en: 'Choice2' },
+          ],
+        },
+      });
+
+      const { getByText } = await render(<MiniGame />);
+
+      await act(async () => {
+        fireEvent.press(getByText('Choice1'));
+      });
+      expect(emit).toHaveBeenCalledTimes(1);
+      // 제출 뒤에는 게임이 사라지고 대기 화면이 된다.
+      expect(getByText('Submitted! Waiting for opponent...')).toBeTruthy();
+
+      // SocketProvider의 exception 핸들러가 하는 일과 동일하다.
+      await act(async () => {
+        useOverlayStore.getState().setMySubmitted(false);
+      });
+
+      await act(async () => {
+        fireEvent.press(getByText('Choice2'));
+      });
+      expect(emit).toHaveBeenNthCalledWith(2, 'game:submit', { duelId: 1, round: 1, value: 1 });
+    },
+  );
+
   it('제출하면 대기 화면으로 바뀌고, 다시 제출하지 않는다', async () => {
     useOverlayStore.getState().startGameRound({
       gameType: 'QUIZ',

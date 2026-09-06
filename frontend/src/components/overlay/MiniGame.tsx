@@ -48,10 +48,12 @@ export function MiniGame() {
   const gameQuiz = useOverlayStore((s) => s.gameQuiz);
   const goSignal = useOverlayStore((s) => s.goSignal);
   const opponentSubmitted = useOverlayStore((s) => s.opponentSubmitted);
-  // 컴포넌트 로컬 state가 아니라 스토어에 둔다 — game:submit이 MINIGAME_INVALID_SCORE 등으로
+  // 컴포넌트 로컬 state가 아니라 스토어에 둔다 — game:submit이 MINIGAME_INVALID_SCORE로
   // 실패하면 SocketProvider의 exception 핸들러가 이 값을 다시 false로 되돌려 마감 전 재제출을
   // 열어줘야 하는데(PR #54 2차 리뷰 지적 2번), 로컬 state였다면 SocketProvider가 건드릴 방법이
-  // 없다. startGameRound/clearGameRound가 라운드 전환마다 이미 false로 되돌려 준다.
+  // 없다. 되돌림이 그 코드 하나로 좁혀져 있는 이유는 SocketProvider의 handleException 주석
+  // 참고 — 되돌리면 아래 `if (submitted)` 분기가 풀리며 게임 컴포넌트가 재마운트된다.
+  // startGameRound/clearGameRound가 라운드 전환마다 이미 false로 되돌려 준다.
   const submitted = useOverlayStore((s) => s.mySubmitted);
   const socket = useSocket();
   const { t } = useTranslation();

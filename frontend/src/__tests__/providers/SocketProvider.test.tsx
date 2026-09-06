@@ -118,6 +118,28 @@ describe('SocketProvider', () => {
     },
   );
 
+  it.each(['MINIGAME_NOT_ACTIVE', 'MINIGAME_ROUND_MISMATCH', 'MINIGAME_ALREADY_SUBMITTED'])(
+    '%s는 Alert만 띄우고 mySubmitted는 되돌리지 않는다 (PR #54 3차 리뷰 지적 1번 — 재제출해도 ' +
+      '같은 오류가 반복될 뿐이고, REACTION에서는 재마운트된 게임이 이번 라운드의 game:go를 ' +
+      '놓쳐 대기 화면으로 돌아와 다음 탭이 부정출발로 제출된다)',
+    async (code) => {
+      useOverlayStore.getState().setDuelId(1);
+      useOverlayStore.getState().setShowMiniGame(true);
+      useOverlayStore.getState().setMySubmitted(true);
+
+      await act(async () => {
+        exceptionHandler()({ code, message: 'boom' });
+      });
+
+      // 왜 졌는지는 알려준다 — 조용히 버리던 예전 동작으로 돌아가면 안 된다.
+      expect(alertSpy).toHaveBeenCalledTimes(1);
+      expect(useOverlayStore.getState().mySubmitted).toBe(true);
+      // 결투 자체는 서버의 duel:voided/completed가 닫는다 — 여기서 오버레이를 건드리지 않는다.
+      expect(useOverlayStore.getState().showMiniGame).toBe(true);
+      expect(useOverlayStore.getState().duelId).toBe(1);
+    },
+  );
+
   it(
     'duel:request 전용 실패 코드(DUEL_ALREADY_PENDING 등)는 이미 열려 있는 다른 결투를 ' +
       '지우지 않는다 (PR #54 리뷰 지적 4번)',

@@ -82,8 +82,13 @@
 랜덤으로 정하고 알려주지 않는다.
 
 `game:go` 전에 보낸 제출은 **부정출발**로 그 라운드 최하점 처리된다(HSETNX라 재제출도 안 된다).
-따라서 초록불 전 탭은 서버로 보내지 말고 클라이언트에서 "너무 빨랐어요"로 잡아주는 게 좋다.
 결과의 `scores[]`에 `falseStart: true`로 표시된다.
+
+**초록불 전 탭도 서버로 보낸다.** 클라이언트에서 완전히 삼키면(예전 구현) 부정출발의 대가가
+0이 되어, 계속 두들기다 `game:go` 직후 첫 탭으로 제출하는 게 무위험 전략이 된다 — 서버 하한
+`REACTION_MIN_MS = 80`ms라 정직한 반응을 안정적으로 이긴다(PR #54 리뷰 지적 7번). 지금은
+`ReactionGame`이 "너무 빨랐어요"를 잠깐 보여준 뒤 그대로 `game:submit`을 보내, 서버가
+`FALSE_START_PRIMARY`로 확정하게 한다.
 
 `quiz.question`·`quiz.choices`는 `{ ko, en }` 형태로 내려온다(소켓에 lang 파라미터가 없어
 양쪽 언어를 모두 보낸다). 선택지는 서버가 매번 섞고, 정답은 서버 세션에만 있어 페이로드에
@@ -103,12 +108,12 @@
 ### 필요 작업 (TODO)
 
 - [ ] `DuelPending`에 취소 수단이 없다(백엔드에 `duel:cancel`이 없어 30초 만료에 의존) — 백엔드 협의 시 함께 논의
-- [ ] `src/hooks/use-location.ts`가 `feature/Ryu/team-chat`(PR #50)과 서로 다른 방향으로
-      되돌리고 있다 — 이 브랜치는 모듈 스코프 공유 구독을 유지(근거: map + `LocationBroadcaster`
-      두 소비자), PR #50은 훅 인스턴스별 구독으로 되돌림(근거: 채팅의 위치 공유 기능 제거로
-      소비자가 map 하나뿐 + 로그아웃 후 이전 사용자 좌표 잔존). 각 브랜치 안에서는 둘 다 맞지만
-      나중에 merge되는 쪽이 상대의 근거를 조용히 무효화하므로, merge 순서를 정하거나 한쪽으로
-      합의가 필요하다(PR #54 리뷰 지적 9번).
+- [x] ~~`src/hooks/use-location.ts`가 PR #50과 서로 다른 방향으로 되돌리고 있어 merge 순서
+      합의가 필요하다(PR #54 리뷰 지적 9번)~~ — **해소됨: 공유 스토어를 유지한다.** develop
+      머지(`0e1045e`)에서 이 브랜치 쪽을 채택했다. PR #50이 훅 인스턴스별 구독으로 되돌린
+      근거("소비자가 `map/index.tsx` 하나뿐")는 `LocationBroadcaster`가 앱 루트에 상주하면서
+      이미 깨졌고, 되돌리면 map과 broadcaster가 각각 고정밀 GPS watcher를 켠다. 자세한 근거는
+      `use-location.ts` 주석 참고.
 
 ## Firebase Authentication
 

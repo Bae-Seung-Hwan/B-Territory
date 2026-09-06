@@ -325,6 +325,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // 2차 리뷰 지적 2번). MINIGAME_START_FAILED는 duel:accept의 ack 반환값으로만 오므로
       // (realtime.gateway.ts) 여기 도달하지 않는다 — 별도 처리다.
       const isMinigameCode = payload.code.startsWith('MINIGAME_');
+      // 그중 재제출로 상황이 달라질 수 있는 코드는 MINIGAME_INVALID_SCORE 하나뿐이다
+      // (minigame.service.ts#evaluate가 점수를 저장하기 **전에** 던진다 — TAP의 탭 수
+      // 누락/TAP_MAX 초과/5초 미달, QUIZ의 선택지 누락). 나머지 셋은 "이 라운드는 이미
+      // 끝났다"에 가까워 몇 번을 다시 내도 같은 오류가 돌아온다:
+      //   MINIGAME_ALREADY_SUBMITTED — 서버가 이미 내 점수를 갖고 있다(HSETNX)
+      //   MINIGAME_NOT_ACTIVE        — 세션 자체가 없다(TTL 만료·VOID)
+      //   MINIGAME_ROUND_MISMATCH    — 이미 지난 라운드다
+      const isRetriableMinigameCode = payload.code === 'MINIGAME_INVALID_SCORE';
       // 그 외(예: location:update 검증 오류, Redis 장애로 인한 INTERNAL_SERVER_ERROR)는
       // 결투와 무관하다 — 예전엔 코드와 무관하게 항상 Alert를 띄워, LocationBroadcaster의
       // 60초 하트비트가 실패할 때마다 "결투 실패" 모달이 반복해서 떴다(PR #54 리뷰 지적
@@ -344,8 +352,23 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (isMinigameCode) {
         // game:submit 실패는 이번 제출 하나가 무효였다는 뜻일 뿐 결투 자체가 끝난 게
         // 아니다 — resetDuel()로 오버레이를 닫아버리면 마감(gameDeadlineAt) 전에도
-        // 재제출 기회가 없어진다. mySubmitted만 되돌려 같은 라운드에 다시 낼 수 있게 한다.
-        useOverlayStore.getState().setMySubmitted(false);
+        // 재제출 기회가 없어진다. 되돌림은 재제출이 실제로 성공할 수 있는 코드에만 건다.
+        //
+        // 모든 MINIGAME_ 코드에 되돌리면 REACTION이 오히려 부정출발 함정에 빠진다(PR #54
+        // 3차 리뷰 지적 1번): setMySubmitted(false)는 MiniGame.tsx의 `if (submitted)`
+        // 분기를 되돌려 게임 컴포넌트를 **새 인스턴스로 재마운트**시키는데, ReactionGame은
+        // 마운트 시점의 goSignal을 기준선으로 잡으므로(baselineRef) 이번 라운드의 game:go가
+        // 이미 지나간 뒤에는 영영 'go'로 넘어가지 못한다 — 대기 화면으로 돌아온 사용자가
+        // 다시 누르면 그게 부정출발로 제출된다. INVALID_SCORE로 좁히면 이 경로가 닫힌다:
+        // evaluate()의 REACTION 분기엔 이 코드를 던지는 곳이 아예 없다(신호 전 제출은
+        // 예외가 아니라 FALSE_START_PRIMARY 점수로 확정된다).
+        //
+        // 되돌리지 않는 셋은 Alert만 띄운다 — 재시도해도 같은 오류가 반복될 뿐이고, 그
+        // 시점엔 결투가 어차피 곧 duel:voided/completed로 닫힌다. exception 페이로드엔
+        // round도 duelId도 없어서(WsExceptionPayload) 되돌림은 "지금 열려 있는 라운드"에
+        // 무조건 적용되는데, 좁혀 두면 늦게 도착한 이전 라운드의 예외가 새 라운드의 제출
+        // 상태를 지우는 경로도 함께 닫힌다.
+        if (isRetriableMinigameCode) useOverlayStore.getState().setMySubmitted(false);
       } else if (!DUEL_REQUEST_ONLY_CODES.has(payload.code)) {
         // duel:request 전용 실패는 "새 결투를 못 열었다"는 뜻이라, 우연히 열려 있는 다른
         // (남의) 결투를 지우면 안 된다(리뷰 지적 4번) — 목록 밖의 DUEL_ 코드만 resetDuel한다.
