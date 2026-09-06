@@ -154,6 +154,17 @@ export const en: Translations = {
     logoutConfirmMessage: 'Are you sure you want to log out?',
     blockedUsersLink: 'Manage Blocked Users',
     contactTitle: 'Contact Us',
+    deleteAccount: 'Delete Account',
+    deleteAccountPending: 'Deleting…',
+    deleteAccountConfirmTitle: 'Delete your account?',
+    deleteAccountConfirmMessage:
+      'Your account and login credentials will be deleted and this cannot be undone. Claim and duel records are kept without your personal info to preserve team score totals. Location usage records are retained for 6 months after deletion as required by law.',
+    deleteAccountTimeoutTitle: 'Could not confirm the result',
+    deleteAccountTimeoutMessage:
+      'The response took too long to confirm whether your account was deleted. Please log in again to check your account status.',
+    errors: {
+      deleteAccountFailed: 'Failed to delete your account. Please try again shortly',
+    },
   },
   map: {
     hud: {
