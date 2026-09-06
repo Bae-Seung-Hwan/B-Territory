@@ -36,7 +36,15 @@ let appStateSubscription: { remove: () => void } | null = null;
 function ensureAppStateListener(): void {
   if (appStateSubscription) return;
   appStateSubscription = AppState.addEventListener('change', (next) => {
-    if (next === 'active') permissionDenied = false;
+    if (next !== 'active' || !permissionDenied) return;
+    permissionDenied = false;
+    // 플래그만 풀고 끝내면 아무도 다시 시도하지 않는다(PR #54 2차 리뷰 지적 3번) — start()의
+    // 유일한 호출부는 subscribe()인데, LocationBroadcaster처럼 구독자가 세션 내내 상주하면
+    // 구독자 수가 0에서 1로 늘어나는 순간 자체가 다시 오지 않아 subscribe()가 다시 불릴 일이
+    // 없다. "설정에서 권한을 켜고 돌아온다"는 유일한 복구 신호이므로 지금 구독자가 있다면
+    // 여기서 직접 재시도한다 — 지금 아무도 구독하고 있지 않다면 다음 구독자의 subscribe()가
+    // 어차피 새로 시작하므로 여기서 미리 부를 필요가 없다(불필요한 권한 요청 중복 방지).
+    if (listeners.size > 0) void start();
   });
 }
 

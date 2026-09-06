@@ -230,7 +230,12 @@ export const en: Translations = {
       DUEL_ALREADY_HANDLED: 'This duel was already handled',
       DUEL_NOT_FOUND: 'Duel not found',
       DUEL_NOT_ACCEPTED: 'This duel has not been accepted',
+      DUEL_TARGET_UNAVAILABLE: "You can't challenge this player right now",
       MINIGAME_START_FAILED: 'Could not start the mini-game. Please try again shortly',
+      MINIGAME_NOT_ACTIVE: 'No mini-game is currently active',
+      MINIGAME_ROUND_MISMATCH: 'This round has already ended',
+      MINIGAME_ALREADY_SUBMITTED: "You've already submitted this round",
+      MINIGAME_INVALID_SCORE: 'Your submission was invalid. Please try again',
       UNAUTHENTICATED_CONNECTION: 'Your session expired. Please log in again',
     },
     duelOutcome: {

@@ -318,13 +318,20 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   // 이걸 구독하지 않으면 ack가 오지 않는 실패 경로에서 오버레이가 영영 열린 채 멈춘다.
   useEffect(() => {
     const handleException = (payload: WsExceptionPayload) => {
-      // DUEL_ 접두사가 아닌 예외(예: location:update 검증 오류, Redis 장애로 인한
-      // INTERNAL_SERVER_ERROR)는 결투와 무관하다 — 예전엔 코드와 무관하게 항상 Alert를
-      // 띄워, LocationBroadcaster의 60초 하트비트가 실패할 때마다 "결투 실패" 모달이
-      // 반복해서 떴다(PR #54 리뷰 지적 2번). 이런 예외는 사용자에게 보여줄 결투 문맥이
-      // 없으므로 조용히 무시한다 — pendingChallengeTargetId는 이제 duel:request의 자체
-      // .timeout()이 책임지므로(BattleEnemyRow) 더 이상 여기서 비울 필요가 없다.
-      if (!payload.code.startsWith('DUEL_')) return;
+      const isDuelCode = payload.code.startsWith('DUEL_');
+      // MINIGAME_NOT_ACTIVE/ROUND_MISMATCH/ALREADY_SUBMITTED/INVALID_SCORE는 game:submit이
+      // 실패할 때 온다(minigame.service.ts) — MiniGame.tsx의 game:submit emit엔 ack 콜백이
+      // 없어 이 필터가 코드를 걸러내면 사용자가 왜 졌는지 알 방법이 아예 없어진다(PR #54
+      // 2차 리뷰 지적 2번). MINIGAME_START_FAILED는 duel:accept의 ack 반환값으로만 오므로
+      // (realtime.gateway.ts) 여기 도달하지 않는다 — 별도 처리다.
+      const isMinigameCode = payload.code.startsWith('MINIGAME_');
+      // 그 외(예: location:update 검증 오류, Redis 장애로 인한 INTERNAL_SERVER_ERROR)는
+      // 결투와 무관하다 — 예전엔 코드와 무관하게 항상 Alert를 띄워, LocationBroadcaster의
+      // 60초 하트비트가 실패할 때마다 "결투 실패" 모달이 반복해서 떴다(PR #54 리뷰 지적
+      // 2번). 이런 예외는 사용자에게 보여줄 결투 문맥이 없으므로 조용히 무시한다 —
+      // pendingChallengeTargetId는 이제 duel:request의 자체 .timeout()이 책임지므로
+      // (BattleEnemyRow) 더 이상 여기서 비울 필요가 없다.
+      if (!isDuelCode && !isMinigameCode) return;
 
       const known = `overlay.duelError.${payload.code}`;
       const translated = i18n.t(known);
@@ -334,9 +341,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         ? [payload.message].flat().join('\n')
         : translated;
 
-      // duel:request 전용 실패는 "새 결투를 못 열었다"는 뜻이라, 우연히 열려 있는 다른
-      // (남의) 결투를 지우면 안 된다(리뷰 지적 4번) — 목록 밖의 DUEL_ 코드만 resetDuel한다.
-      if (!DUEL_REQUEST_ONLY_CODES.has(payload.code)) {
+      if (isMinigameCode) {
+        // game:submit 실패는 이번 제출 하나가 무효였다는 뜻일 뿐 결투 자체가 끝난 게
+        // 아니다 — resetDuel()로 오버레이를 닫아버리면 마감(gameDeadlineAt) 전에도
+        // 재제출 기회가 없어진다. mySubmitted만 되돌려 같은 라운드에 다시 낼 수 있게 한다.
+        useOverlayStore.getState().setMySubmitted(false);
+      } else if (!DUEL_REQUEST_ONLY_CODES.has(payload.code)) {
+        // duel:request 전용 실패는 "새 결투를 못 열었다"는 뜻이라, 우연히 열려 있는 다른
+        // (남의) 결투를 지우면 안 된다(리뷰 지적 4번) — 목록 밖의 DUEL_ 코드만 resetDuel한다.
         useOverlayStore.getState().resetDuel();
       }
 
@@ -346,12 +358,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('exception', handleException);
     return () => {
       socket.off('exception', handleException);
-    };
-  }, [socket]);
-
-  useEffect(() => {
-    return () => {
-      socket.disconnect();
     };
   }, [socket]);
 

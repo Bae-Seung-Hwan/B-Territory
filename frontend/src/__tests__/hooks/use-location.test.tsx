@@ -35,7 +35,9 @@ const mockedWatchPosition = Location.watchPositionAsync as jest.Mock;
 // jest.resetModules()로 격리하면 React 자체도 새로 로드돼 "두 개의 React 사본" 문제가
 // 난다. 대신 실제 앱과 같은 방식으로, 마운트~언마운트를 이어서 겪는 시나리오 하나로
 // 검증한다(화면을 오가도 이 모듈은 리셋되지 않는다는 사실 자체가 리뷰 지적 12·13번의
-// 배경이기도 하다).
+// 배경이기도 하다). AppState 리스너도 ensureAppStateListener()가 딱 한 번만 등록하므로
+// (module-level 싱글턴), mockAppState.listener를 채우는 것도 사실상 이 첫 테스트뿐이다 —
+// 그래서 "이미 마운트된 구독자가 리스너로 복구되는지"까지 같은 시나리오 안에서 검증한다.
 describe('useLocation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -44,8 +46,12 @@ describe('useLocation', () => {
   });
 
   it(
-    '권한이 거부되면: (1) 다시 마운트해도 API를 또 부르지 않되 알려진 결과는 다시 ' +
-      '반영하고(리뷰 지적 13번), (2) 앱이 포그라운드로 돌아오면 그제서야 다시 확인한다',
+    '권한이 거부되면: (1) 다시 마운트해도 API를 또 부르지 않되 알려진 결과는 다시 반영하고 ' +
+      '(리뷰 지적 13번), (2) 이미 마운트돼 있던 구독자도 앱이 포그라운드로 돌아오면 그제서야 ' +
+      '다시 확인한다 (PR #54 2차 리뷰 지적 3번 — 예전엔 AppState 리스너가 permissionDenied ' +
+      '플래그만 풀고 start()를 다시 부르지 않았는데, start()의 유일한 호출부인 subscribe()는 ' +
+      '구독자 수가 0→1로 늘어날 때만 불리므로, LocationBroadcaster처럼 이미 붙어있는 구독자를 ' +
+      '위해서는 아무도 다시 불러주지 않아 권한을 나중에 허용해도 세션 내내 복구되지 않았다)',
     async () => {
       mockedRequestPermission.mockResolvedValue({ status: 'denied' });
 
@@ -56,24 +62,40 @@ describe('useLocation', () => {
 
       // 마지막 구독자가 나갔다 들어와도(리뷰 지적 12번 픽스로 상태는 초기화됐을 것이다)
       // 이미 거부된 것으로 알고 있으므로 API를 다시 부르지 않되, 결과는 그대로 반영한다 —
-      // 그러지 않으면 이 두 번째 구독자가 "영원히 로딩 중"에 갇힌다.
+      // 그러지 않으면 이 두 번째 구독자가 "영원히 로딩 중"에 갇힌다. 이 구독자는 아래에서
+      // 언마운트하지 않고 그대로 둔다 — LocationBroadcaster처럼 세션 내내 상주하는 상황을
+      // 재현하기 위함이다.
       const second = await renderHook(() => useLocation());
       await waitFor(() => expect(second.result.current.error).toBe('위치 권한이 필요합니다'));
       expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
-      await second.unmount();
 
-      // 앱이 백그라운드→포그라운드를 거치면(OS 설정에서 권한을 바꾸고 돌아온 유일한 신호)
-      // 그제서야 다시 확인한다.
+      // 설정 화면에서 권한을 허용하고 앱으로 돌아왔다고 가정한다(백그라운드→포그라운드가
+      // 유일한 복구 신호다).
       mockedRequestPermission.mockResolvedValue({ status: 'granted' });
-      mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
-      mockAppState.currentState = 'background';
-      mockAppState.listener?.('background');
-      mockAppState.currentState = 'active';
-      mockAppState.listener?.('active');
+      let onLocation:
+        | ((loc: { coords: { latitude: number; longitude: number } }) => void)
+        | null = null;
+      mockedWatchPosition.mockImplementation((_opts, cb) => {
+        onLocation = cb;
+        return Promise.resolve({ remove: jest.fn() });
+      });
 
-      const third = await renderHook(() => useLocation());
+      await act(async () => {
+        mockAppState.currentState = 'background';
+        mockAppState.listener?.('background');
+        mockAppState.currentState = 'active';
+        mockAppState.listener?.('active');
+      });
+
+      // second는 언마운트된 적이 없다 — 그런데도 권한을 다시 확인해야 한다. 새 구독자의
+      // subscribe()에 기대지 않고, 리스너 자신이 재시도해야만 가능하다.
       await waitFor(() => expect(mockedRequestPermission).toHaveBeenCalledTimes(2));
-      await third.unmount();
+      await act(async () => onLocation?.({ coords: { latitude: 10, longitude: 20 } }));
+      await waitFor(() =>
+        expect(second.result.current.coords).toEqual({ latitude: 10, longitude: 20 }),
+      );
+      expect(second.result.current.error).toBeNull();
+      await second.unmount();
     },
   );
 

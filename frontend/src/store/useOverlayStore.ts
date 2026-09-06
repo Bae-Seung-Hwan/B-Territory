@@ -50,6 +50,13 @@ interface OverlayStore {
   /** game:go 수신마다 증가하는 카운터 — ReactionGame이 이 값 변화를 구독해 phase를 전환한다. */
   goSignal: number;
   opponentSubmitted: boolean;
+  /**
+   * 내가 이번 라운드 결과를 제출했는지. MiniGame 컴포넌트 로컬 state가 아니라 스토어에
+   * 두는 이유 — game:submit이 MINIGAME_INVALID_SCORE 등으로 실패하면 SocketProvider의
+   * exception 핸들러가 이 값을 다시 false로 되돌려 마감 전 재제출을 열어줘야 한다
+   * (PR #54 2차 리뷰 지적 2번). 컴포넌트 로컬 state였다면 SocketProvider가 건드릴 방법이 없다.
+   */
+  mySubmitted: boolean;
   setShowDuelRequest: (v: boolean) => void;
   setShowDuelPending: (v: boolean) => void;
   setShowMiniGame: (v: boolean) => void;
@@ -70,6 +77,7 @@ interface OverlayStore {
   clearGameRound: () => void;
   bumpGoSignal: () => void;
   setOpponentSubmitted: (v: boolean) => void;
+  setMySubmitted: (v: boolean) => void;
   /** 결투 한 사이클(수락/거부/만료/완료/무효) 종료 시 관련 상태를 한 번에 초기화한다. */
   resetDuel: () => void;
 }
@@ -99,6 +107,7 @@ const GAME_ROUND_DEFAULTS = {
   gameTap: null,
   gameQuiz: null,
   opponentSubmitted: false,
+  mySubmitted: false,
 } as const;
 
 export const useOverlayStore = create<OverlayStore>((set) => ({
@@ -127,10 +136,12 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
       gameTap: round.tap ?? null,
       gameQuiz: round.quiz ?? null,
       opponentSubmitted: false,
+      mySubmitted: false,
     }),
   clearGameRound: () => set(GAME_ROUND_DEFAULTS),
   bumpGoSignal: () => set((s) => ({ goSignal: s.goSignal + 1 })),
   setOpponentSubmitted: (v) => set({ opponentSubmitted: v }),
+  setMySubmitted: (v) => set({ mySubmitted: v }),
   resetDuel: () =>
     set({
       showDuelRequest: false,

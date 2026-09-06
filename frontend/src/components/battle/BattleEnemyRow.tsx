@@ -22,8 +22,10 @@ export function BattleEnemyRow({ enemy, socket }: BattleEnemyRowProps) {
   // 않고(ws-exception.filter.ts), 그 실패를 알려주는 exception 이벤트엔 어떤 요청에 대한 것인지
   // 구분할 duelId가 없다. 행마다 로컬 pending을 두면 "이 exception이 내 요청 실패다"를 판단할
   // 방법이 없어 아무 행이나 건드리게 된다 — 그래서 애초에 공유 값 하나로 리스트 전체를 막아
-  // "동시에 여러 결투를 신청하는 상황" 자체가 생기지 않게 한다. exception 발생 시 이 값을
-  // 비우는 처리는 SocketProvider의 전역 handleException이 한다.
+  // "동시에 여러 결투를 신청하는 상황" 자체가 생기지 않게 한다. 이 값을 비우는 처리는 아래
+  // duel:request의 자체 .timeout() ack 콜백이 전담한다 — SocketProvider의 전역 handleException은
+  // 실패 안내(Alert)만 담당하고 더 이상 이 값을 건드리지 않는다(PR #54 2차 리뷰 지적 5번 —
+  // 이 주석이 예전 구조를 그대로 설명하고 있어 실제 동작과 모순됐다).
   const pendingChallengeTargetId = useBattleStore((s) => s.pendingChallengeTargetId);
   const isPending = pendingChallengeTargetId === enemy.userId;
   const blocked = pendingChallengeTargetId != null;

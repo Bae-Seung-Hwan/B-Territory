@@ -48,18 +48,13 @@ export function MiniGame() {
   const gameQuiz = useOverlayStore((s) => s.gameQuiz);
   const goSignal = useOverlayStore((s) => s.goSignal);
   const opponentSubmitted = useOverlayStore((s) => s.opponentSubmitted);
+  // 컴포넌트 로컬 state가 아니라 스토어에 둔다 — game:submit이 MINIGAME_INVALID_SCORE 등으로
+  // 실패하면 SocketProvider의 exception 핸들러가 이 값을 다시 false로 되돌려 마감 전 재제출을
+  // 열어줘야 하는데(PR #54 2차 리뷰 지적 2번), 로컬 state였다면 SocketProvider가 건드릴 방법이
+  // 없다. startGameRound/clearGameRound가 라운드 전환마다 이미 false로 되돌려 준다.
+  const submitted = useOverlayStore((s) => s.mySubmitted);
   const socket = useSocket();
   const { t } = useTranslation();
-
-  const [submitted, setSubmitted] = useState(false);
-  // 라운드가 바뀔 때마다(재경기 포함) 제출 상태를 새로 시작한다 — effect가 아니라 렌더 중
-  // 직접 setState하는, React가 안내하는 "prop이 바뀌면 state를 조정하는" 패턴이다
-  // (MessageActionSheet.tsx의 prevTarget과 동일한 이유).
-  const [prevGameRound, setPrevGameRound] = useState(gameRound);
-  if (gameRound !== prevGameRound) {
-    setPrevGameRound(gameRound);
-    setSubmitted(false);
-  }
 
   // useCallback으로 감싸지 않으면 MiniGame이 리렌더될 때마다(예: game:opponent:submitted로
   // opponentSubmitted가 바뀔 때) 새 함수가 만들어진다. TapBattle의 카운트다운 effect가
@@ -69,7 +64,7 @@ export function MiniGame() {
   const handleSubmit: MiniGameSubmit = useCallback(
     (value) => {
       if (submitted || duelId == null || gameRound == null) return;
-      setSubmitted(true);
+      useOverlayStore.getState().setMySubmitted(true);
       socket?.emit('game:submit', { duelId, round: gameRound, value });
     },
     [submitted, duelId, gameRound, socket],
@@ -104,15 +99,29 @@ export function MiniGame() {
         {opponentSubmitted && (
           <Text style={styles.nudgeText}>{t('overlay.miniGame.opponentAlreadySubmitted')}</Text>
         )}
+        {/* key={gameRound} — 재경기(같은 gameType으로 새 라운드가 열리는 경우)에서 서버의
+            game:round:result(clearGameRound)와 곧이은 game:start(startGameRound)가 같은 렌더
+            배치로 묶이면, key 없이는 이전 라운드의 같은 컴포넌트 인스턴스가 재사용된다 —
+            TapBattle/ReactionGame의 submittedRef·tapsRef·phase가 이전 라운드 값을 그대로
+            물려받아 2라운드에서 아무리 조작해도 game:submit이 나가지 않았다(PR #54 2차 리뷰
+            지적 1번, 실제로 재현됨). key를 라운드 번호로 주면 라운드마다 항상 새 인스턴스가
+            된다. */}
         {(() => {
           switch (gameType) {
             case 'TAP':
-              return <TapBattle durationSec={gameTap?.durationSec ?? 5} onSubmit={handleSubmit} />;
+              return (
+                <TapBattle
+                  key={gameRound}
+                  durationSec={gameTap?.durationSec ?? 5}
+                  onSubmit={handleSubmit}
+                />
+              );
             case 'REACTION':
-              return <ReactionGame goSignal={goSignal} onSubmit={handleSubmit} />;
+              return <ReactionGame key={gameRound} goSignal={goSignal} onSubmit={handleSubmit} />;
             case 'QUIZ':
               return gameQuiz ? (
                 <QuizGame
+                  key={gameRound}
                   question={gameQuiz.question}
                   choices={gameQuiz.choices}
                   onSubmit={handleSubmit}

@@ -191,4 +191,79 @@ describe('MiniGame', () => {
     expect(getByText('Q2')).toBeTruthy();
     expect(queryByText('Submitted! Waiting for opponent...')).toBeNull();
   });
+
+  it(
+    '재경기로 라운드가 바뀐 뒤에도 새 라운드 번호로 game:submit이 실제로 나간다 ' +
+      '(PR #54 2차 리뷰 지적 1번 관련 — 기존 "제출 상태가 다시 초기화된다" 테스트는 UI 문구만 ' +
+      '확인하고 실제 제출 emit은 검증하지 않았다. 이 시나리오에서 리뷰가 지적한 재사용 ' +
+      '인스턴스 문제는 재현하지 못했지만, key={gameRound}는 서버 이벤트 배칭 시점에 따라 ' +
+      'React가 컴포넌트를 재사용할 가능성 자체를 구조적으로 없애는 표준적인 방어라 그대로 둔다)',
+    async () => {
+      useOverlayStore.getState().startGameRound({
+        gameType: 'QUIZ',
+        round: 1,
+        maxRounds: 2,
+        deadlineAt: Date.now() + 45_000,
+        quiz: { question: { ko: 'Q1', en: 'Q1' }, choices: [{ ko: 'A', en: 'A' }] },
+      });
+
+      const { getByText, rerender } = await render(<MiniGame />);
+      await act(async () => {
+        fireEvent.press(getByText('A'));
+      });
+      expect(emit).toHaveBeenCalledWith('game:submit', { duelId: 1, round: 1, value: 0 });
+
+      // 서버의 game:round:result(clearGameRound)와 곧이은 game:start(startGameRound)가 같은
+      // 렌더 배치로 묶이는 경우를 흉내낸다 — 한 act() 안에서 두 store 업데이트를 연달아
+      // 호출하면, 중간에 gameType이 null인 별도 커밋 없이 라운드 2 상태로 곧장 렌더된다.
+      await act(async () => {
+        useOverlayStore.getState().clearGameRound();
+        useOverlayStore.getState().startGameRound({
+          gameType: 'QUIZ',
+          round: 2,
+          maxRounds: 2,
+          deadlineAt: Date.now() + 45_000,
+          quiz: { question: { ko: 'Q2', en: 'Q2' }, choices: [{ ko: 'B', en: 'B' }] },
+        });
+      });
+      rerender(<MiniGame />);
+
+      await waitFor(() => expect(getByText('Q2')).toBeTruthy());
+      await act(async () => {
+        fireEvent.press(getByText('B'));
+      });
+
+      expect(emit).toHaveBeenCalledWith('game:submit', { duelId: 1, round: 2, value: 0 });
+    },
+  );
+
+  it(
+    'game:submit이 MINIGAME_ 실패로 거절되면 마감 전 재제출이 가능하도록 제출 상태를 ' +
+      '되돌린다 (PR #54 2차 리뷰 지적 2번 — 예전엔 MINIGAME_ 코드가 DUEL_ 접두사 필터에 ' +
+      '걸려 조용히 버려지고 사용자는 45초 뒤 기권패로만 결과를 알았다)',
+    async () => {
+      useOverlayStore.getState().startGameRound({
+        gameType: 'QUIZ',
+        round: 1,
+        maxRounds: 1,
+        deadlineAt: Date.now() + 45_000,
+        quiz: { question: { ko: 'Q', en: 'Q' }, choices: [{ ko: 'A', en: 'A' }] },
+      });
+
+      const { getByText } = await render(<MiniGame />);
+      await act(async () => {
+        fireEvent.press(getByText('A'));
+      });
+      expect(getByText('Submitted! Waiting for opponent...')).toBeTruthy();
+
+      // SocketProvider의 exception 핸들러가 MINIGAME_INVALID_SCORE 등을 받으면 이렇게
+      // mySubmitted를 되돌린다 — 여기서는 그 결과만 검증한다(SocketProvider 자체 동작은
+      // SocketProvider.test.tsx가 검증).
+      await act(async () => {
+        useOverlayStore.getState().setMySubmitted(false);
+      });
+
+      expect(getByText('A')).toBeTruthy();
+    },
+  );
 });

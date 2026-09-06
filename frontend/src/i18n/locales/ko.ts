@@ -233,7 +233,12 @@ export const ko = {
       DUEL_ALREADY_HANDLED: '이미 처리된 결투입니다',
       DUEL_NOT_FOUND: '결투를 찾을 수 없습니다',
       DUEL_NOT_ACCEPTED: '수락되지 않은 결투입니다',
+      DUEL_TARGET_UNAVAILABLE: '지금은 이 상대에게 결투를 신청할 수 없습니다',
       MINIGAME_START_FAILED: '미니게임을 시작하지 못했습니다. 잠시 후 다시 시도해주세요',
+      MINIGAME_NOT_ACTIVE: '진행 중인 미니게임이 없습니다',
+      MINIGAME_ROUND_MISMATCH: '이미 지난 라운드입니다',
+      MINIGAME_ALREADY_SUBMITTED: '이미 이번 라운드 결과를 제출했습니다',
+      MINIGAME_INVALID_SCORE: '제출한 결과가 올바르지 않습니다. 다시 시도해주세요',
       UNAUTHENTICATED_CONNECTION: '인증이 만료됐습니다. 다시 로그인해주세요',
     },
     duelOutcome: {

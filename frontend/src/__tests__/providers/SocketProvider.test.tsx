@@ -97,6 +97,28 @@ describe('SocketProvider', () => {
   });
 
   it(
+    'MINIGAME_ 접두사 예외는 Alert를 띄우고 mySubmitted를 되돌려 마감 전 재제출을 연다 ' +
+      '(PR #54 2차 리뷰 지적 2번 — 예전엔 DUEL_ 접두사 필터에 걸려 조용히 버려지고 사용자는 ' +
+      '45초 뒤 기권패로만 결과를 알았다)',
+    async () => {
+      useOverlayStore.getState().setDuelId(1);
+      useOverlayStore.getState().setShowMiniGame(true);
+      useOverlayStore.getState().setMySubmitted(true);
+
+      await act(async () => {
+        exceptionHandler()({ code: 'MINIGAME_INVALID_SCORE', message: 'boom' });
+      });
+
+      expect(alertSpy).toHaveBeenCalledTimes(1);
+      expect(useOverlayStore.getState().mySubmitted).toBe(false);
+      // game:submit 실패는 이번 제출 하나가 무효였을 뿐 결투 자체가 끝난 게 아니다 —
+      // 오버레이를 닫아버리면 마감 전 재제출 기회가 사라진다.
+      expect(useOverlayStore.getState().showMiniGame).toBe(true);
+      expect(useOverlayStore.getState().duelId).toBe(1);
+    },
+  );
+
+  it(
     'duel:request 전용 실패 코드(DUEL_ALREADY_PENDING 등)는 이미 열려 있는 다른 결투를 ' +
       '지우지 않는다 (PR #54 리뷰 지적 4번)',
     async () => {
