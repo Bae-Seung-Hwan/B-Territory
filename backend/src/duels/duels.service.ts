@@ -794,20 +794,35 @@ export class DuelsService {
         u.team,
       ]),
     );
-    return rows.flatMap((row) => {
-      const team = row.opponentId ? teamById.get(row.opponentId) : undefined;
-      // 팀을 못 읽었으면(= 유저가 이미 사라졌으면) 깎을 대상 자체가 없다.
-      if (!row.opponentId || team === undefined) return [];
-      return [
-        {
-          duelId: row.id,
-          userId: row.opponentId,
-          team,
-          points: DUEL_NO_RESPONSE_SCORE_PENALTY,
-          type: ScoreEventType.DUEL_NO_RESPONSE,
-        },
-      ];
-    });
+    return (
+      rows
+        .flatMap((row) => {
+          const team = row.opponentId
+            ? teamById.get(row.opponentId)
+            : undefined;
+          // 팀을 못 읽었으면(= 유저가 이미 사라졌으면) 깎을 대상 자체가 없다.
+          if (!row.opponentId || team === undefined) return [];
+          return [
+            {
+              duelId: row.id,
+              userId: row.opponentId,
+              team,
+              points: DUEL_NO_RESPONSE_SCORE_PENALTY,
+              type: ScoreEventType.DUEL_NO_RESPONSE,
+            },
+          ];
+        })
+        // userId 순으로 잠그도록 정렬한다. chargeDuelPenalties는 이 순서대로 users를
+        // 잠그는데, 정렬하지 않으면 RETURNING 순서(비결정적)를 그대로 따른다. 스윕이 한
+        // 회차를 5분 안에 못 끝내 다음 회차와 겹치면 두 회차가 SKIP LOCKED로 서로 다른
+        // duels 집합을 동시에 진행하므로(sweepStaleDuels 주석), 같은 유저 둘을 반대 순서로
+        // 만나면 users에서 데드락이 난다. 배치 경로의 shouldSkip은 모든 오류를 삼키고
+        // 상태 전이는 커밋되므로, 그렇게 놓친 페널티는 영구히 사라진다 — 다음 회차는 이미
+        // EXPIRED가 된 그 행을 다시 집지 않는다.
+        .sort((a, b) =>
+          a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0,
+        )
+    );
   }
 
   /**
@@ -1403,11 +1418,20 @@ export class DuelsService {
       );
 
       // 대상 행을 서브쿼리에서 먼저 잠그고 건수를 제한한다(DUEL_SWEEP_BATCH 주석).
-      // SKIP LOCKED가 데드락을 끊는다 — 이 트랜잭션은 duels를 잠근 뒤 차감에서 users를
-      // 잠그고, expireDuel/rejectDuel은 단건 duels → users 순으로 잠근다. 대기가 가능하면
-      // "스윕이 duel A·user X 보유 → duel B 대기" / "expireDuel이 duel B 보유 → user X
-      // 대기"로 순환이 생긴다. 잠긴 행은 이미 다른 경로가 처리 중이므로 건너뛰어도 되고,
-      // 그 경로가 실패해 PENDING으로 남으면 다음 회차가 같은 컷오프로 다시 집는다.
+      //
+      // SKIP LOCKED는 데드락을 끊는 장치가 **아니다**. 이 트랜잭션도 단건 종료 경로
+      // (expireDuel/rejectDuel)도 락 순서가 duels → users로 같고, 여기서는 이 한 문장이
+      // 대상 duels를 전부 잡은 **뒤에야** 차감이 users를 건드리므로 "user를 쥔 채 duel을
+      // 기다리는" 상태 자체가 만들어지지 않는다 — 두 경로 사이에 순환은 생기지 않는다.
+      //
+      // SKIP LOCKED가 실제로 하는 일은 **블로킹 제거**다. 스윕이 한 회차를 5분
+      // (DUEL_SWEEP_INTERVAL_MS) 안에 못 끝내 다음 회차와 겹치면, 대기가 가능한 경우 뒤
+      // 회차가 앞 회차의 duels 락을 기다리며 통째로 멈춘다. 잠긴 행은 이미 다른 경로가
+      // 처리 중이므로 건너뛰어도 되고, 그 경로가 실패해 PENDING으로 남으면 다음 회차가
+      // 같은 컷오프로 다시 집는다.
+      //
+      // 대신 겹친 두 회차가 서로 다른 duels 집합을 동시에 진행하게 되므로, users 락 순서는
+      // chargeDuelPenalties가 직접 맞춰야 한다(buildNoResponseCharges의 정렬 주석).
       const result = await manager
         .createQueryBuilder()
         .update(Duel)

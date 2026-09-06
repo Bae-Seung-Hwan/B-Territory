@@ -1366,6 +1366,48 @@ describe('DuelsService', () => {
       );
     });
 
+    /**
+     * 겹친 두 회차는 SKIP LOCKED로 서로 다른 duels 집합을 동시에 진행하므로, users 락
+     * 순서가 회차마다 다르면 데드락이 난다. 배치는 모든 오류를 삼키고 상태 전이는
+     * 커밋하므로 그렇게 놓친 페널티는 영구히 사라진다 — 정렬로 순서를 고정한다.
+     */
+    it('차감을 userId 순으로 적용해 회차끼리 락 순서가 어긋나지 않게 한다', async () => {
+      const deliveredAt = new Date('2026-01-01T00:00:00Z');
+      // RETURNING이 userId 역순으로 돌아오는 상황을 만든다.
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(2, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-z',
+            inviteDeliveredAt: deliveredAt,
+            requestedAt: deliveredAt,
+          },
+          {
+            id: 9,
+            challengerId: 'user-c',
+            opponentId: 'user-b',
+            inviteDeliveredAt: deliveredAt,
+            requestedAt: deliveredAt,
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+      usersService.findByIds.mockResolvedValue([
+        { id: 'user-z', team: 'JP' },
+        { id: 'user-b', team: 'KR' },
+      ] as never);
+
+      await service.sweepStaleDuels();
+
+      const lockedOrder = (
+        (usersService.applyScoreDelta as jest.Mock).mock.calls as unknown[][]
+      ).map((call) => call[0] as string);
+      expect(lockedOrder).toEqual(['user-b', 'user-z']);
+    });
+
     it('무응답으로 만료된 신청은 응답하지 않은 쪽의 점수를 깎고 원장에 남긴다', async () => {
       txManager.createQueryBuilder.mockReturnValueOnce(
         createQueryBuilderMock(1, [
