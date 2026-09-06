@@ -12,7 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { BottomSheetModal } from '@gorhom/bottom-sheet';
+import { BottomSheetModal, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
@@ -23,33 +23,68 @@ import { useSocialLoginConsent } from '@/hooks/use-social-login-consent';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BottomSheet } from '@/components/ui/BottomSheet';
+import { LEGAL_DOCUMENTS, LEGAL_DOCUMENT_KEYS, type LegalDocumentKey } from '@/legal';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
+
+/** 문서 키 → i18n 라벨/제목 키. 번역 키 이름을 문서 키에 맞춰 바꾸면 기존 번역이 끊긴다. */
+const TERMS_LABEL_KEY: Record<LegalDocumentKey, string> = {
+  service: 'serviceTerms',
+  privacy: 'privacyPolicy',
+  location: 'locationTerms',
+};
+
+const TERMS_TITLE_KEY: Record<LegalDocumentKey, string> = {
+  service: 'serviceTermsTitle',
+  privacy: 'privacyPolicyTitle',
+  location: 'locationTermsTitle',
+};
+
+const NO_AGREEMENTS = Object.fromEntries(LEGAL_DOCUMENT_KEYS.map((key) => [key, false])) as Record<
+  LegalDocumentKey,
+  boolean
+>;
+
+const ALL_AGREEMENTS = Object.fromEntries(LEGAL_DOCUMENT_KEYS.map((key) => [key, true])) as Record<
+  LegalDocumentKey,
+  boolean
+>;
 
 export default function LoginScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const termsSheetRef = useRef<BottomSheetModal>(null);
-  const [agreeTerms, setAgreeTerms] = useState(false);
-  const [agreePrivacy, setAgreePrivacy] = useState(false);
-  const [termsView, setTermsView] = useState<'list' | 'service' | 'privacy'>('list');
-  const allAgreed = agreeTerms && agreePrivacy;
+  // 문서별 동의를 개별 state가 아니라 하나의 맵으로 든다 — 위치기반서비스 약관이 세 번째
+  // 항목으로 들어오면서(위치정보법상 개인정보처리방침으로 갈음할 수 없다), 항목이 늘 때마다
+  // useState와 allAgreed를 따로 고쳐야 하는 구조였다. 하나를 빠뜨리면 동의를 받지 않은 문서가
+  // 조용히 생긴다. 동의 이력을 서버에 남길 때도 이 맵을 그대로 쓴다.
+  const [agreed, setAgreed] = useState<Record<LegalDocumentKey, boolean>>(NO_AGREEMENTS);
+  // 만 14세 미만은 법정대리인 동의가 필요해 가입 자체를 받지 않는다(docs/compliance.md 2.5에서
+  // 만 14세로 확정). 생년월일을 받지 않는 것은 의도된 선택이다 — 확인만 하면 되는데 생년월일을
+  // 받으면 수집 항목이 늘어 최소수집 원칙과 어긋난다.
+  const [agreeAge, setAgreeAge] = useState(false);
+  const [termsView, setTermsView] = useState<'list' | LegalDocumentKey>('list');
+  const allAgreed = LEGAL_DOCUMENT_KEYS.every((key) => agreed[key]) && agreeAge;
+
+  // 아래 useSocialLoginConsent가 렌더 중에 이 함수를 참조하므로 훅 호출보다 먼저 선언한다.
+  const openTermsSheet = () => {
+    // 시트를 열 때마다 동의를 전부 되돌린다 — 이전에 열었다 닫은 체크가 남아 있으면
+    // 사용자가 읽지 않은 문서에 이미 동의한 상태로 시작한다.
+    setAgreed(NO_AGREEMENTS);
+    setAgreeAge(false);
+    setTermsView('list');
+    termsSheetRef.current?.present();
+  };
+
   const {
     requestConsent: requestSocialConsent,
     resolveConsent,
     isAwaitingConsent,
-  } = useSocialLoginConsent({
-    onRequest: () => {
-      setAgreeTerms(false);
-      setAgreePrivacy(false);
-      setTermsView('list');
-      termsSheetRef.current?.present();
-    },
-  });
+  } = useSocialLoginConsent({ onRequest: openTermsSheet });
 
   const canSubmit = email.trim().length > 0 && password.length > 0 && !loading;
 
@@ -125,18 +160,14 @@ export default function LoginScreen() {
     }
   };
 
-  const openTermsSheet = () => {
-    setAgreeTerms(false);
-    setAgreePrivacy(false);
-    setTermsView('list');
-    termsSheetRef.current?.present();
-  };
-
   const handleToggleAgreeAll = () => {
     const next = !allAgreed;
-    setAgreeTerms(next);
-    setAgreePrivacy(next);
+    setAgreed(next ? ALL_AGREEMENTS : NO_AGREEMENTS);
+    setAgreeAge(next);
   };
+
+  const toggleAgreement = (key: LegalDocumentKey) =>
+    setAgreed((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const handleContinueToRegister = () => {
     const wasAwaitingSocialConsent = isAwaitingConsent();
@@ -220,8 +251,11 @@ export default function LoginScreen() {
 
       <BottomSheet
         ref={termsSheetRef}
-        snapPoints={[termsView === 'list' ? '58%' : '70%']}
+        snapPoints={[termsView === 'list' ? '70%' : '85%']}
         onDismiss={handleTermsSheetDismiss}
+        /* 상세 화면의 조항 전문은 한 화면에 담기지 않는다. BottomSheetView는 자신을 정적
+           콘텐츠로 등록해 내부 스크롤을 죽이므로, 상세일 때만 자체 스크롤을 넘긴다. */
+        scrollable={termsView !== 'list'}
       >
         {termsView === 'list' ? (
           <>
@@ -233,35 +267,33 @@ export default function LoginScreen() {
                 {allAgreed ? '☑' : '☐'} {t('auth.terms.agreeAll')}
               </Text>
             </Card>
-            <Card selected={agreeTerms} style={styles.termsItem}>
-              <View style={styles.termsRow}>
-                <TouchableOpacity
-                  style={styles.termsCheckArea}
-                  onPress={() => setAgreeTerms((prev) => !prev)}
-                >
-                  <Text style={styles.termsItemText}>
-                    {agreeTerms ? '☑' : '☐'} {t('auth.terms.serviceTerms')}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setTermsView('service')}>
-                  <Text style={styles.termsViewLink}>{t('auth.terms.viewLabel')}</Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
-            <Card selected={agreePrivacy} style={styles.termsItem}>
-              <View style={styles.termsRow}>
-                <TouchableOpacity
-                  style={styles.termsCheckArea}
-                  onPress={() => setAgreePrivacy((prev) => !prev)}
-                >
-                  <Text style={styles.termsItemText}>
-                    {agreePrivacy ? '☑' : '☐'} {t('auth.terms.privacyPolicy')}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setTermsView('privacy')}>
-                  <Text style={styles.termsViewLink}>{t('auth.terms.viewLabel')}</Text>
-                </TouchableOpacity>
-              </View>
+            {LEGAL_DOCUMENT_KEYS.map((key) => (
+              <Card key={key} selected={agreed[key]} style={styles.termsItem}>
+                <View style={styles.termsRow}>
+                  <TouchableOpacity
+                    style={styles.termsCheckArea}
+                    onPress={() => toggleAgreement(key)}
+                  >
+                    <Text style={styles.termsItemText}>
+                      {agreed[key] ? '☑' : '☐'} {t(`auth.terms.${TERMS_LABEL_KEY[key]}`)}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setTermsView(key)}>
+                    <Text style={styles.termsViewLink}>{t('auth.terms.viewLabel')}</Text>
+                  </TouchableOpacity>
+                </View>
+              </Card>
+            ))}
+
+            {/* 연령 확인만 '보기'가 없다 — 읽을 문서가 아니라 사실 확인이다. */}
+            <Card
+              onPress={() => setAgreeAge((prev) => !prev)}
+              selected={agreeAge}
+              style={styles.termsItem}
+            >
+              <Text style={styles.termsItemText}>
+                {agreeAge ? '☑' : '☐'} {t('auth.terms.ageConfirm')}
+              </Text>
             </Card>
 
             <Button
@@ -272,24 +304,16 @@ export default function LoginScreen() {
             />
           </>
         ) : (
-          <>
-            <Text style={styles.termsTitle}>
-              {termsView === 'service'
-                ? t('auth.terms.serviceTermsTitle')
-                : t('auth.terms.privacyPolicyTitle')}
-            </Text>
-            <Text style={styles.detailBody}>
-              {termsView === 'service'
-                ? t('auth.terms.serviceTermsBody')
-                : t('auth.terms.privacyPolicyBody')}
-            </Text>
+          <BottomSheetScrollView contentContainerStyle={styles.detailScrollContent}>
+            <Text style={styles.termsTitle}>{t(`auth.terms.${TERMS_TITLE_KEY[termsView]}`)}</Text>
+            <Text style={styles.detailBody}>{LEGAL_DOCUMENTS[termsView].body[locale]}</Text>
             <Button
               title={t('common.close')}
               onPress={() => setTermsView('list')}
               variant="secondary"
               style={styles.termsContinueButton}
             />
-          </>
+          </BottomSheetScrollView>
         )}
       </BottomSheet>
     </KeyboardAvoidingView>
@@ -345,4 +369,5 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   detailBody: { fontSize: 13, color: '#ccc', lineHeight: 20, marginTop: 4 },
+  detailScrollContent: { padding: 16, paddingBottom: 32 },
 });
