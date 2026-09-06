@@ -18,4 +18,11 @@ export const queryKeys = {
   missions: {
     reviews: (spotId: number) => ['missions', 'reviews', spotId] as const,
   },
+  ranking: {
+    teams: (season?: number) => ['ranking', 'teams', season ?? 'current'] as const,
+    users: (season?: number) => ['ranking', 'users', season ?? 'current'] as const,
+  },
+  moderation: {
+    blocks: ['moderation', 'blocks'] as const,
+  },
 } as const;

@@ -103,11 +103,40 @@ export const ko = {
   },
   chat: {
     title: '채팅',
-    placeholder: '팀 채팅이 표시됩니다',
+    emptyState: '아직 메시지가 없습니다',
+    inputPlaceholder: '메시지를 입력하세요',
+    send: '전송',
+    sending: '전송 중…',
+    messageFailed: '전송 실패',
+    retry: '재전송',
+    errors: {
+      connection: '채팅 연결에 실패했습니다. 다시 접속을 시도합니다',
+      rateLimit: '메시지를 너무 자주 보냈습니다. 잠시 후 다시 시도해주세요',
+      unknown: '메시지 전송에 실패했습니다',
+    },
   },
   ranking: {
     title: '랭킹',
-    placeholder: '국가별 · 개인별 랭킹이 표시됩니다',
+    scope: {
+      teams: '국가별',
+      users: '개인별',
+    },
+    loadFailed: '랭킹을 불러오지 못했습니다',
+    retry: '다시 시도',
+    empty: '아직 랭킹이 없습니다',
+    seasonNav: {
+      previous: '이전 시즌',
+      next: '다음 시즌',
+      backToCurrent: '현재 시즌으로 돌아가기',
+      unknown: '—',
+      seasonLabel: '시즌 {{season}}',
+      range: '{{start}} ~ {{end}}',
+      status: {
+        upcoming: '예정',
+        ongoing: '진행 중',
+        ended: '종료',
+      },
+    },
   },
   profile: {
     title: '내정보',
@@ -119,6 +148,19 @@ export const ko = {
     logout: '로그아웃',
     logoutConfirmTitle: '로그아웃',
     logoutConfirmMessage: '정말 로그아웃하시겠어요?',
+    blockedUsersLink: '차단 관리',
+    contactTitle: '문의하기',
+    deleteAccount: '회원 탈퇴',
+    deleteAccountPending: '탈퇴 처리 중…',
+    deleteAccountConfirmTitle: '정말 탈퇴하시겠어요?',
+    deleteAccountConfirmMessage:
+      '계정과 로그인 정보가 삭제되며 되돌릴 수 없습니다. 점령·결투 기록은 팀 점수 집계를 위해 유저 정보 없이 보존되며, 위치정보 이용·제공사실 확인자료는 관련 법령에 따라 탈퇴 후에도 6개월간 보존됩니다.',
+    deleteAccountTimeoutTitle: '처리 결과를 확인할 수 없습니다',
+    deleteAccountTimeoutMessage:
+      '응답이 지연되어 탈퇴가 완료됐는지 확인할 수 없습니다. 다시 로그인해 계정 상태를 확인해주세요.',
+    errors: {
+      deleteAccountFailed: '탈퇴 처리에 실패했습니다. 잠시 후 다시 시도해주세요',
+    },
   },
   map: {
     hud: {
@@ -271,6 +313,46 @@ export const ko = {
       quiz: {
         instruction: '정답을 맞히면 승리합니다',
       },
+    },
+  },
+  // 채팅 메시지 길게 누르기(신고/차단)와 profile의 차단 관리 화면이 함께 쓴다.
+  moderation: {
+    // 성공 알림용 제목. 에러 알림(auth.errors.title = '오류')을 재사용하면 신고가
+    // 접수됐는데도 "오류"라는 제목이 떠 접수 여부가 헷갈린다.
+    noticeTitle: '알림',
+    actionsSheetTitle: '메시지 작업',
+    report: '신고하기',
+    block: '차단하기',
+    cancel: '취소',
+    reportTitle: '신고 사유를 선택하세요',
+    reportReason: {
+      SPAM: '스팸 · 광고',
+      ABUSE: '욕설 · 괴롭힘',
+      SEXUAL: '음란물',
+      HATE: '혐오 발언',
+      OTHER: '기타',
+    },
+    reportContentLabel: '신고 대상 메시지',
+    detailPlaceholder: '자세한 내용을 알려주세요 (선택, 최대 500자)',
+    submitReport: '신고 접수',
+    reportSuccess: '신고가 접수되었습니다',
+    blockConfirmTitle: '차단하시겠습니까?',
+    blockConfirmMessage: '{{nickname}}님을 차단하면 이후 메시지가 나에게 전달되지 않습니다.',
+    blockSuccess: '차단되었습니다',
+    blockedUsersTitle: '차단 관리',
+    retry: '다시 시도',
+    blockedUsersEmpty: '차단한 사용자가 없습니다',
+    blockedAtLabel: '차단일',
+    unblock: '차단 해제',
+    unblockConfirmTitle: '차단을 해제하시겠습니까?',
+    unblockConfirmMessage: '{{nickname}}님의 메시지를 다시 받게 됩니다.',
+    errors: {
+      blockSelf: '자기 자신은 차단할 수 없습니다',
+      reportSelf: '자기 자신은 신고할 수 없습니다',
+      reportRateLimit: '신고가 너무 잦습니다. 잠시 후 다시 시도해주세요',
+      userNotFound: '사용자를 찾을 수 없습니다',
+      userNotRegistered: '아직 가입되지 않은 계정입니다',
+      failed: '처리에 실패했습니다',
     },
   },
 };

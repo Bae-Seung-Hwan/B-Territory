@@ -5,6 +5,8 @@ import { AuthProvider } from '@/providers/AuthProvider';
 import { queryKeys } from '@/lib/query-keys';
 import { useBattleStore } from '@/store/useBattleStore';
 import { useOverlayStore } from '@/store/useOverlayStore';
+import { useChatStore } from '@/store/useChatStore';
+import { clearAllVisitCheckins } from '@/lib/visit-checkin';
 
 type AuthStateCallback = (user: { uid: string } | null) => void;
 
@@ -19,6 +21,11 @@ jest.mock('firebase/auth', () => ({
   }),
 }));
 jest.mock('@/lib/firebase', () => ({ auth: {} }));
+jest.mock('@/lib/visit-checkin', () => ({
+  clearAllVisitCheckins: jest.fn().mockResolvedValue(undefined),
+}));
+
+const mockedClearAllVisitCheckins = clearAllVisitCheckins as jest.Mock;
 
 function Wrapper({ queryClient }: { queryClient: QueryClient }) {
   return (
@@ -41,14 +48,27 @@ describe('AuthProvider', () => {
     queryClient = new QueryClient();
     useBattleStore.setState(initialBattleState, true);
     useOverlayStore.setState(initialOverlayState, true);
+    useChatStore.setState({ messages: [] });
+    mockedClearAllVisitCheckins.mockClear();
   });
 
   it(
-    '사용자가 바뀌면(로그아웃·계정 전환) 이전 사용자 주변의 배틀 목록과 진행 중이던 ' +
-      '결투 상태를 지운다 (PR #54 리뷰 지적 10번 — 남아 있던 duelId가 isDuelBusy를 ' +
+    '사용자가 바뀌면(로그아웃·계정 전환) 이전 사용자의 프로필·채팅·차단목록·배틀 목록· ' +
+      '진행 중이던 결투 상태와 방문 체크인 기록을 지운다 (PR #50 3차 리뷰 지적 6·7번, ' +
+      'PR #53 리뷰 지적 6번, PR #54 리뷰 지적 10번 — 남아 있던 duelId가 isDuelBusy를 ' +
       '참으로 만들어 새 사용자에게 온 duel:requested를 조용히 삼켰다)',
     async () => {
       queryClient.setQueryData(queryKeys.auth.me, { id: 'old-profile' });
+      queryClient.setQueryData(queryKeys.moderation.blocks, [{ userId: 'x' }]);
+      useChatStore.getState().addMessage({
+        id: 'm1',
+        userId: 'user-a',
+        nickname: 'A',
+        team: 'KR',
+        text: '안녕',
+        at: new Date().toISOString(),
+        mine: false,
+      });
       useBattleStore.getState().upsertEnemy({ userId: 'nearby-1', nickname: 'A', team: 'KR' });
       useOverlayStore.getState().setDuelId(7);
       useOverlayStore.getState().setShowMiniGame(true);
@@ -56,28 +76,41 @@ describe('AuthProvider', () => {
       await render(<Wrapper queryClient={queryClient} />);
 
       // 첫 이벤트: 이전 사용자가 없던 상태(undefined) -> A로 로그인. 지울 대상이
-      // 애초에 없으므로 건드리지 않는다.
+      // 애초에 없으므로 캐시를 건드리지 않는다(로그인 화면이 방금 채운 프로필을
+      // 여기서 지우면 불필요한 재조회가 생긴다).
       await act(async () => authCallback?.({ uid: 'A' }));
+      expect(queryClient.getQueryData(queryKeys.auth.me)).toEqual({ id: 'old-profile' });
+      expect(useChatStore.getState().messages).toHaveLength(1);
       expect(Object.keys(useBattleStore.getState().enemiesById)).toHaveLength(1);
       expect(useOverlayStore.getState().duelId).toBe(7);
+      expect(mockedClearAllVisitCheckins).not.toHaveBeenCalled();
 
-      // 계정 전환: A -> B.
+      // 계정 전환: A -> B. 직전 사용자(A)가 있었고 다음 사용자(B)와 다르므로 정리 대상이다.
       await act(async () => authCallback?.({ uid: 'B' }));
 
       expect(queryClient.getQueryData(queryKeys.auth.me)).toBeUndefined();
+      expect(queryClient.getQueryData(queryKeys.moderation.blocks)).toBeUndefined();
+      expect(useChatStore.getState().messages).toHaveLength(0);
       expect(useBattleStore.getState().enemiesById).toEqual({});
       expect(useBattleStore.getState().pendingChallengeTargetId).toBeNull();
       expect(useOverlayStore.getState().duelId).toBeNull();
       expect(useOverlayStore.getState().showMiniGame).toBe(false);
+      // visit-checkin은 유저 구분 없는 기기 스코프 키라, 안 지우면 다음 사용자가
+      // 이전 사용자의 방문 체크인을 그대로 물려받는다(PR #53 리뷰 지적 6번).
+      expect(mockedClearAllVisitCheckins).toHaveBeenCalledTimes(1);
     },
   );
 
-  it('로그인·회원가입(이전 사용자 없음 -> 새 사용자)에서는 배틀·오버레이 상태를 지우지 않는다', async () => {
+  it('로그인·회원가입(이전 사용자 없음 -> 새 사용자)에서는 캐시·배틀·오버레이 상태를 지우지 않는다', async () => {
+    queryClient.setQueryData(queryKeys.auth.me, { id: 'fresh-profile' });
     useBattleStore.getState().upsertEnemy({ userId: 'nearby-1', nickname: 'A', team: 'KR' });
 
     await render(<Wrapper queryClient={queryClient} />);
+
     await act(async () => authCallback?.({ uid: 'A' }));
 
+    expect(queryClient.getQueryData(queryKeys.auth.me)).toEqual({ id: 'fresh-profile' });
     expect(Object.keys(useBattleStore.getState().enemiesById)).toHaveLength(1);
+    expect(mockedClearAllVisitCheckins).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,13 @@ interface LocationState {
  * 훅마다 watchPositionAsync를 따로 걸면 지도 탭·채팅 탭·위치 송신이 각자 고정밀
  * 구독을 만들어 배터리를 그만큼 더 쓴다(화면은 한 번 열면 언마운트되지 않으므로
  * 동시에 살아있다). 마지막 구독자가 사라질 때만 실제 watcher를 해제한다.
+ *
+ * develop(PR #50)은 한때 이 공유 구조를 "소비자가 map/index.tsx뿐"이라는 근거로
+ * 훅 인스턴스별 독립 구독으로 되돌렸었다 — 그 근거가 이 브랜치에서 다시 무효화된다.
+ * `LocationBroadcaster`가 조우 판정을 위해 앱 루트에 상주하며 이 훅을 구독하므로
+ * map 화면과 합쳐 소비자가 다시 둘 이상이다. 되돌리면 두 곳이 각자 고정밀 watcher를
+ * 켜 배터리를 이중으로 쓰고, 이 파일이 고친 권한 재시도(리뷰 지적 13번)·좌표 초기화
+ * (리뷰 지적 12번)도 함께 사라진다 — 그래서 공유 스토어 쪽을 유지한다.
  */
 let state: LocationState = { coords: null, error: null, loading: true };
 const listeners = new Set<() => void>();
