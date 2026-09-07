@@ -840,6 +840,35 @@ describe('DuelsService', () => {
       );
     });
 
+    /**
+     * 이 경로만 보면 순환이 생기지 않지만(참가자가 둘 다 ACCEPTED라 스윕이 집는 PENDING과
+     * 겹치지 않는다), 같은 파일의 requestDuel·buildNoResponseCharges가 이미 "id 정렬 후
+     * 락"을 규칙으로 쓴다. 규칙이 한 파일 안에서 갈리지 않게 고정한다.
+     */
+    it('승패와 무관하게 users 락을 userId 순으로 잡는다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildAcceptedDuel());
+      redis.geoSearch.mockResolvedValue([]);
+
+      // 상대(user-b)가 이기면 "승자 먼저"는 user-b → user-a 순이 되어 정렬과 어긋난다.
+      await service.finishByGame(1, opponentId);
+
+      const lockedIds = (
+        usersService.applyScoreDelta.mock.calls as unknown[][]
+      ).map((call) => call[0]);
+      expect(lockedIds).toEqual(['user-a', 'user-b']);
+      // 정렬은 순서만 바꾼다 — 부호는 승패를 그대로 따라야 한다.
+      expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
+        opponentId,
+        BASE_DUEL_SCORE,
+        txManager,
+      );
+      expect(usersService.applyScoreDelta).toHaveBeenCalledWith(
+        challenger.id,
+        -BASE_DUEL_SCORE,
+        txManager,
+      );
+    });
+
     it('이미 COMPLETED로 처리된 결투는 재시도해도 점수를 다시 반영하지 않는다', async () => {
       const alreadyCompleted = {
         id: 1,
@@ -1273,15 +1302,18 @@ describe('DuelsService', () => {
         // 큐잉되어도 낡지 않도록 남은 초가 아니라 절대 시각으로 나간다.
         shieldUntil: expect.any(String) as unknown as string,
       };
+      // 초대가 전달된 결투라 상대도 이 결투를 안다 — 양쪽 다 평소대로 큐잉된다.
       expect(notifier).toHaveBeenCalledWith(
         'user-a',
         'duel:expired',
         expiredPayload,
+        false,
       );
       expect(notifier).toHaveBeenCalledWith(
         'user-b',
         'duel:expired',
         expiredPayload,
+        false,
       );
       // VOID는 차감이 없다 — scoreDelta가 비어 penalizedUserId도 null이다.
       const voidedPayload = {
@@ -1290,15 +1322,18 @@ describe('DuelsService', () => {
         penalizedUserId: null,
         shieldUntil: null,
       };
+      // VOID 경로의 행에는 inviteUndelivered가 없다 — 큐잉 정책이 바뀌지 않는다.
       expect(notifier).toHaveBeenCalledWith(
         'user-c',
         'duel:voided',
         voidedPayload,
+        false,
       );
       expect(notifier).toHaveBeenCalledWith(
         'user-d',
         'duel:voided',
         voidedPayload,
+        false,
       );
     });
 
@@ -1347,12 +1382,17 @@ describe('DuelsService', () => {
       await service.sweepStaleDuels();
 
       // 차감은 두 건 다 커밋됐으므로 scorePenalty는 그대로 나간다.
-      expect(notifier).toHaveBeenCalledWith('user-b', 'duel:expired', {
-        duelId: 7,
-        scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
-        penalizedUserId: 'user-b',
-        shieldUntil: null,
-      });
+      expect(notifier).toHaveBeenCalledWith(
+        'user-b',
+        'duel:expired',
+        {
+          duelId: 7,
+          scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
+          penalizedUserId: 'user-b',
+          shieldUntil: null,
+        },
+        false,
+      );
       const shieldedPayload = {
         duelId: 9,
         scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
@@ -1363,6 +1403,56 @@ describe('DuelsService', () => {
         'user-f',
         'duel:expired',
         shieldedPayload,
+        false,
+      );
+    });
+
+    /**
+     * 초대를 끝내 못 받은 상대는 이 결투의 존재 자체를 모른다 — 종료 알림을 30분 큐에
+     * 쌓아둬도 아무도 소비하지 않는다. 청구를 가르는 것과 같은 근거(inviteDeliveredAt)로
+     * 큐잉도 가른다. 신청자는 자기가 건 결투의 결말을 받아야 하므로 영향이 없다.
+     */
+    it('초대가 전달되지 않은 상대에게는 duel:expired를 큐잉하지 않는다', async () => {
+      const notifier = jest.fn().mockResolvedValue(undefined);
+      service.setNotifier(notifier);
+
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(1, [
+          {
+            id: 7,
+            challengerId: 'user-a',
+            opponentId: 'user-b',
+            // 초대가 살아 있는 소켓으로 나가지 못했다.
+            inviteDeliveredAt: null,
+            requestedAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ]),
+      );
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      await service.sweepStaleDuels();
+
+      // 미전달이라 청구도 없다 — payload는 0/null이고, 상대에게만 ephemeral이 붙는다.
+      const payload = {
+        duelId: 7,
+        scorePenalty: 0,
+        penalizedUserId: null,
+        shieldUntil: null,
+      };
+      expect(notifier).toHaveBeenCalledWith(
+        'user-b',
+        'duel:expired',
+        payload,
+        true,
+      );
+      // 신청자는 결말을 받아야 한다 — 오프라인이면 큐잉된다.
+      expect(notifier).toHaveBeenCalledWith(
+        'user-a',
+        'duel:expired',
+        payload,
+        false,
       );
     });
 
@@ -1718,21 +1808,33 @@ describe('DuelsService', () => {
 
       // 탈퇴로 끝난 결투는 아무도 응답을 회피한 게 아니라 차감이 없다 — scoreDelta가
       // 비어 있어 payload도 0/null로 나간다.
-      expect(notifier).toHaveBeenCalledWith('user-b', 'duel:expired', {
-        duelId: 7,
-        scorePenalty: 0,
-        penalizedUserId: null,
-        shieldUntil: null,
-      });
-      expect(notifier).toHaveBeenCalledWith('user-c', 'duel:voided', {
-        duelId: 8,
-        scorePenalty: 0,
-        penalizedUserId: null,
-        shieldUntil: null,
-      });
+      // 탈퇴 종료 경로의 행에는 inviteUndelivered가 없다 — 남는 상대는 평소대로 큐잉된다.
+      expect(notifier).toHaveBeenCalledWith(
+        'user-b',
+        'duel:expired',
+        {
+          duelId: 7,
+          scorePenalty: 0,
+          penalizedUserId: null,
+          shieldUntil: null,
+        },
+        false,
+      );
+      expect(notifier).toHaveBeenCalledWith(
+        'user-c',
+        'duel:voided',
+        {
+          duelId: 8,
+          scorePenalty: 0,
+          penalizedUserId: null,
+          shieldUntil: null,
+        },
+        false,
+      );
       // 탈퇴자에게는 보내지 않는다 — 큐는 곧 purgeUserKeys가 지운다.
       expect(notifier).not.toHaveBeenCalledWith(
         'user-a',
+        expect.anything(),
         expect.anything(),
         expect.anything(),
       );

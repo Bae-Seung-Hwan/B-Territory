@@ -95,9 +95,10 @@ export class RealtimeGateway
     private readonly sessions: WsSessionsService,
   ) {
     // 정리 잡(duel-cleanup)이 스윕한 결투의 참가자에게 알림을 보낼 수 있도록 콜백 주입
-    // 스윕 알림은 전달 여부를 쓰지 않는다 — 큐잉만 돼도 재접속 때 재생되면 충분하다.
-    this.duelsService.setNotifier(async (userId, event, payload) => {
-      await this.notifyUser(userId, event, payload);
+    // 스윕 알림은 반환값(전달 여부)을 쓰지 않는다 — 큐잉만 돼도 재접속 때 재생되면 충분하다.
+    // 다만 큐잉할지 여부는 호출부가 정한다(notifySwept의 미전달 상대 처리).
+    this.duelsService.setNotifier(async (userId, event, payload, ephemeral) => {
+      await this.notifyUser(userId, event, payload, ephemeral);
     });
   }
 
@@ -267,10 +268,10 @@ export class RealtimeGateway
       // 다시 뜨지 않는다. 판정 자체는 언제나 requestDuel이 Redis를 다시 읽어 내리고,
       // 이 값은 duel:rejected의 shieldUntil과 같은 성격의 안내값이다.
       const [users, selfShieldTtl, opponentShieldTtls] = await Promise.all([
-        this.usersService.findByIds(newEncounters.map((o) => o.userId)),
-        this.redis.getDuelShieldTtl(user.id),
+        this.nicknamesForNotice(newEncounters.map((o) => o.userId)),
+        this.shieldTtlForNotice(user.id),
         Promise.all(
-          newEncounters.map((o) => this.redis.getDuelShieldTtl(o.userId)),
+          newEncounters.map((o) => this.shieldTtlForNotice(o.userId)),
         ),
       ]);
       const nicknameById = new Map(users.map((u) => [u.id, u.nickname]));
@@ -297,6 +298,49 @@ export class RealtimeGateway
     }
 
     return { status: 'ok' };
+  }
+
+  /**
+   * 조우 알림(encounter:detected)을 채우는 두 조회는 **안내값이라 fail-open**이다.
+   *
+   * 호출부(handleLocationUpdate)는 이 조회들 **전에** 이미 ENCOUNTER_COOLDOWN_TTL 락을
+   * 소모한다. 그래서 여기서 예외가 올라가 핸들러가 통째로 끝나면, 잃는 것은 조회한 값이
+   * 아니라 **조우 자체**다 — 양쪽 다 encounter:detected를 못 받고, 락은 남아 그 쌍은 60초
+   * 동안 조우가 다시 뜨지 않는다. 조회 하나가 흔들렸을 뿐인데 대가는 이벤트 전체다.
+   *
+   * 반면 값이 빠졌을 때의 최악은 각각 이 정도다:
+   * - 보호막: 신청 버튼이 열려 있다가 duel:request가 DUEL_TARGET_SHIELDED로 막힌다
+   *   (이 값을 payload에 싣기 전의 동작과 같다)
+   * - 닉네임: 이름이 비어 보인다 (payload가 이미 `nickname: null`을 허용한다)
+   *
+   * 판정은 다르다. requestDuel의 getDuelShieldTtl은 그대로 던져야 한다 — 보호막은 유저가
+   * 2점을 내고 산 약속이라, Redis가 흔들린다고 조용히 통과시키면 그 대가가 증발한다.
+   * 레이트 리밋(chat.gateway의 assertRate)이 없어도 되는 연성 가드라 fail-open인 것과는
+   * 성격이 다르다. 정리하면 **판정은 fail-closed, 안내는 fail-open**이다.
+   */
+  private async shieldTtlForNotice(userId: string): Promise<number> {
+    try {
+      return await this.redis.getDuelShieldTtl(userId);
+    } catch (err) {
+      this.logger.warn(
+        `조우 보호막 안내 조회 실패 userId=${userId}: ${(err as Error).message}`,
+      );
+      return 0;
+    }
+  }
+
+  /** 조우 알림에 실을 닉네임. 실패하면 빈 목록 — 이름만 비고 조우는 그대로 나간다. */
+  private async nicknamesForNotice(
+    userIds: string[],
+  ): Promise<{ id: string; nickname: string }[]> {
+    try {
+      return await this.usersService.findByIds(userIds);
+    } catch (err) {
+      this.logger.warn(
+        `조우 닉네임 조회 실패 (${userIds.length}건): ${(err as Error).message}`,
+      );
+      return [];
+    }
   }
 
   @SubscribeMessage('duel:request')

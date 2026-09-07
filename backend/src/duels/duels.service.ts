@@ -45,11 +45,17 @@ export type DuelFinishOutcome =
   | { status: 'void'; duel: Duel }
   | { status: 'confirmed'; duel: Duel };
 
-/** 게이트웨이가 주입하는 알림 콜백 (온라인이면 즉시 emit, 아니면 Redis 큐잉) */
+/**
+ * 게이트웨이가 주입하는 알림 콜백 (온라인이면 즉시 emit, 아니면 Redis 큐잉).
+ *
+ * `ephemeral`은 게이트웨이 notifyUser의 같은 이름 플래그로 그대로 넘어간다 — 오프라인
+ * 수신자에게 큐잉하지 않고 버린다는 뜻이다.
+ */
 export type DuelNotifier = (
   userId: string,
   event: string,
   payload: unknown,
+  ephemeral?: boolean,
 ) => Promise<void>;
 
 /**
@@ -151,6 +157,12 @@ type SweptDuelRow = {
   scoreDelta?: number | null;
   // 탈퇴 종료 경로에서만 채운다 — EXPIRED/VOID를 한 배열로 넘기고 알림 때 다시 가른다.
   event?: string;
+  /**
+   * 이 결투의 초대가 상대에게 끝내 전달되지 않았는지(inviteDeliveredAt이 비어 있음).
+   * 무응답 만료 경로에서만 채운다 — notifySwept가 그 상대에게만 큐잉을 건너뛰는 데 쓴다.
+   * 다른 종료 경로(VOID·탈퇴)는 undefined로 남아 평소대로 큐잉된다.
+   */
+  inviteUndelivered?: boolean;
 };
 
 /**
@@ -385,11 +397,20 @@ export class DuelsService {
     // 이 조회와 아래 생성 트랜잭션 사이에 상대가 거절을 커밋하면 이 신청은 그대로 통과한다
     // (Redis 보호막과 Postgres 트랜잭션은 함께 잠글 수 없다). 창은 수 ms고 결과는 결투 한
     // 번이 더 성립하는 것뿐이라, advisory lock 안으로 끌어들이는 대신 그대로 둔다.
+    // 이 조회는 **판정**이라 실패하면 그대로 던진다(fail-closed). 보호막은 유저가 2점을
+    // 내고 산 약속이라, Redis가 흔들린다고 조용히 통과시키면 그 대가가 증발한다 — 안내
+    // 경로인 encounter:detected가 fail-open인 것과 의도적으로 다르다
+    // (realtime.gateway.ts#shieldTtlForNotice).
     const targetShieldTtl = await this.redis.getDuelShieldTtl(targetUserId);
     if (targetShieldTtl > 0) {
       throw new ForbiddenException(
         errBody(
           ErrorCode.DUEL_TARGET_SHIELDED,
+          // 남은 시간을 그대로 알려준다. 이 값으로 상대가 직전 결투를 언제 거절/무시했는지
+          // 역산할 수 있지만, encounter:detected가 이미 같은 정보를 더 정확하게(절대 시각)
+          // 싣고 있어 여기만 뭉개도 추론 채널은 닫히지 않고 재시도 안내만 사라진다.
+          // 차단 사유를 감추는 것과 성격이 다르다 — 차단은 대상이 알면 안 되는 모더레이션
+          // 조치지만, 보호막은 신청자가 알고 행동을 조정해야 하는 게임 상태다.
           `상대가 결투 거절 보호 중입니다. (약 ${Math.ceil(targetShieldTtl / 60)}분 후 해제)`,
         ),
       );
@@ -1160,8 +1181,16 @@ export class DuelsService {
           .execute();
         if (claimResult.affected === 0) return false;
 
-        await this.usersService.applyScoreDelta(winnerId, scoreDelta, manager);
-        await this.usersService.applyScoreDelta(loserId, -scoreDelta, manager);
+        // users 락은 userId 순으로 잡는다. 이 경로만 보면 순환이 생기지 않지만
+        // (승자·패자 둘 다 ACCEPTED 결투의 참가자라 스윕이 집는 PENDING과 겹치지 않는다),
+        // 같은 파일의 requestDuel과 buildNoResponseCharges가 이미 "id 정렬 후 락"을 규칙으로
+        // 쓴다. 규칙이 한 파일 안에서 갈리면 다음 호출부가 어느 쪽을 따라야 하는지 알 수 없다.
+        for (const { userId, delta } of [
+          { userId: winnerId, delta: scoreDelta },
+          { userId: loserId, delta: -scoreDelta },
+        ].sort((a, b) => (a.userId < b.userId ? -1 : 1))) {
+          await this.usersService.applyScoreDelta(userId, delta, manager);
+        }
 
         // 점수 원장에도 append한다 — 개인 랭킹(명예의 전당)은 users.score가 아니라
         // SUM(score_events.personalPoints)로 산출되므로, 여기서 기록하지 않으면 결투 점수가
@@ -1465,6 +1494,8 @@ export class DuelsService {
       const chargedPoints = new Map(charges.map((c) => [c.duelId, c.points]));
       for (const row of rows) {
         row.scoreDelta = chargedPoints.get(row.id) ?? null;
+        // 청구를 가르는 것과 같은 근거로 알림 큐잉도 가른다 (notifySwept 주석).
+        row.inviteUndelivered = row.inviteDeliveredAt == null;
       }
 
       // 알림에는 RETURNING 행이, 집계에는 affected가 필요하다 (실제로는 같은 수지만
@@ -1541,7 +1572,19 @@ export class DuelsService {
           [row.challengerId, row.opponentId]
             // 이미 탈퇴한 참가자는 NULL로 들어온다 — 보낼 곳이 없다.
             .filter((id): id is string => id !== null && id !== excludeUserId)
-            .map((id) => this.notifier!(id, event, payload))
+            .map((id) =>
+              this.notifier!(
+                id,
+                event,
+                payload,
+                // 초대를 끝내 못 받은 상대는 이 결투의 존재 자체를 모른다. 그에게 종료
+                // 알림을 30분(NOTIFICATION_QUEUE_TTL) 큐에 쌓아두면 아무도 소비하지 않을
+                // 알림이 쌓일 뿐이다 — 클라이언트도 모르는 duelId의 종료 이벤트는 버린다.
+                // da35be8이 duel:requested를 ephemeral로 바꾼 것과 같은 종류의 정리다.
+                // 신청자(challengerId)는 자기가 건 결투의 결말을 받아야 하므로 그대로 큐잉된다.
+                row.inviteUndelivered === true && id === row.opponentId,
+              ),
+            )
         );
       }),
     );

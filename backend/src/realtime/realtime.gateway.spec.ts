@@ -505,22 +505,22 @@ describe('RealtimeGateway 조우 알림의 보호막 안내', () => {
 
   function make(shieldTtlByUser: Record<string, number>) {
     const queueNotification = jest.fn().mockResolvedValue(undefined);
+    const getDuelShieldTtl = jest
+      .fn()
+      .mockImplementation((id: string) =>
+        Promise.resolve(shieldTtlByUser[id] ?? 0),
+      );
+    const findByIds = jest
+      .fn()
+      .mockResolvedValue([{ id: opponentId, nickname: '상대' }]);
     const gateway = new RealtimeGateway(
       {} as unknown as FirebaseService,
-      {
-        findByIds: jest
-          .fn()
-          .mockResolvedValue([{ id: opponentId, nickname: '상대' }]),
-      } as unknown as UsersService,
+      { findByIds } as unknown as UsersService,
       {
         geoAdd: jest.fn().mockResolvedValue(undefined),
         // 쿨다운을 처음 잡는 상황 = 새 조우로 알림이 나가는 경로.
         tryAcquireLock: jest.fn().mockResolvedValue(true),
-        getDuelShieldTtl: jest
-          .fn()
-          .mockImplementation((id: string) =>
-            Promise.resolve(shieldTtlByUser[id] ?? 0),
-          ),
+        getDuelShieldTtl,
         // 상대 소켓을 못 찾게 두면 payload가 큐로 흘러 그대로 확인할 수 있다.
         getUserMeta: jest.fn().mockResolvedValue(null),
         queueNotification,
@@ -536,7 +536,7 @@ describe('RealtimeGateway 조우 알림의 보호막 안내', () => {
       { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
     const client = { ...mockSocket(), data: { user: me } };
-    return { gateway, client, queueNotification };
+    return { gateway, client, queueNotification, getDuelShieldTtl, findByIds };
   }
 
   const update = (gateway: RealtimeGateway, client: unknown) =>
@@ -547,6 +547,7 @@ describe('RealtimeGateway 조우 알림의 보호막 안내', () => {
 
   interface EncounterPayload {
     userId: string;
+    nickname: string | null;
     shieldUntil: string | null;
   }
 
@@ -597,5 +598,38 @@ describe('RealtimeGateway 조우 알림의 보호막 안내', () => {
     await update(gateway, client);
 
     expect(emitted(client).shieldUntil).toBeNull();
+  });
+
+  /**
+   * 이 조회는 판정이 아니라 안내값이다(판정은 언제나 requestDuel이 Redis를 다시 읽는다).
+   * 여기서 던지면 잃는 것은 보호막이 아니라 조우 자체다 — 핸들러는 이 조회 **전에** 이미
+   * ENCOUNTER_COOLDOWN_TTL 락을 소모했으므로, 예외가 올라가면 양쪽 다 encounter:detected를
+   * 못 받고 그 쌍은 쿨다운이 풀릴 때까지 조우가 다시 뜨지 않는다.
+   */
+  // 닉네임도 같은 성질이다 — 이 조회 전에 쿨다운 락이 이미 소모됐으므로, 던지면
+  // 이름 하나 때문에 조우 이벤트 전체가 사라진다. payload는 nickname: null을 이미 허용한다.
+  it('닉네임 조회가 실패해도 조우 알림은 나간다 (안내는 fail-open)', async () => {
+    const { gateway, client, findByIds } = make({});
+    findByIds.mockRejectedValue(new Error('db down'));
+
+    await expect(update(gateway, client)).resolves.toEqual({ status: 'ok' });
+
+    const payload = emitted(client);
+    expect(payload.userId).toBe(opponentId);
+    expect(payload.nickname).toBeNull();
+  });
+
+  it('보호막 조회가 실패해도 조우 알림은 나간다 (안내는 fail-open)', async () => {
+    const { gateway, client, queueNotification, getDuelShieldTtl } = make({
+      [opponentId]: 600,
+    });
+    getDuelShieldTtl.mockRejectedValue(new Error('redis down'));
+
+    await expect(update(gateway, client)).resolves.toEqual({ status: 'ok' });
+
+    // 조우는 양쪽에 그대로 나가고, 안내값만 "보호막 없음"으로 넘어진다.
+    expect(emitted(client).userId).toBe(opponentId);
+    expect(emitted(client).shieldUntil).toBeNull();
+    expect(queued(queueNotification).shieldUntil).toBeNull();
   });
 });
