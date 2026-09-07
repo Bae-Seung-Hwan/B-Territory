@@ -244,12 +244,23 @@ export default function LoginScreen() {
         ref={termsSheetRef}
         snapPoints={[termsView === 'list' ? '70%' : '85%']}
         onDismiss={handleTermsSheetDismiss}
-        /* 상세 화면의 조항 전문은 한 화면에 담기지 않는다. BottomSheetView는 자신을 정적
-           콘텐츠로 등록해 내부 스크롤을 죽이므로, 상세일 때만 자체 스크롤을 넘긴다. */
-        scrollable={termsView !== 'list'}
+        /*
+          두 화면 모두 자체 스크롤을 가진다(BottomSheetView는 자신을 정적 콘텐츠로 등록해
+          내부 스크롤을 죽이므로 감싸지 않는다).
+
+          목록도 스크롤이 필요하다 — 위치기반서비스 약관과 연령 확인이 들어오며 카드가
+          3개(전체동의 + 문서 2)에서 5개(전체동의 + 문서 3 + 연령)로 늘었다. snap이 70%라
+          작은 화면이나 큰 접근성 폰트에서는 "동의하고 계속하기" 버튼이 시트 밖으로 밀리는데,
+          정적 콘텐츠는 넘쳐도 스크롤되지 않고 **잘리므로** 가입 자체가 불가능해진다.
+
+          겸해서 살아 있는 시트에서 BottomSheetView ↔ BottomSheetScrollView를 갈아끼우는
+          동적 전환도 사라진다 — 다른 시트(NicknameNationalityFields·MessageActionSheet·
+          SpotDetailSheet)는 모두 정적으로 지정하고 있어 이 파일만 예외였다.
+        */
+        scrollable
       >
         {termsView === 'list' ? (
-          <>
+          <BottomSheetScrollView contentContainerStyle={styles.sheetScrollContent}>
             <Text style={styles.termsTitle}>{t('auth.terms.title')}</Text>
             <Text style={styles.termsSubtitle}>{t('auth.terms.subtitle')}</Text>
 
@@ -293,9 +304,9 @@ export default function LoginScreen() {
               disabled={!allAgreed}
               style={styles.termsContinueButton}
             />
-          </>
+          </BottomSheetScrollView>
         ) : (
-          <BottomSheetScrollView contentContainerStyle={styles.detailScrollContent}>
+          <BottomSheetScrollView contentContainerStyle={styles.sheetScrollContent}>
             <Text style={styles.termsTitle}>
               {t(`auth.terms.${LEGAL_DOCUMENTS[termsView].titleKey}`)}
             </Text>
@@ -363,5 +374,7 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   detailBody: { fontSize: 13, color: '#ccc', lineHeight: 20, marginTop: 4 },
-  detailScrollContent: { padding: 16, paddingBottom: 32 },
+  // 목록·상세 두 화면이 공유한다. BottomSheet가 scrollable일 때는 기본 BottomSheetView
+  // (padding:16)로 감싸지 않으므로 여기서 같은 여백을 준다.
+  sheetScrollContent: { padding: 16, paddingBottom: 32 },
 });
