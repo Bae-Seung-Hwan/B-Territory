@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
+import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 
 interface Coords {
@@ -13,59 +14,117 @@ interface LocationState {
 }
 
 /**
- * 모듈 스코프 공유 스토어(useSyncExternalStore)로 한때 재작성됐었지만, 그 근거였던
- * "지도 탭·채팅 탭·위치 송신이 각자 구독"은 위치 공유 기능 제거로 무효화됐다 — 현재
- * 유일한 호출자는 map/index.tsx뿐이다(PR #50 2차 리뷰 지적). 소비자가 하나뿐인 상태로
- * 전역 가변 상태를 유지할 이유가 없고, 그 상태는 로그아웃 후에도 남아 다음 사용자에게
- * 이전 좌표가 잠깐 보일 수 있었다. 훅 인스턴스마다 독립된 구독으로 되돌린다.
+ * GPS 구독은 모듈 스코프에 하나만 두고 모든 useLocation() 호출자가 공유한다.
+ * 훅마다 watchPositionAsync를 따로 걸면 지도 탭·채팅 탭·위치 송신이 각자 고정밀
+ * 구독을 만들어 배터리를 그만큼 더 쓴다(화면은 한 번 열면 언마운트되지 않으므로
+ * 동시에 살아있다). 마지막 구독자가 사라질 때만 실제 watcher를 해제한다.
+ *
+ * develop(PR #50)은 한때 이 공유 구조를 "소비자가 map/index.tsx뿐"이라는 근거로
+ * 훅 인스턴스별 독립 구독으로 되돌렸었다 — 그 근거가 이 브랜치에서 다시 무효화된다.
+ * `LocationBroadcaster`가 조우 판정을 위해 앱 루트에 상주하며 이 훅을 구독하므로
+ * map 화면과 합쳐 소비자가 다시 둘 이상이다. 되돌리면 두 곳이 각자 고정밀 watcher를
+ * 켜 배터리를 이중으로 쓰고, 이 파일이 고친 권한 재시도(리뷰 지적 13번)·좌표 초기화
+ * (리뷰 지적 12번)도 함께 사라진다 — 그래서 공유 스토어 쪽을 유지한다.
  */
-export function useLocation(): LocationState {
-  const [state, setState] = useState<LocationState>({
-    coords: null,
-    error: null,
-    loading: true,
+let state: LocationState = { coords: null, error: null, loading: true };
+const listeners = new Set<() => void>();
+let subscription: Location.LocationSubscription | null = null;
+let starting = false;
+// 한 번 거부되면 소비자가 새로 마운트될 때마다(화면 이동 등) requestForegroundPermissionsAsync를
+// 다시 호출하지 않는다(PR #54 리뷰 지적 13번) — subscription/starting 가드만으로는 거부 경로에서
+// 둘 다 원상태로 돌아가 다음 subscribe()가 처음부터 다시 묻는다. 앱이 포그라운드로 돌아올 때는
+// 풀어준다 — OS 설정 화면에서 권한을 바꾸고 돌아오는 유일한 신호이기 때문이다.
+let permissionDenied = false;
+// 모듈이 처음 로드될 때가 아니라 첫 구독자가 생길 때 딱 한 번만 등록한다(subscribe() 참고) —
+// GPS watcher를 지연 시작하는 이 파일의 기존 철학과 같은 이유일 뿐 아니라, 모듈 로드 시점에
+// 곧바로 네이티브 이벤트 이미터를 건드리면 테스트에서 이 모듈을 import하는 순간 앱스테이트
+// 목이 아직 준비되기 전에 실행될 위험도 없앤다.
+let appStateSubscription: { remove: () => void } | null = null;
+function ensureAppStateListener(): void {
+  if (appStateSubscription) return;
+  appStateSubscription = AppState.addEventListener('change', (next) => {
+    if (next !== 'active' || !permissionDenied) return;
+    permissionDenied = false;
+    // 플래그만 풀고 끝내면 아무도 다시 시도하지 않는다(PR #54 2차 리뷰 지적 3번) — start()의
+    // 유일한 호출부는 subscribe()인데, LocationBroadcaster처럼 구독자가 세션 내내 상주하면
+    // 구독자 수가 0에서 1로 늘어나는 순간 자체가 다시 오지 않아 subscribe()가 다시 불릴 일이
+    // 없다. "설정에서 권한을 켜고 돌아온다"는 유일한 복구 신호이므로 지금 구독자가 있다면
+    // 여기서 직접 재시도한다 — 지금 아무도 구독하고 있지 않다면 다음 구독자의 subscribe()가
+    // 어차피 새로 시작하므로 여기서 미리 부를 필요가 없다(불필요한 권한 요청 중복 방지).
+    if (listeners.size > 0) void start();
   });
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    let subscription: Location.LocationSubscription | null = null;
+function setState(next: LocationState): void {
+  state = next;
+  listeners.forEach((notify) => notify());
+}
 
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (cancelled) return;
-        if (status !== 'granted') {
-          setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
-          return;
-        }
-        const sub = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
-          (loc) => {
-            setState({
-              coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
-              error: null,
-              loading: false,
-            });
-          },
-        );
-        // 권한/구독을 기다리는 사이 이 화면이 이미 언마운트됐으면 즉시 정리한다.
-        if (cancelled) {
-          sub.remove();
-          return;
-        }
-        subscription = sub;
-      } catch (e) {
-        if (cancelled) return;
-        const message = e instanceof Error ? e.message : '위치 정보를 가져올 수 없습니다';
-        setState({ coords: null, error: message, loading: false });
-      }
-    })();
+async function start(): Promise<void> {
+  if (permissionDenied) {
+    // API를 다시 부르진 않지만(리뷰 지적 13번), 마지막 구독자가 나갔다 들어오는 사이
+    // state가 초기화됐을 수 있다(리뷰 지적 12번) — 이미 아는 결과를 다시 반영해줘야
+    // 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
+    setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
+    return;
+  }
+  if (starting || subscription) return;
+  starting = true;
+  try {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      permissionDenied = true;
+      setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
+      return;
+    }
+    const sub = await Location.watchPositionAsync(
+      { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+      (loc) => {
+        setState({
+          coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
+          error: null,
+          loading: false,
+        });
+      },
+    );
+    // 권한/구독을 기다리는 사이 마지막 구독자가 떠났으면 즉시 정리한다.
+    if (listeners.size === 0) {
+      sub.remove();
+      return;
+    }
+    subscription = sub;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : '위치 정보를 가져올 수 없습니다';
+    setState({ coords: null, error: message, loading: false });
+  } finally {
+    starting = false;
+  }
+}
 
-    return () => {
-      cancelled = true;
+function subscribe(onStoreChange: () => void): () => void {
+  ensureAppStateListener();
+  listeners.add(onStoreChange);
+  void start();
+  return () => {
+    listeners.delete(onStoreChange);
+    if (listeners.size === 0) {
       subscription?.remove();
-    };
-  }, []);
+      subscription = null;
+      // state는 그대로 두면 안 된다 — subscription만 비우면, 로그아웃 후 재로그인처럼
+      // 마지막 구독자가 사라졌다 새 구독자가 곧바로 붙는 경우 getSnapshot()이 새 watcher의
+      // 첫 픽스가 오기 전까지 이전 사용자의 낡은 좌표를 그대로 돌려준다 — 그 좌표로
+      // location:update가 나가 조우 판정이 이미 떠난 위치를 기준으로 돌아간다(PR #54
+      // 리뷰 지적 12번). 리스너가 이미 없는 시점이라 setState()의 notify는 의미 없어
+      // 직접 대입한다.
+      state = { coords: null, error: null, loading: true };
+    }
+  };
+}
 
+function getSnapshot(): LocationState {
   return state;
+}
+
+export function useLocation(): LocationState {
+  return useSyncExternalStore(subscribe, getSnapshot);
 }

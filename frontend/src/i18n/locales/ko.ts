@@ -90,15 +90,16 @@ export const ko = {
     },
   },
   tabs: {
-    spots: '관광지',
+    battle: '배틀',
     chat: '채팅',
     map: '지도',
     ranking: '랭킹',
     profile: '내정보',
   },
-  spots: {
-    title: '관광지',
-    placeholder: '지도에 표시되는 관광지 목록이 표시됩니다',
+  battle: {
+    title: '배틀',
+    emptyState: '근처에 감지된 적팀이 없습니다',
+    duel: '결투 신청',
   },
   chat: {
     title: '채팅',
@@ -149,6 +150,17 @@ export const ko = {
     logoutConfirmMessage: '정말 로그아웃하시겠어요?',
     blockedUsersLink: '차단 관리',
     contactTitle: '문의하기',
+    deleteAccount: '회원 탈퇴',
+    deleteAccountPending: '탈퇴 처리 중…',
+    deleteAccountConfirmTitle: '정말 탈퇴하시겠어요?',
+    deleteAccountConfirmMessage:
+      '계정과 로그인 정보가 삭제되며 되돌릴 수 없습니다. 점령·결투 기록은 팀 점수 집계를 위해 유저 정보 없이 보존되며, 위치정보 이용·제공사실 확인자료는 관련 법령에 따라 탈퇴 후에도 6개월간 보존됩니다.',
+    deleteAccountTimeoutTitle: '처리 결과를 확인할 수 없습니다',
+    deleteAccountTimeoutMessage:
+      '응답이 지연되어 탈퇴가 완료됐는지 확인할 수 없습니다. 다시 로그인해 계정 상태를 확인해주세요.',
+    errors: {
+      deleteAccountFailed: '탈퇴 처리에 실패했습니다. 잠시 후 다시 시도해주세요',
+    },
   },
   map: {
     hud: {
@@ -236,21 +248,71 @@ export const ko = {
     },
   },
   overlay: {
-    enemyAlert: {
-      title: '적 탐지',
-      body: '{{team}} 팀이 {{distance}}m 이내에 있습니다',
-      ignore: '무시',
-      duel: '결투 신청',
-    },
     duelRequest: {
       title: '결투 신청',
-      body: '{{team}} 팀에게 결투를 신청합니다',
+      body: '{{nickname}}님이 결투를 신청했습니다',
       hint: '미니게임에서 승리하면 해당 구역을 점령합니다',
-      start: '결투 시작',
+      accept: '수락',
+      reject: '거부',
+    },
+    duelPending: {
+      title: '응답을 기다리는 중...',
+      body: '{{team}} 팀에게 결투를 신청했습니다',
+      bodyRecipient: '{{nickname}}님과의 결투를 준비하는 중입니다',
+    },
+    // 서버 WS 예외(exception 이벤트)의 code를 그대로 키로 쓴다 —
+    // backend/src/common/errors/error-code.ts의 ErrorCode와 이름이 일치해야 한다.
+    duelError: {
+      title: '결투 실패',
+      DUEL_SAME_TEAM: '같은 팀에게는 결투를 신청할 수 없습니다',
+      DUEL_TARGET_NOT_FOUND: '상대를 찾을 수 없습니다',
+      DUEL_CHALLENGER_PENALTY: '결투 페널티 중에는 신청할 수 없습니다',
+      DUEL_TARGET_PENALTY: '상대가 결투 페널티 중입니다',
+      DUEL_TARGET_LOCATION_UNKNOWN: '상대의 위치를 확인할 수 없습니다',
+      DUEL_OUT_OF_RANGE: '상대가 너무 멀리 있습니다',
+      DUEL_ALREADY_ACTIVE: '이미 진행 중인 결투가 있습니다',
+      DUEL_ALREADY_PENDING: '이미 신청한 결투가 있습니다',
+      DUEL_ALREADY_HANDLED: '이미 처리된 결투입니다',
+      DUEL_NOT_FOUND: '결투를 찾을 수 없습니다',
+      DUEL_NOT_ACCEPTED: '수락되지 않은 결투입니다',
+      DUEL_TARGET_UNAVAILABLE: '지금은 이 상대에게 결투를 신청할 수 없습니다',
+      MINIGAME_START_FAILED: '미니게임을 시작하지 못했습니다. 잠시 후 다시 시도해주세요',
+      MINIGAME_NOT_ACTIVE: '진행 중인 미니게임이 없습니다',
+      MINIGAME_ROUND_MISMATCH: '이미 지난 라운드입니다',
+      MINIGAME_ALREADY_SUBMITTED: '이미 이번 라운드 결과를 제출했습니다',
+      MINIGAME_INVALID_SCORE: '제출한 결과가 올바르지 않습니다. 다시 시도해주세요',
+      UNAUTHENTICATED_CONNECTION: '인증이 만료됐습니다. 다시 로그인해주세요',
+    },
+    duelOutcome: {
+      title: '결투 결과',
+      rejected: '상대가 결투 신청을 거절했습니다',
+      expired: '결투 신청이 만료됐습니다',
+      win: '결투에서 승리했습니다!',
+      lose: '결투에서 패배했습니다...',
+      voided: '결과가 일치하지 않아 무효 처리됐습니다',
     },
     miniGame: {
       title: '미니게임',
-      placeholder: '미니게임 UI가 여기에 구현됩니다',
+      start: '시작',
+      preparing: '게임을 준비하는 중...',
+      waitingOpponent: '제출 완료! 상대를 기다리는 중...',
+      opponentAlreadySubmitted: '상대는 이미 제출했어요. 마저 제출해주세요!',
+      roundLabel: '라운드 {{round}}/{{maxRounds}}',
+      timeLeft: '남은 시간 {{seconds}}초',
+      rematch: '무승부! 재경기를 시작합니다',
+      tapBattle: {
+        instruction: '{{seconds}}초 동안 최대한 많이 탭하세요',
+        tapCount: '{{count}}회',
+        tap: '탭!',
+      },
+      reaction: {
+        instructionWait: '초록불이 켜지면 최대한 빨리 탭하세요',
+        go: '지금 탭!',
+        tooSoon: '너무 빨랐어요! 부정출발로 제출됩니다...',
+      },
+      quiz: {
+        instruction: '정답을 맞히면 승리합니다',
+      },
     },
   },
   // 채팅 메시지 길게 누르기(신고/차단)와 profile의 차단 관리 화면이 함께 쓴다.

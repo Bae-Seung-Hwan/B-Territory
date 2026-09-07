@@ -15,13 +15,13 @@ import { fetchCurrentCapital } from '@/api/districts';
 import { useGameStore } from '@/store/useGameStore';
 
 export default function MapScreen() {
-  // TODO: 좌표를 소켓 location:update로 보내는 배선이 없어 조우 탐지(encounter:detected)가
-  // 트리거될 수 없음. docs/integrations.md 참고
   const {
     data: spots,
     isError: isSpotsError,
     refetch: refetchSpots,
   } = useQuery({ queryKey: queryKeys.spots.busan, queryFn: fetchBusanSpots });
+  // 좌표를 서버로 보내는 일은 앱 루트의 LocationBroadcaster가 전담한다 — 지도 화면을
+  // 벗어나 있어도 계속 보내야 서버가 나를 접속 중으로 보고 결투 알림을 실시간 전달한다.
   const { coords } = useLocation();
 
   // 이번 주 수도는 주 1회만 바뀌는 값이라 넉넉한 staleTime으로 재조회를 줄인다.
