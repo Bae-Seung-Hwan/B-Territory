@@ -15,6 +15,8 @@ import type { LegalDocument } from './types';
  */
 export const privacyPolicy: LegalDocument = {
   version: '2026-09-07',
+  labelKey: 'privacyPolicy',
+  titleKey: 'privacyPolicyTitle',
   body: {
     ko: `B-Territory(이하 "서비스")는 이용자의 개인정보를 중요하게 생각하며, 개인정보 보호법 및 위치정보의 보호 및 이용 등에 관한 법률을 준수합니다.
 

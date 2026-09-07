@@ -24,7 +24,8 @@ export const en: Translations = {
     terms: {
       title: 'Agree to Terms',
       subtitle: 'Please agree to the terms below to sign up',
-      agreeAll: 'Agree to all',
+      // ko.ts와 같은 이유 — 이 토글의 범위에 연령 확인이 포함된다는 것을 라벨이 밝힌다.
+      agreeAll: 'Agree to all (including age confirmation)',
       serviceTerms: '(Required) Terms of Service',
       privacyPolicy: '(Required) Privacy Policy',
       locationTerms: '(Required) Location-Based Services Terms',

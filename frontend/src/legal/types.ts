@@ -15,4 +15,15 @@ export interface LegalDocument {
   version: string;
   /** 화면에 그대로 렌더링되는 조항 전문. 언어별로 같은 내용을 담는다. */
   body: { ko: string; en: string };
+  /**
+   * 동의 목록의 체크박스 라벨 i18n 키(`auth.terms.` 뒤에 붙는 부분).
+   *
+   * 라벨 **문구**는 규칙대로 i18n에 있고, 여기 두는 것은 그 문구를 가리키는 **키**다.
+   * 문서와 같은 자리에 둬야 새 문서를 추가할 때 이 매핑을 빠뜨릴 수 없다 — 예전엔
+   * 화면(login.tsx)과 테스트가 같은 표를 각자 복사해 들고 있어서, 한쪽만 고쳐도
+   * 테스트가 통과했다.
+   */
+  labelKey: string;
+  /** 상세 보기 화면의 제목 i18n 키. 위와 같은 이유로 문서 옆에 둔다. */
+  titleKey: string;
 }

@@ -15,6 +15,8 @@ import type { LegalDocument } from './types';
  */
 export const locationTerms: LegalDocument = {
   version: '2026-09-07',
+  labelKey: 'locationTerms',
+  titleKey: 'locationTermsTitle',
   body: {
     ko: `제1조 (목적)
 이 약관은 B-Territory(이하 "서비스")가 제공하는 위치기반서비스에 대하여 서비스와 개인위치정보주체 간의 권리·의무 및 책임사항을 정하는 것을 목적으로 합니다.

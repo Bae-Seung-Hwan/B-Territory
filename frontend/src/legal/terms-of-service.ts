@@ -9,6 +9,8 @@ import type { LegalDocument } from './types';
  */
 export const termsOfService: LegalDocument = {
   version: '2026-09-07',
+  labelKey: 'serviceTerms',
+  titleKey: 'serviceTermsTitle',
   body: {
     ko: `제1조 (목적)
 이 약관은 B-Territory(이하 "서비스")를 이용함에 있어 서비스와 이용자 사이의 권리·의무 및 책임사항을 정하는 것을 목적으로 합니다.

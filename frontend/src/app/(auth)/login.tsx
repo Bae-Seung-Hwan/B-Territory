@@ -23,22 +23,9 @@ import { useSocialLoginConsent } from '@/hooks/use-social-login-consent';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BottomSheet } from '@/components/ui/BottomSheet';
-import { LEGAL_DOCUMENTS, LEGAL_DOCUMENT_KEYS, type LegalDocumentKey } from '@/legal';
+import { LEGAL_DOCUMENTS, LEGAL_DOCUMENT_KEYS, legalBody, type LegalDocumentKey } from '@/legal';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
-
-/** 문서 키 → i18n 라벨/제목 키. 번역 키 이름을 문서 키에 맞춰 바꾸면 기존 번역이 끊긴다. */
-const TERMS_LABEL_KEY: Record<LegalDocumentKey, string> = {
-  service: 'serviceTerms',
-  privacy: 'privacyPolicy',
-  location: 'locationTerms',
-};
-
-const TERMS_TITLE_KEY: Record<LegalDocumentKey, string> = {
-  service: 'serviceTermsTitle',
-  privacy: 'privacyPolicyTitle',
-  location: 'locationTermsTitle',
-};
 
 const NO_AGREEMENTS = Object.fromEntries(LEGAL_DOCUMENT_KEYS.map((key) => [key, false])) as Record<
   LegalDocumentKey,
@@ -160,6 +147,10 @@ export default function LoginScreen() {
     }
   };
 
+  // 문서 동의와 함께 연령 확인도 켠다. 연령 확인은 문서에 대한 동의가 아니라 이용자에 관한
+  // 사실 주장이라 성격이 다르므로, 범위를 라벨(auth.terms.agreeAll)이 밝히도록 해뒀다.
+  // 일괄 토글에서 빼는 선택지도 있었으나, 그러면 "전체 동의"를 누르고도 가입 버튼이 안 열려
+  // 이유를 찾아야 한다.
   const handleToggleAgreeAll = () => {
     const next = !allAgreed;
     setAgreed(next ? ALL_AGREEMENTS : NO_AGREEMENTS);
@@ -275,7 +266,7 @@ export default function LoginScreen() {
                     onPress={() => toggleAgreement(key)}
                   >
                     <Text style={styles.termsItemText}>
-                      {agreed[key] ? '☑' : '☐'} {t(`auth.terms.${TERMS_LABEL_KEY[key]}`)}
+                      {agreed[key] ? '☑' : '☐'} {t(`auth.terms.${LEGAL_DOCUMENTS[key].labelKey}`)}
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => setTermsView(key)}>
@@ -305,8 +296,11 @@ export default function LoginScreen() {
           </>
         ) : (
           <BottomSheetScrollView contentContainerStyle={styles.detailScrollContent}>
-            <Text style={styles.termsTitle}>{t(`auth.terms.${TERMS_TITLE_KEY[termsView]}`)}</Text>
-            <Text style={styles.detailBody}>{LEGAL_DOCUMENTS[termsView].body[locale]}</Text>
+            <Text style={styles.termsTitle}>
+              {t(`auth.terms.${LEGAL_DOCUMENTS[termsView].titleKey}`)}
+            </Text>
+            {/* locale이 'ko'|'en'을 벗어나도 빈 화면이 되지 않게 legalBody가 en으로 떨어뜨린다. */}
+            <Text style={styles.detailBody}>{legalBody(termsView, locale)}</Text>
             <Button
               title={t('common.close')}
               onPress={() => setTermsView('list')}
