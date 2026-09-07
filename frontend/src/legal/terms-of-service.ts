@@ -6,9 +6,13 @@ import type { LegalDocument } from './types';
  * ⚠️ **법률 검토 전 초안이다** (docs/compliance.md 6장 미결 항목). 코드가 실제로 하는 일을
  * 근거로 작성했으므로 예전의 예시 텍스트와 달리 내용은 사실과 맞지만, 변호사 검토를 거쳐야
  * 최종본이 된다. 서비스 기능이 바뀌면 제6조와 version을 함께 갱신할 것.
+ *
+ * 제11조 3항의 신고 기록 예외는 privacy-policy.ts 제3조의 표현과 맞추기 위해 추가했다 —
+ * report.entity.ts의 targetNickname·contentSnapshot이 FK 없이 별도 보관된다는 같은 사실을
+ * 두 문서가 서로 다른 수위로 서술하면 안 되므로, 한쪽을 고치면 다른 쪽도 함께 볼 것.
  */
 export const termsOfService: LegalDocument = {
-  version: '2026-09-07',
+  version: '2026-09-08',
   labelKey: 'serviceTerms',
   titleKey: 'serviceTermsTitle',
   body: {
@@ -69,7 +73,7 @@ export const termsOfService: LegalDocument = {
 제11조 (계정 삭제)
 1. 이용자는 언제든지 앱 내에서 계정을 삭제할 수 있습니다.
 2. 계정 삭제 시 개인정보는 개인정보처리방침이 정한 바에 따라 처리되며, 법령상 보존 의무가 있는 기록은 해당 기간 동안 보존됩니다.
-3. 점수 원장·결투 기록 등 다른 이용자의 기록과 결합된 자료는 이용자를 식별할 수 없는 형태로 남습니다.
+3. 점수 원장·결투 기록 등 다른 이용자의 기록과 결합된 자료는 이용자를 식별할 수 없는 형태로 남습니다(신고 기록의 신고 당시 닉네임·메시지 내용 등 예외는 개인정보처리방침 제3조를 따릅니다).
 
 제12조 (책임의 제한)
 1. 서비스는 이용자가 서비스를 이용하며 이동하는 과정에서 발생한 사고에 대하여 책임지지 않습니다. 이용자는 도로·교통 상황 등 주변 환경에 유의하여야 합니다.
@@ -138,7 +142,7 @@ Article 10 (Suspension and Modification of the Service)
 Article 11 (Account Deletion)
 1. A user may delete their account at any time from within the app.
 2. Personal data is handled on deletion as set out in the Privacy Policy; records subject to a statutory retention obligation are kept for the required period.
-3. Records combined with those of other users, such as the point ledger and duel history, remain in a form that does not identify the user.
+3. Records combined with those of other users, such as the point ledger and duel history, remain in a form that does not identify the user (exceptions such as the reported-nickname and message-content fields of a report record are governed by Article 3 of the Privacy Policy).
 
 Article 12 (Limitation of Liability)
 1. The Service is not liable for accidents occurring while a user travels in the course of using it. Users must remain aware of roads, traffic, and their surroundings.

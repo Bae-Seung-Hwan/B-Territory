@@ -48,7 +48,12 @@ export default function LoginScreen() {
   // 문서별 동의를 개별 state가 아니라 하나의 맵으로 든다 — 위치기반서비스 약관이 세 번째
   // 항목으로 들어오면서(위치정보법상 개인정보처리방침으로 갈음할 수 없다), 항목이 늘 때마다
   // useState와 allAgreed를 따로 고쳐야 하는 구조였다. 하나를 빠뜨리면 동의를 받지 않은 문서가
-  // 조용히 생긴다. 동의 이력을 서버에 남길 때도 이 맵을 그대로 쓴다.
+  // 조용히 생긴다.
+  // 현재는 이 맵을 서버로 보내지 않는다 — registerUser 페이로드는 {nickname, nationality}뿐이고
+  // 동의 여부·버전은 클라이언트에만 남는다. 서버 측 저장은 PR #56(`user_consents` 원장,
+  // `POST /api/auth/register`에 `consents[]`·`ageConfirmed` 추가)이 구현 중이다 — 이 PR이
+  // 머지되면 여기서 `agreed`/`agreeAge`를 그 페이로드 형태로 변환해 보내도록 이 파일도 고칠 것.
+  // `ConsentDocument`(service/privacy/location) 값은 LegalDocumentKey와 문자열이 같아야 한다.
   const [agreed, setAgreed] = useState<Record<LegalDocumentKey, boolean>>(NO_AGREEMENTS);
   // 만 14세 미만은 법정대리인 동의가 필요해 가입 자체를 받지 않는다(docs/compliance.md 2.5에서
   // 만 14세로 확정). 생년월일을 받지 않는 것은 의도된 선택이다 — 확인만 하면 되는데 생년월일을

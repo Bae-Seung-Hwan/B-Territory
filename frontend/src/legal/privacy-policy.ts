@@ -17,9 +17,33 @@ import type { LegalDocument } from './types';
  * 좌표의 보유·삭제 방식을 바꾸면 두 문서를 함께 고쳐야 하며, 근거가 되는 구현
  * (Redis GEO 덮어쓰기, handleDisconnect의 geoRemove, GEO_STALE_TTL·GEO_PRUNE_INTERVAL_MS)은
  * location-terms.ts의 주석에 정리해 두었다.
+ *
+ * 제1조 2호의 미션 사진 항목과 제4조 6호의 EXIF 관련 문구는, missions.service.ts의
+ * submitPhoto가 사진 버퍼를 리사이즈·메타데이터 제거 없이 그대로 S3에 업로드하고
+ * (image-signature.util.ts의 assertSupportedImage는 매직 바이트로 포맷만 판별할 뿐 메타데이터는
+ * 건드리지 않는다) 있다는 사실에 근거한다. 즉 촬영 기기가 사진에 기록한 위치 메타데이터가
+ * 있다면 그대로 S3에 남는다 — 제4조 2~4호가 말하는 "서버 메모리의 최신 1건" 좌표(실시간
+ * 매칭·결투용)와는 별개의 경로다. 업로드 전 메타데이터 제거를 구현하면 이 문구부터 고칠 것.
+ *
+ * 제1조 4호·제3조 1~3항의 신고 관련 예외는 report.entity.ts의 실제 컬럼 설계에 근거한다.
+ * `targetNickname`은 FK 없는 비정규화 varchar(마이그레이션 주석: "적시 대응"을 위해 일부러
+ * FK를 안 걸었다)라 계정을 삭제해도(account.service.ts의 deleteAccount는 User 행만 지운다)
+ * 지워지지 않는다. `contentSnapshot`도 같은 테이블의 별도 컬럼으로, moderation.service.ts의
+ * report()가 신고 시점 메시지를 그대로 복사해 넣는다. 두 컬럼 다 신고 기록과 함께 계정 삭제 후에도
+ * 그대로 남으므로, 제3조 1~2항의 "지체 없이 삭제"·"식별자를 제거한 형태로 남습니다" 서술에서
+ * 명시적으로 예외 처리했다. 이 컬럼들을 익명화하는 배치가 생기면 이 문구부터 고칠 것.
+ *
+ * 제1조 1호의 "약관 동의 이력" 항목과 제3조 1항의 CASCADE 삭제 서술은 PR #56
+ * (`feature/Bae/consent-records`, 이 글을 쓰는 시점에 develop 미병합)의
+ * `backend/src/consents/entities/user-consent.entity.ts`에 근거한다. `user_consents`는
+ * `userId`에 `onDelete: 'CASCADE'`를 건 FK라 계정을 삭제하면(같은 트랜잭션의 `User` 삭제로)
+ * 동의 이력도 함께 지워진다 — `location_usage_logs`(법정 6개월 보존)·`mission_photos`·
+ * `reports`(모두 탈퇴 후에도 의도적으로 남기는 것들, 제3조 2~3항)와는 반대 방향이다. PR #56이
+ * develop에 머지되고 이 프론트가 새 `consents`/`ageConfirmed` 페이로드를 실제로 보내기
+ * 전까지는 서술이 시제상 앞서 있다는 점에 유의할 것 — login.tsx·types.ts의 관련 주석 참고.
  */
 export const privacyPolicy: LegalDocument = {
-  version: '2026-09-07',
+  version: '2026-09-08',
   labelKey: 'privacyPolicy',
   titleKey: 'privacyPolicyTitle',
   body: {
@@ -29,15 +53,20 @@ export const privacyPolicy: LegalDocument = {
 1. 회원가입 시 수집하는 항목
    - 이메일 주소, 닉네임, 국적(팀 배정에 사용)
    - Firebase 인증 식별자(UID). 비밀번호는 서비스가 저장하지 않으며 Google Firebase Authentication이 보관합니다.
+   - 약관 동의 이력(동의한 문서 종류·버전, 만 14세 이상 확인 여부, 동의 일시)
 2. 서비스 이용 과정에서 수집·생성되는 항목
    - 단말기의 GPS 위치정보(앱을 사용하는 동안에만 수집하며, 데이터베이스에 이력으로 남기지 않습니다 — 보관·삭제 방식은 제4조 참고)
    - 관광지 점령 기록(지점 식별자, 팀, 이용자 식별자 — 좌표는 포함하지 않습니다)
    - 결투 기록(상대, 승패, 점수 증감)
-   - 미션 사진 및 후기(이용자가 직접 촬영·작성한 내용)
+   - 미션 사진 및 후기(이용자가 직접 촬영·작성한 내용 — 사진 파일에 촬영 기기가 기록한 위치 정보가
+     남아 있을 수 있으며, 서비스는 이를 확인·제거하지 않고 원본 그대로 보관합니다. 자세한 내용은
+     제4조 6호 참고)
    - 신고·차단 기록
    - 위치정보 이용·제공사실 확인자료(제4조 참고)
 3. 서비스는 백그라운드 위치 추적을 하지 않으며, 푸시 알림 토큰을 수집하지 않습니다.
-4. 같은 팀 이용자 간 채팅 메시지는 실시간으로 전달만 하며 서버에 저장하지 않습니다.
+4. 같은 팀 이용자 간 채팅 메시지는 실시간으로 전달만 하며 서버에 저장하지 않습니다. 다만 메시지가
+   신고되면 신고 처리를 위해 신고 시점의 메시지 내용이 신고 기록에 별도로 보관됩니다(보관에
+   관하여는 제3조 2항 참고).
 
 제2조 (개인정보의 이용 목적)
 1. 회원 식별 및 계정 관리
@@ -47,11 +76,12 @@ export const privacyPolicy: LegalDocument = {
 5. 신고 처리 및 서비스 운영·부정 이용 방지
 
 제3조 (보유 기간 및 파기)
-1. 이용자가 계정을 삭제하면 이메일·닉네임·국적·인증 식별자 등 이용자를 직접 식별하는 정보는 지체 없이 삭제합니다.
-2. 점수 원장, 점령 기록, 결투 기록, 미션 사진·후기, 신고 기록은 다른 이용자의 기록 및 팀 집계와 결합되어 있어, 이용자 식별자를 제거한 형태로 남습니다.
-3. 다음 두 가지는 계정 삭제 후에도 남습니다.
+1. 이용자가 계정을 삭제하면 이메일·닉네임·국적·인증 식별자 등 이용자를 직접 식별하는 정보와 약관 동의 이력은 지체 없이 삭제합니다. 다만 이용자가 신고를 당한 이력이 있다면, 그 신고 기록에 남은 신고 당시 닉네임은 3항에 따라 계속 보관됩니다.
+2. 점수 원장, 점령 기록, 결투 기록, 미션 사진·후기, 신고 기록은 다른 이용자의 기록 및 팀 집계와 결합되어 있어, 이용자 식별자를 제거한 형태로 남습니다. 다만 신고 기록의 신고 당시 닉네임과 메시지 내용은 예외입니다(3항 참고).
+3. 다음 세 가지는 계정 삭제 후에도 남습니다.
    - 위치정보 이용·제공사실 확인자료: 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 6개월간 보존한 뒤 삭제합니다.
    - 미션으로 업로드한 사진 파일: 현재 계정 삭제 시 파일 자체는 삭제되지 않으며, 사진과 이용자를 연결하는 식별자만 제거됩니다.
+   - 신고 기록의 신고 당시 닉네임·메시지 내용: 신고 처리의 적시성을 위해 계정과 분리해 별도로 보관하는 값이라, 계정을 삭제해도 신고 기록에서 삭제되지 않습니다.
 4. 법령에 따라 보존 의무가 있는 정보는 해당 기간 동안 보관한 뒤 파기합니다.
 
 제4조 (위치정보의 처리)
@@ -63,7 +93,8 @@ export const privacyPolicy: LegalDocument = {
    - 계정을 삭제하면 즉시 삭제합니다.
 4. 위치 좌표는 데이터베이스에 저장하지 않습니다. 점령 기록에는 관광지 식별자만 남고 좌표는 포함되지 않습니다.
 5. 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 "위치정보를 이용한 사실"의 기록(이용자 식별자, 취득 경로, 제공 서비스 구분, 이용 일시)은 자동으로 남으며 6개월간 보존합니다. 이 기록에는 좌표가 포함되지 않습니다.
-6. 위치정보에 관한 상세한 사항은 별도의 위치기반서비스 이용약관에서 정합니다.
+6. 이 조는 실시간 이용자 탐지·결투 판정에 쓰는 좌표에 관한 내용입니다. 미션 사진 파일에 촬영 기기가 자체적으로 기록한 위치 정보는 서비스가 추출·이용하지 않으며 별도로 제거하지도 않습니다 — 사진 원본과 함께 그대로 보관되고, 그 보유·삭제는 제1조 2호·제3조를 따릅니다.
+7. 위치정보에 관한 상세한 사항은 별도의 위치기반서비스 이용약관에서 정합니다.
 
 제5조 (개인정보의 제3자 제공)
 서비스는 이용자의 개인정보를 제3자에게 제공하지 않습니다. 다만 법령에 따라 수사기관 등이 적법한 절차로 요구하는 경우는 예외로 합니다.
@@ -101,15 +132,18 @@ Article 1 (Personal Data Collected)
 1. Collected at sign-up
    - Email address, nickname, nationality (used for team assignment)
    - Firebase authentication identifier (UID). The Service does not store passwords; they are held by Google Firebase Authentication.
+   - A record of terms agreed to (which documents and versions, whether age 14+ was confirmed, and when)
 2. Collected or generated while using the Service
    - GPS location from the device (collected only while the app is in use; not recorded as a history in the database - see Article 4 for how coordinates are held and deleted)
    - Site claim records (site identifier, team, user identifier - coordinates are not included)
    - Duel records (opponent, outcome, point changes)
-   - Mission photos and reviews (content the user takes or writes)
+   - Mission photos and reviews (content the user takes or writes - a photo file may retain location
+     data recorded by the capturing device; the Service does not check for or remove it, keeping the
+     file as-is. See Article 4(6))
    - Reports and blocks
    - Records of the fact that location information was used (see Article 4)
 3. The Service does not track location in the background and does not collect push notification tokens.
-4. Chat messages between users on the same team are relayed in real time and are not stored on the server.
+4. Chat messages between users on the same team are relayed in real time and are not stored on the server. If a message is reported, however, its content at the time of the report is kept separately in the report record for handling the report (see Article 3(2)).
 
 Article 2 (Purposes of Use)
 1. Identifying members and managing accounts
@@ -119,11 +153,12 @@ Article 2 (Purposes of Use)
 5. Handling reports, operating the Service, and preventing abuse
 
 Article 3 (Retention and Destruction)
-1. When a user deletes their account, data that directly identifies them - email, nickname, nationality, authentication identifier - is deleted without delay.
-2. The point ledger, claim records, duel records, mission photos and reviews, and reports are combined with other users' records and team tallies, and therefore remain with the user identifier removed.
-3. The following two remain after account deletion.
+1. When a user deletes their account, data that directly identifies them - email, nickname, nationality, authentication identifier - and the record of terms agreed to are deleted without delay. If the user has been reported, however, the nickname recorded at the time of that report is retained under paragraph 3.
+2. The point ledger, claim records, duel records, mission photos and reviews, and reports are combined with other users' records and team tallies, and therefore remain with the user identifier removed - except for the reported-nickname and message-content fields in a report record (see paragraph 3).
+3. The following three remain after account deletion.
    - Records of location information use: retained for six months under Article 16(2) of the Act on the Protection and Use of Location Information, then deleted.
    - Photo files uploaded through missions: the files themselves are currently not deleted on account deletion; only the identifier linking a photo to the user is removed.
+   - The nickname and message content recorded at the time of a report: kept separately from the account, for the timely handling of reports, and are not removed from the report record when the account is deleted.
 4. Information subject to a statutory retention obligation is kept for the required period and then destroyed.
 
 Article 4 (Processing of Location Information)
@@ -135,7 +170,8 @@ Article 4 (Processing of Location Information)
    - Immediately upon account deletion.
 4. Coordinates are not stored in the database. Claim records contain only the site identifier, not coordinates.
 5. Under Article 16(2) of the Act on the Protection and Use of Location Information, a record of the fact that location information was used - user identifier, acquisition path, service category, and time of use - is created automatically and retained for six months. This record does not contain coordinates.
-6. Details concerning location information are set out in the separate Location-Based Services Terms.
+6. This Article concerns coordinates used to detect nearby users and to decide duels in real time. Location data that a capturing device itself records in a mission photo file is not extracted or used by the Service, and is not removed either - it is kept as-is together with the photo, and its retention and deletion follow Article 1(2) and Article 3.
+7. Details concerning location information are set out in the separate Location-Based Services Terms.
 
 Article 5 (Provision to Third Parties)
 The Service does not provide personal data to third parties, except where lawfully required by investigative or other authorities under applicable law.
