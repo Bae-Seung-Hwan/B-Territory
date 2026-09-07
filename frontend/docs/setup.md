@@ -20,12 +20,24 @@ EXPO_PUBLIC_FIREBASE_APP_ID=<Firebase appId>
 # Google 로그인 — Firebase 콘솔에서 Google Provider 활성화 시 자동 발급되는 Web client ID
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=<Google OAuth Web client ID>
 
+# Google 로그인(iOS 빌드를 돌릴 때만) — Google Cloud Console에서 발급하는 iOS OAuth client와
+# 그것을 뒤집은 Reversed client ID. 비워두면 app.config.js가 google-signin config plugin을
+# 통째로 건너뛴다(Android 네이티브 로그인에는 영향 없음)
+EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=<iOS OAuth client ID>
+EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME=com.googleusercontent.apps.<번호>
+
 # Google Maps SDK — react-native-maps용. prebuild 시점에만 읽히므로 EXPO_PUBLIC_ 접두사 없음
 GOOGLE_MAPS_ANDROID_API_KEY=<Google Maps Android 키>
 GOOGLE_MAPS_IOS_API_KEY=<Google Maps iOS 키>
 ```
 
-> Firebase/Google 값은 [integrations.md](./integrations.md)의 "Firebase Authentication" 절 참고. `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`는 지금 당장은 채우지 않아도 된다 — 이 값을 읽는 `use-google-login.ts`를 아무도 호출하지 않고, 로그인 화면의 Google 버튼은 값과 무관하게 항상 "준비 중" alert만 띄우는 스텁이기 때문이다([구글 로그인 재활성화](./known-issues.md#인증) 시 필요).
+> Firebase/Google 값은 [integrations.md](./integrations.md)의 "Firebase Authentication" 절 참고.
+> **`EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`를 비워두면 로그인 화면의 Google 버튼이 비활성화된다** —
+> 값이 없으면 `use-google-login.ts`의 `isConfigured`가 `false`가 되어 눌리지 않는다(네이티브 SDK가
+> 로그인 시도 시점에 던지는 것보다 앞에서 막으려는 것이다). 이메일/비밀번호 로그인만 쓸 거라면
+> 비워둬도 앱은 정상 동작하지만, 버튼이 회색이면 콘솔 장애가 아니라 이 값부터 확인한다.
+> **iOS에서는 `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`까지 있어야 버튼이 켜진다**(Android는 Web client
+> ID만으로 충분하고, 웹은 SDK가 스텁이라 어떤 값을 넣어도 켜지지 않는다).
 > Google Maps 키 발급/제한 방법은 [integrations.md](./integrations.md)의 "Google Maps" 절 참고. 네이티브 모듈이라 Dev Build가 필요하다([decisions/0001-expo-go-vs-dev-build.md](./decisions/0001-expo-go-vs-dev-build.md)).
 
 ## 실행
