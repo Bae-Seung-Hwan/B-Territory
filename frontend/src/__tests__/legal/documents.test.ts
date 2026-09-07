@@ -56,6 +56,31 @@ describe('legal documents', () => {
 
   // 위치정보법상 개인정보처리방침으로 갈음할 수 없는 별도 문서다(docs/compliance.md 2.3).
   // 항목에서 빠지면 위치 데이터를 동의 없이 이용하는 상태가 된다.
+  /**
+   * 앱은 `PROVIDER_GOOGLE`(react-native-maps 네이티브)로 지도를 그린다. 카카오맵 WebView는
+   * 이미 제거됐는데(KakaoMapView.tsx 없음, 카카오 SDK 의존성 없음) 조항에는 "카카오맵을
+   * 사용하며 카카오에 위치를 전달하지 않는다"가 남아 있었다 — 쓰지도 않는 사업자를 명시하고
+   * 실제로 임베드된 사업자는 어디에도 적지 않은, 양방향으로 틀린 상태였다.
+   */
+  it.each(LEGAL_DOCUMENT_KEYS)('%s가 쓰지 않는 지도 사업자를 명시하지 않는다', (key) => {
+    for (const locale of locales) {
+      const body = LEGAL_DOCUMENTS[key].body[locale].toLowerCase();
+      expect(body).not.toContain('카카오');
+      expect(body).not.toContain('kakao');
+    }
+  });
+
+  it('지도 사업자를 명시한 문서는 실제로 쓰는 Google Maps를 가리킨다', () => {
+    // 지도 언급이 있는 문서(개인정보처리방침 제6조·위치기반서비스 약관 제6조)만 검사한다.
+    for (const key of LEGAL_DOCUMENT_KEYS) {
+      for (const locale of locales) {
+        const body = LEGAL_DOCUMENTS[key].body[locale];
+        const mentionsMap = /지도 화면|map view/i.test(body);
+        if (mentionsMap) expect(body).toContain('Google Maps SDK');
+      }
+    }
+  });
+
   it('위치기반서비스 이용약관이 동의 항목에 포함된다', () => {
     expect(LEGAL_DOCUMENT_KEYS).toContain<LegalDocumentKey>('location');
   });

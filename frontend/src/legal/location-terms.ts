@@ -45,7 +45,7 @@ export const locationTerms: LegalDocument = {
 3. 위 자료는 6개월간 보존한 뒤 삭제하며, 계정을 삭제하더라도 보존기간이 끝날 때까지 유지됩니다.
 
 제6조 (개인위치정보의 제3자 제공)
-서비스는 개인위치정보를 제3자에게 제공하지 않습니다. 지도 화면 표시에 사용하는 카카오맵에도 이용자의 위치를 전달하지 않습니다.
+서비스는 개인위치정보를 제3자에게 제공하지 않습니다. 지도 화면 표시에 사용하는 Google Maps SDK에도 이용자의 위치를 전달하지 않으며, 지도 위의 현재 위치 표시는 앱이 직접 그립니다.
 
 제7조 (개인위치정보주체의 권리)
 1. 이용자는 개인위치정보 이용에 대한 동의를 언제든지 철회할 수 있으며, 단말기의 위치 권한을 해제하거나 계정을 삭제하는 방법으로 철회할 수 있습니다.
@@ -92,7 +92,7 @@ Article 5 (Basis and Period for Retaining Use Records)
 3. The records are retained for six months and then deleted; they are kept until the end of that period even if the account is deleted.
 
 Article 6 (Provision to Third Parties)
-The Service does not provide personal location information to third parties. The user's location is not transmitted to Kakao Map, which is used only to render the map view.
+The Service does not provide personal location information to third parties. The user's location is not transmitted to the Google Maps SDK used to render the map view either; the current-location marker on the map is drawn by the app itself.
 
 Article 7 (Rights of the Subject of Personal Location Information)
 1. A user may withdraw consent to the use of personal location information at any time, by revoking location permission on the device or by deleting their account.

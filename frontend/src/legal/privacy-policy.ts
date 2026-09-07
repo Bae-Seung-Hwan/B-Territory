@@ -64,7 +64,7 @@ export const privacyPolicy: LegalDocument = {
 | Google (Firebase Authentication) | 회원 인증, 비밀번호 보관, 이메일 인증 |
 | Amazon Web Services | 서버 운영 및 미션 사진 파일 보관 |
 
-카카오맵은 지도 화면 표시에 사용되며, 서비스는 이용자의 위치를 카카오에 전달하지 않습니다.
+지도 화면은 Google Maps SDK를 앱에 내장하여 표시합니다. 서비스는 이용자의 위치 좌표를 Google에 전송하지 않으며, 지도 위의 현재 위치 표시도 SDK 기능이 아니라 앱이 직접 그립니다. 다만 지도를 그리는 과정에서 SDK가 Google과 통신합니다.
 
 제7조 (이용자의 권리)
 1. 이용자는 언제든지 자신의 개인정보를 조회하고, 앱 내에서 계정을 삭제할 수 있습니다.
@@ -130,7 +130,7 @@ The Service entrusts the processing of personal data as follows.
 | Google (Firebase Authentication) | Member authentication, password storage, email verification |
 | Amazon Web Services | Server operation and storage of mission photo files |
 
-Kakao Map is used to render the map view; the Service does not transmit the user's location to Kakao.
+The map view is rendered with the Google Maps SDK embedded in the app. The Service does not transmit the user's coordinates to Google, and the current-location marker is drawn by the app itself rather than by the SDK. The SDK does, however, communicate with Google in order to render the map.
 
 Article 7 (User Rights)
 1. Users may review their personal data at any time and delete their account from within the app.
