@@ -81,6 +81,40 @@ describe('legal documents', () => {
     }
   });
 
+  /**
+   * 좌표는 실제로 Redis GEO(`geo:users`)에 남고, 결투 신청 거리 검증과 아군 보너스 판정에서
+   * **나중에 다시 읽힌다**(나중에 읽는다는 것 자체가 보관의 증거다). 그런데 조항은 "즉시
+   * 이용한 후 저장하지 않습니다"라고 적고 있었다 — 위치정보법 맥락에서 개인위치정보의 보유
+   * 여부는 가장 먼저 확인되는 지점이라, 표현 다듬기가 아니라 사실관계가 틀린 것이었다.
+   */
+  it.each(LEGAL_DOCUMENT_KEYS)('%s가 좌표를 보관하지 않는다고 주장하지 않는다', (key) => {
+    const FALSE_CLAIMS = [
+      '좌표 자체는 저장하지 않',
+      '즉시 이용한 후 저장하지 않',
+      '즉시 사용되고 저장되지 않',
+      'coordinates themselves are not stored',
+      'are used immediately for the purposes in article 3 and are not stored',
+      'coordinates are used for their purpose and not stored',
+    ];
+    for (const locale of locales) {
+      const body = LEGAL_DOCUMENTS[key].body[locale].toLowerCase();
+      for (const claim of FALSE_CLAIMS) {
+        expect(body).not.toContain(claim.toLowerCase());
+      }
+    }
+  });
+
+  it('위치 조항이 실제 보유 방식(최신 1건·자동 삭제)을 밝힌다', () => {
+    // 이 두 문서가 같은 사실을 서술하므로 한쪽만 고치면 서로 어긋난다.
+    for (const locale of locales) {
+      expect(LEGAL_DOCUMENTS.location.body[locale]).toMatch(/최신 1건|most-recent entry/);
+      expect(LEGAL_DOCUMENTS.privacy.body[locale]).toMatch(/최신 1건|most-recent entry/);
+      // 유령 좌표 정리 상한(GEO_STALE_TTL 10분 + GEO_PRUNE_INTERVAL_MS 5분).
+      expect(LEGAL_DOCUMENTS.location.body[locale]).toMatch(/15분|15 minutes/);
+      expect(LEGAL_DOCUMENTS.privacy.body[locale]).toMatch(/15분|15 minutes/);
+    }
+  });
+
   it('위치기반서비스 이용약관이 동의 항목에 포함된다', () => {
     expect(LEGAL_DOCUMENT_KEYS).toContain<LegalDocumentKey>('location');
   });

@@ -12,6 +12,11 @@ import type { LegalDocument } from './types';
  *
  * 미구현 기능(백그라운드 위치 추적, 푸시 알림 토큰)은 의도적으로 넣지 않았다 —
  * compliance.md 1장의 "구현되는 시점에 갱신한다" 규칙을 따른다.
+ *
+ * 제4조(위치정보의 처리)는 위치기반서비스 이용약관 제4조와 **같은 사실을 서술한다.**
+ * 좌표의 보유·삭제 방식을 바꾸면 두 문서를 함께 고쳐야 하며, 근거가 되는 구현
+ * (Redis GEO 덮어쓰기, handleDisconnect의 geoRemove, GEO_STALE_TTL·GEO_PRUNE_INTERVAL_MS)은
+ * location-terms.ts의 주석에 정리해 두었다.
  */
 export const privacyPolicy: LegalDocument = {
   version: '2026-09-07',
@@ -25,7 +30,7 @@ export const privacyPolicy: LegalDocument = {
    - 이메일 주소, 닉네임, 국적(팀 배정에 사용)
    - Firebase 인증 식별자(UID). 비밀번호는 서비스가 저장하지 않으며 Google Firebase Authentication이 보관합니다.
 2. 서비스 이용 과정에서 수집·생성되는 항목
-   - 단말기의 GPS 위치정보(앱을 사용하는 동안에만 수집하며, 좌표 자체는 저장하지 않습니다)
+   - 단말기의 GPS 위치정보(앱을 사용하는 동안에만 수집하며, 데이터베이스에 이력으로 남기지 않습니다 — 보관·삭제 방식은 제4조 참고)
    - 관광지 점령 기록(지점 식별자, 팀, 이용자 식별자 — 좌표는 포함하지 않습니다)
    - 결투 기록(상대, 승패, 점수 증감)
    - 미션 사진 및 후기(이용자가 직접 촬영·작성한 내용)
@@ -51,8 +56,14 @@ export const privacyPolicy: LegalDocument = {
 
 제4조 (위치정보의 처리)
 1. 서비스는 방문 인증과 실시간 이용자 매칭을 위해 이용자의 위치정보를 이용합니다.
-2. 위치 좌표는 처리 목적을 달성한 즉시 사용되고 저장되지 않습니다. 다만 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 "위치정보를 이용한 사실"의 기록(이용자 식별자, 취득 경로, 제공 서비스 구분, 이용 일시)은 자동으로 남으며 6개월간 보존합니다. 이 기록에는 좌표가 포함되지 않습니다.
-3. 위치정보에 관한 상세한 사항은 별도의 위치기반서비스 이용약관에서 정합니다.
+2. 위치 좌표는 인근 이용자 탐지와 결투 성립 여부를 판정하기 위해 서버 메모리에 이용자별 최신 1건만 보관하며, 이동 경로나 방문 이력으로 누적하지 않습니다. 새 좌표를 받으면 이전 값을 덮어씁니다.
+3. 보관한 좌표는 다음과 같이 삭제됩니다.
+   - 앱 접속을 종료하면 즉시 삭제합니다.
+   - 비정상 종료 등으로 남은 좌표는 마지막 갱신 시점으로부터 최대 15분 이내에 자동으로 삭제됩니다.
+   - 계정을 삭제하면 즉시 삭제합니다.
+4. 위치 좌표는 데이터베이스에 저장하지 않습니다. 점령 기록에는 관광지 식별자만 남고 좌표는 포함되지 않습니다.
+5. 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 "위치정보를 이용한 사실"의 기록(이용자 식별자, 취득 경로, 제공 서비스 구분, 이용 일시)은 자동으로 남으며 6개월간 보존합니다. 이 기록에는 좌표가 포함되지 않습니다.
+6. 위치정보에 관한 상세한 사항은 별도의 위치기반서비스 이용약관에서 정합니다.
 
 제5조 (개인정보의 제3자 제공)
 서비스는 이용자의 개인정보를 제3자에게 제공하지 않습니다. 다만 법령에 따라 수사기관 등이 적법한 절차로 요구하는 경우는 예외로 합니다.
@@ -91,7 +102,7 @@ Article 1 (Personal Data Collected)
    - Email address, nickname, nationality (used for team assignment)
    - Firebase authentication identifier (UID). The Service does not store passwords; they are held by Google Firebase Authentication.
 2. Collected or generated while using the Service
-   - GPS location from the device (collected only while the app is in use; coordinates themselves are not stored)
+   - GPS location from the device (collected only while the app is in use; not recorded as a history in the database - see Article 4 for how coordinates are held and deleted)
    - Site claim records (site identifier, team, user identifier - coordinates are not included)
    - Duel records (opponent, outcome, point changes)
    - Mission photos and reviews (content the user takes or writes)
@@ -117,8 +128,14 @@ Article 3 (Retention and Destruction)
 
 Article 4 (Processing of Location Information)
 1. The Service uses location information to verify visits and to match users in real time.
-2. Coordinates are used for their purpose and not stored. However, under Article 16(2) of the Act on the Protection and Use of Location Information, a record of the fact that location information was used - user identifier, acquisition path, service category, and time of use - is created automatically and retained for six months. This record does not contain coordinates.
-3. Details concerning location information are set out in the separate Location-Based Services Terms.
+2. Coordinates are held in server memory as a single most-recent entry per user, in order to detect nearby users and to decide whether a duel may take place. They are not accumulated into a movement trail or a visit history; a new coordinate overwrites the previous one.
+3. Stored coordinates are deleted as follows.
+   - Immediately when the user disconnects from the app.
+   - Within at most 15 minutes of the last update, for coordinates left behind by an abnormal disconnection.
+   - Immediately upon account deletion.
+4. Coordinates are not stored in the database. Claim records contain only the site identifier, not coordinates.
+5. Under Article 16(2) of the Act on the Protection and Use of Location Information, a record of the fact that location information was used - user identifier, acquisition path, service category, and time of use - is created automatically and retained for six months. This record does not contain coordinates.
+6. Details concerning location information are set out in the separate Location-Based Services Terms.
 
 Article 5 (Provision to Third Parties)
 The Service does not provide personal data to third parties, except where lawfully required by investigative or other authorities under applicable law.

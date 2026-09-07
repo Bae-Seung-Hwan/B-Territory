@@ -12,6 +12,16 @@ import type { LegalDocument } from './types';
  * 제3조의 서비스 구분(SVC-01/SVC-02)과 제5조의 보존 항목은 backend/src/location-logs/가
  * 실제로 남기는 값과 1:1로 맞춘 것이다(compliance.md 4장의 신고서 양식 표). **한쪽을
  * 바꾸면 다른 쪽도 함께 고칠 것.**
+ *
+ * 제4조(좌표의 보유·삭제)도 마찬가지로 구현에 묶여 있다. 근거는 다음 세 가지다.
+ *   - Redis GEO(`geo:users`)는 member가 userId라 갱신 시 이전 좌표를 덮어쓴다 → "최신 1건"
+ *   - realtime.gateway.ts의 handleDisconnect가 geoRemove를 호출한다 → "접속 종료 시 즉시"
+ *   - 유령 좌표는 GEO_STALE_TTL(10분) 기준으로 GEO_PRUNE_INTERVAL_MS(5분)마다 도는 잡이
+ *     지운다 → 최악 15분. **이 두 상수를 바꾸면 조항의 "15분"도 함께 고칠 것.**
+ *
+ * 한때 이 조항은 "즉시 이용한 후 저장하지 않습니다"였는데, 실제로는 좌표가 Redis에 남고
+ * 결투 신청·아군 보너스 판정에서 다시 읽히고 있었다(나중에 읽는다는 것 자체가 보관의
+ * 증거다). 문서가 거짓을 말하던 상태라 구현에 맞춰 고쳤다.
  */
 export const locationTerms: LegalDocument = {
   version: '2026-09-07',
@@ -32,8 +42,10 @@ export const locationTerms: LegalDocument = {
 
 제4조 (개인위치정보의 이용 및 보유)
 1. 서비스는 앱이 실행 중일 때에만 개인위치정보를 수집하며, 백그라운드에서는 수집하지 않습니다.
-2. 수집한 위치 좌표는 제3조의 목적에 즉시 이용한 후 저장하지 않습니다.
-3. 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 개인위치정보의 이용·제공사실 확인자료를 자동으로 기록하며, 그 내용은 제5조와 같습니다.
+2. 수집한 위치 좌표는 제3조의 목적에 이용하기 위해 서버 메모리에 이용자별 최신 1건만 보관하며, 이동 경로나 방문 이력으로 누적하지 않습니다. 새 좌표를 받으면 이전 값을 덮어씁니다.
+3. 보관한 좌표는 앱 접속을 종료하면 즉시 삭제하고, 비정상 종료 등으로 남은 좌표는 마지막 갱신 시점으로부터 최대 15분 이내에 자동으로 삭제합니다. 계정을 삭제하는 경우에도 즉시 삭제합니다.
+4. 위치 좌표는 데이터베이스에 저장하지 않습니다.
+5. 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 개인위치정보의 이용·제공사실 확인자료를 자동으로 기록하며, 그 내용은 제5조와 같습니다.
 
 제5조 (이용·제공사실 확인자료의 보유 근거와 기간)
 1. 서비스는 개인위치정보를 이용한 때마다 다음 항목을 자동으로 기록합니다.
@@ -79,8 +91,10 @@ The Service uses personal location information to provide the following.
 
 Article 4 (Use and Retention of Personal Location Information)
 1. The Service collects personal location information only while the app is running; it does not collect it in the background.
-2. Collected coordinates are used immediately for the purposes in Article 3 and are not stored.
-3. Under Article 16(2) of the Act on the Protection and Use of Location Information, a record of the use and provision of personal location information is created automatically, as set out in Article 5.
+2. Collected coordinates are held in server memory as a single most-recent entry per user for the purposes in Article 3, and are not accumulated into a movement trail or a visit history; a new coordinate overwrites the previous one.
+3. Stored coordinates are deleted immediately when the user disconnects from the app. Coordinates left behind by an abnormal disconnection are deleted automatically within at most 15 minutes of the last update. They are also deleted immediately upon account deletion.
+4. Coordinates are not stored in the database.
+5. Under Article 16(2) of the Act on the Protection and Use of Location Information, a record of the use and provision of personal location information is created automatically, as set out in Article 5.
 
 Article 5 (Basis and Period for Retaining Use Records)
 1. Each time personal location information is used, the Service automatically records:
