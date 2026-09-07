@@ -20,6 +20,8 @@ export enum ErrorCode {
   USER_NOT_REGISTERED = 'USER_NOT_REGISTERED',
   USER_NOT_FOUND = 'USER_NOT_FOUND',
   TEAM_NOT_ASSIGNED = 'TEAM_NOT_ASSIGNED',
+  // 가입 시 필수 동의 항목이 누락되거나 중복된 경우.
+  CONSENT_INCOMPLETE = 'CONSENT_INCOMPLETE',
 
   // 관광지 / 점령
   SPOT_NOT_FOUND = 'SPOT_NOT_FOUND',

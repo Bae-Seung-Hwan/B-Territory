@@ -8,12 +8,21 @@ import { AppModule } from './../src/app.module';
 import { configureApp } from '../src/app-setup';
 import { FirebaseService } from '../src/common/firebase/firebase.service';
 import { User } from '../src/users/entities/user.entity';
+import { UserConsent } from '../src/consents/entities/user-consent.entity';
+import { REQUIRED_CONSENT_DOCUMENTS } from '../src/consents/constants';
 
 const FIREBASE_UID = 'e2e-relogin-uid';
 const RACE_UID = 'e2e-relogin-race-uid';
 const NO_EMAIL_UID = 'e2e-relogin-no-email-uid';
 const UNVERIFIED_UID = 'e2e-relogin-unverified-uid';
-const ALL_UIDS = [FIREBASE_UID, RACE_UID, NO_EMAIL_UID, UNVERIFIED_UID];
+const CONSENT_UID = 'e2e-relogin-consent-uid';
+const ALL_UIDS = [
+  FIREBASE_UID,
+  RACE_UID,
+  NO_EMAIL_UID,
+  UNVERIFIED_UID,
+  CONSENT_UID,
+];
 
 // 토큰 문자열은 "uid:세션번호" 형태 — 실제 재로그인처럼 매번 다른 토큰 문자열이지만
 // 같은 uid로 디코딩되는 상황을 재현. Firebase가 검증한 토큰의 email_verified 클레임도
@@ -32,8 +41,18 @@ const mockFirebaseService = {
 };
 
 interface ErrorBody {
+  code?: string;
   message: string;
 }
+
+const CONSENT_VERSION = '2026-09-07';
+
+/** 가입에 필요한 필수 동의 전체. 항목이 늘면 서버 상수에서 자동으로 따라온다. */
+const consents = () =>
+  REQUIRED_CONSENT_DOCUMENTS.map((document) => ({
+    document,
+    version: CONSENT_VERSION,
+  }));
 
 interface ProfileBody {
   id: string;
@@ -45,6 +64,7 @@ interface ProfileBody {
 describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)', () => {
   let app: INestApplication<App>;
   let userRepo: Repository<User>;
+  let consentRepo: Repository<UserConsent>;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -58,6 +78,8 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     await app.init();
 
     userRepo = moduleFixture.get(getRepositoryToken(User));
+    consentRepo = moduleFixture.get(getRepositoryToken(UserConsent));
+    // user_consents는 users FK가 CASCADE라 아래 삭제로 함께 정리된다.
     await userRepo.delete({ firebaseUid: In(ALL_UIDS) });
   });
 
@@ -81,7 +103,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${UNVERIFIED_UID}:login-session-1`)
-      .send({ nickname: '미인증', nationality: 'KR' })
+      .send({ nickname: '미인증', nationality: 'KR', consents: consents() })
       .expect(403);
 
     expect((res.body as ErrorBody).message).toContain('이메일 인증');
@@ -96,7 +118,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${FIREBASE_UID}:login-session-1`)
-      .send({ nickname: '홍길동', nationality: 'KR' })
+      .send({ nickname: '홍길동', nationality: 'KR', consents: consents() })
       .expect(201);
 
     expect(res.body).toMatchObject({ nickname: '홍길동', nationality: 'KR' });
@@ -106,7 +128,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${FIREBASE_UID}:login-session-2`) // 재로그인으로 발급된 다른 토큰
-      .send({ nickname: '다른닉네임', nationality: 'JP' })
+      .send({ nickname: '다른닉네임', nationality: 'JP', consents: consents() })
       .expect(409);
 
     expect((res.body as ErrorBody).message).toContain('이미 가입된');
@@ -136,7 +158,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${NO_EMAIL_UID}:login-session-1`)
-      .send({ nickname: '무이메일', nationality: 'KR' })
+      .send({ nickname: '무이메일', nationality: 'KR', consents: consents() })
       .expect(400);
 
     expect((res.body as ErrorBody).message).toContain('이메일');
@@ -148,7 +170,11 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
       request(server)
         .post('/api/auth/register')
         .set('Authorization', `Bearer ${RACE_UID}:race-session`)
-        .send({ nickname: '동시가입', nationality: 'KR' });
+        .send({
+          nickname: '동시가입',
+          nationality: 'KR',
+          consents: consents(),
+        });
 
     const [first, second] = await Promise.all([send(), send()]);
 
@@ -156,5 +182,70 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
 
     const count = await userRepo.count({ where: { firebaseUid: RACE_UID } });
     expect(count).toBe(1);
+  });
+  it('동의 항목이 아예 없으면 400 — 스키마 검증에서 먼저 막힌다', async () => {
+    await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${CONSENT_UID}:consent-session`)
+      .send({ nickname: '무동의', nationality: 'KR' })
+      .expect(400);
+
+    const count = await userRepo.count({ where: { firebaseUid: CONSENT_UID } });
+    expect(count).toBe(0);
+  });
+
+  it('필수 동의가 일부 빠지면 400이고 계정도 만들어지지 않는다 (롤백)', async () => {
+    // 서비스 약관 하나만 보낸다 — 스키마상으론 유효한 배열이라 ValidationPipe를 통과하고,
+    // 필수 항목 판정은 서버(REQUIRED_CONSENT_DOCUMENTS)가 한다.
+    const res = await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${CONSENT_UID}:consent-session`)
+      .send({
+        nickname: '일부동의',
+        nationality: 'KR',
+        consents: [{ document: 'service', version: CONSENT_VERSION }],
+      })
+      .expect(400);
+
+    expect((res.body as ErrorBody).code).toBe('CONSENT_INCOMPLETE');
+
+    // 핵심: users INSERT가 같은 트랜잭션이라 함께 되돌아가야 한다. 여기가 깨지면
+    // "동의 증거가 없는 계정"이 남는다 — 이 기능이 막으려던 상태 그 자체다.
+    const count = await userRepo.count({ where: { firebaseUid: CONSENT_UID } });
+    expect(count).toBe(0);
+  });
+
+  it('가입에 성공하면 동의 이력이 문서별로 남는다', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${CONSENT_UID}:consent-session`)
+      .send({ nickname: '동의완료', nationality: 'KR', consents: consents() })
+      .expect(201);
+
+    const userId = (res.body as ProfileBody).id;
+    const rows = await consentRepo.find({ where: { userId } });
+
+    expect(rows.map((r) => r.document).sort()).toEqual(
+      [...REQUIRED_CONSENT_DOCUMENTS].sort(),
+    );
+    for (const row of rows) {
+      expect(row.version).toBe(CONSENT_VERSION);
+      expect(row.agreedAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it('계정을 지우면 동의 이력도 함께 사라진다 (FK CASCADE)', async () => {
+    const user = await userRepo.findOne({
+      where: { firebaseUid: CONSENT_UID },
+    });
+    expect(user).not.toBeNull();
+
+    await userRepo.delete({ id: user!.id });
+
+    // 탈퇴 후 잔존 항목을 늘리지 않겠다는 결정이 스키마로 강제되는지 확인한다.
+    // 보존이 필요하다는 결론이 나면 이 테스트가 먼저 깨져 전환 지점을 알려준다.
+    await expect(
+      consentRepo.count({ where: { userId: user!.id } }),
+    ).resolves.toBe(0);
   });
 });

@@ -5,7 +5,11 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { UsersService } from '../users/users.service';
+import { User } from '../users/entities/user.entity';
+import { ConsentsService } from '../consents/consents.service';
 import { RegisterDto } from './dto/register.dto';
 import {
   PG_UNIQUE_VIOLATION,
@@ -15,7 +19,11 @@ import { ErrorCode, errBody } from '../common/errors/error-code';
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly consentsService: ConsentsService,
+    @InjectDataSource() private readonly dataSource: DataSource,
+  ) {}
 
   async register(
     dto: RegisterDto,
@@ -54,12 +62,21 @@ export class AuthService {
 
     const nationality = dto.nationality.toUpperCase();
     try {
-      const user = await this.usersService.create({
-        firebaseUid,
-        email,
-        nickname: dto.nickname,
-        nationality,
-        team: nationality,
+      // 이용자 INSERT와 동의 이력을 한 트랜잭션에 묶는다. 따로 커밋하면 그 사이에 프로세스가
+      // 죽었을 때 "동의했다는 증거가 없는 계정"이 남는데, 그건 이 기능이 없애려던 상태다.
+      // 동의 항목 검증(누락·중복)도 이 안에서 던져 계정 생성까지 함께 되돌린다.
+      const user = await this.dataSource.transaction(async (manager) => {
+        const created = await manager.save(
+          manager.create(User, {
+            firebaseUid,
+            email,
+            nickname: dto.nickname,
+            nationality,
+            team: nationality,
+          }),
+        );
+        await this.consentsService.recordAll(created.id, dto.consents, manager);
+        return created;
       });
       return this.usersService.toProfile(user);
     } catch (err) {
