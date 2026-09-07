@@ -28,18 +28,16 @@
 
 ## 실시간 통신 (Socket.io)
 
-> ⚠️ 소켓 연결·이벤트 배선이 아직 구현되어 있지 않다 (스켈레톤만 존재). 남은 작업은
-> [known-issues.md](./known-issues.md#실시간-통신-socketio) 참고.
-
 - 구현 위치: `src/providers/SocketProvider.tsx`
 - 앱 루트(`src/app/_layout.tsx`)에서 QueryClient와 함께 최상단에 마운트
-- `useSocket()`으로 소켓 인스턴스를 꺼내 쓸 수 있는 Context만 제공 — `autoConnect: false`라 실제 연결은 아무도 시작하지 않음
-- 오버레이(`useOverlayStore`)는 `EnemyDetectionAlert` → `DuelRequest` → `MiniGame` 화면 흐름만 갖추고 있고, 이 체인을 트리거하는 `setShowEnemyAlert(true)` / `setEnemyInfo(...)` 호출이 코드 어디에도 없어 실제로 뜰 방법이 없음
-- `useLocation()`(`src/hooks/use-location.ts`)은 지도 화면(`map/index.tsx`)에서 호출돼 좌표를 얻고 있지만, 그 좌표를 `location:update`로 보내는 쪽이 없어 서버는 여전히 위치를 모름
-- 백엔드가 제공하는 이벤트
-  - 송신: `location:update`, `duel:request`, `duel:accept`, `duel:reject`, `game:submit`
-  - 수신: `encounter:detected`, `duel:requested`, `duel:accepted`, `duel:rejected`, `duel:expired`, `game:start`, **`game:go`**, `game:opponent:submitted`, `game:round:result`, `duel:completed`, `duel:voided`
-  - 실제 배선 시 백엔드 코드(`backend/src/realtime/realtime.gateway.ts`)에서 페이로드 스키마 재확인 필요
+- `useSocket()`으로 소켓 인스턴스를 꺼내 쓸 수 있는 Context를 제공. `/realtime` 네임스페이스로 접속하며(백엔드 `RealtimeGateway`와 일치), 로그인 상태(`useAuth().isAuthenticated`)를 따라 `connect()`/`disconnect()`가 자동으로 트리거된다 — 토큰은 함수형 `auth` 옵션(`realtimeAuth`)이 매 연결·재연결 시도 직전에 `getIdToken()`으로 새로 읽으므로, `connect_error`마다 별도로 강제 갱신하거나 직접 `connect()`를 다시 부르지 않는다(그러면 socket.io의 지수 백오프를 건너뛰고 토큰 갱신을 무한 반복한다 — 아래 "안정성 관련 구현 메모" 참고)
+- `encounter:detected`는 Provider 레벨에서 배선돼 있다 — 수신 시 `useBattleStore.upsertEnemy(...)`를 호출해 배틀 탭의 근처 상대 목록에 추가/갱신한다. 결투 진행 여부와 무관하게 항상 갱신하며(목록은 "지금 근처에 있는 상대"를 보여줄 뿐이라 진행 중인 결투와 충돌하지 않는다), 서버가 같은 쌍에 대해 60초간 재발송하지 않으므로 클라이언트가 `BATTLE_ENEMY_STALE_MS`(2분)마다 주기적으로 오래된 항목을 걷어낸다
+- `useLocation()`(`src/hooks/use-location.ts`)은 앱 루트의 `LocationBroadcaster`가 좌표가 바뀔 때 + 60초 주기로 `location:update`를 emit한다(특정 탭에 묶지 않는 이유는 아래 "안정성 관련 구현 메모" 참고) — 별도 쓰로틀링 없이 `watchPositionAsync`의 `distanceInterval:10m`/`timeInterval:5000ms`에 의존
+- 결투 신청/수락/거부/만료/완료/무효 전체 생명주기가 Provider 레벨에 배선돼 있다(`SocketProvider.tsx`):
+  - 신청자(challenger)는 배틀 탭의 `BattleEnemyRow`에서 `duel:request`를 emit하고, ack로 받은 `duelId`로 `DuelPending`(응답 대기 화면, 취소 버튼 없음 — 백엔드에 `duel:cancel`이 없어 30초 자동 만료에 맡김)을 띄운다
+  - 수신자(recipient)는 `duel:requested` 수신 시 `DuelRequest` 시트가 뜨고, 수락/거부가 각각 `duel:accept`/`duel:reject`를 emit한다(서버 확인 전엔 MiniGame을 열지 않는다)
+  - `duel:accepted`는 양쪽 모두에게 와서 `MiniGame`을 연다. `duel:rejected`/`duel:expired`/`duel:completed`/`duel:voided`는 열려있는 오버레이를 `useOverlayStore.resetDuel()`로 정리하고 결과를 `Alert`로 안내한다(`duelId`가 현재 진행 중인 것과 일치할 때만 반응)
+- 미니게임 판정 계약(`game:start`/`game:go`/`game:submit`)은 바로 아래 섹션 참고 — `MiniGame`은 이 계약에 맞춰 구현돼 있다(PR #46 프론트 반영 완료, 폐기된 `duel:result` 자가신고는 제거됨).
 
 ### 결투 미니게임 (`feature/Bae/duel-minigame`)
 
@@ -84,12 +82,38 @@
 랜덤으로 정하고 알려주지 않는다.
 
 `game:go` 전에 보낸 제출은 **부정출발**로 그 라운드 최하점 처리된다(HSETNX라 재제출도 안 된다).
-따라서 초록불 전 탭은 서버로 보내지 말고 클라이언트에서 "너무 빨랐어요"로 잡아주는 게 좋다.
 결과의 `scores[]`에 `falseStart: true`로 표시된다.
+
+**초록불 전 탭도 서버로 보낸다.** 클라이언트에서 완전히 삼키면(예전 구현) 부정출발의 대가가
+0이 되어, 계속 두들기다 `game:go` 직후 첫 탭으로 제출하는 게 무위험 전략이 된다 — 서버 하한
+`REACTION_MIN_MS = 80`ms라 정직한 반응을 안정적으로 이긴다(PR #54 리뷰 지적 7번). 지금은
+`ReactionGame`이 "너무 빨랐어요"를 잠깐 보여준 뒤 그대로 `game:submit`을 보내, 서버가
+`FALSE_START_PRIMARY`로 확정하게 한다.
 
 `quiz.question`·`quiz.choices`는 `{ ko, en }` 형태로 내려온다(소켓에 lang 파라미터가 없어
 양쪽 언어를 모두 보낸다). 선택지는 서버가 매번 섞고, 정답은 서버 세션에만 있어 페이로드에
 실리지 않는다.
+
+### 안정성 관련 구현 메모
+
+리뷰에서 드러난 아래 함정들은 수정됐다. 같은 실수를 반복하지 않도록 이유를 남긴다.
+
+- **WS 실패는 ack가 아니라 `exception` 이벤트로 온다.** 서버 핸들러가 throw하면 `emit(..., ack)`의 콜백은 **호출되지 않는다**(`ws-exception.filter.ts` 주석). `SocketProvider`가 `exception`을 구독해 `overlay.duelError.<code>`로 안내하고, `DUEL_*` 코드면 `resetDuel()`로 멈춘 오버레이를 정리한다. 새 emit 지점을 추가할 때 ack만 믿으면 안 된다.
+- **"결투 진행 중" 판정은 `useOverlayStore#isDuelBusy` 하나로 통일한다.** `show*` 플래그만 보면, 수락을 emit하고 `duel:accepted`를 기다리는 왕복 구간(오버레이는 없는데 결투는 살아있음)에 새 `duel:requested`가 `duelId`를 덮어써 원래 결투가 id 불일치로 버려진다. 그래서 `duelId != null`도 판정에 포함한다.
+- **위치 송신은 조우 탐지 겸 접속 확인이다.** 서버는 `location:update`가 올 때만 `user:meta:*`를 갱신하고 TTL이 120초라, 정지해 있으면(`distanceInterval:10m`) 2분 뒤 오프라인으로 간주돼 `duel:accepted`가 큐로 빠진다. 앱 루트의 `LocationBroadcaster`가 좌표 변경 시 + 60초 주기로 보내며, 특정 탭에 묶지 않는 이유도 이것이다.
+- **소켓 토큰은 함수형 `auth`로 넘긴다.** `connect_error`마다 강제 갱신 후 직접 `connect()`를 부르면 socket.io의 지수 백오프를 건너뛰고 Firebase 토큰 갱신을 무한 반복한다. `auth: (cb) => ...`는 매 재연결 시도 직전에 호출되므로 갱신 로직 자체가 필요 없다.
+- **소켓 리스너 effect에 `useTranslation()`의 `t`를 넣지 않는다.** 매 렌더 새로 bind되는 함수라 리스너 전체가 렌더마다 재등록된다. 핸들러 안에서는 `i18n.t`를 직접 호출한다.
+- **GPS 구독은 `useLocation`이 모듈 스코프에 하나만 유지한다.** 호출한 화면 수만큼 `watchPositionAsync`가 생기지 않도록 공유하며, 마지막 구독자가 사라질 때만 해제한다.
+
+### 필요 작업 (TODO)
+
+- [ ] `DuelPending`에 취소 수단이 없다(백엔드에 `duel:cancel`이 없어 30초 만료에 의존) — 백엔드 협의 시 함께 논의
+- [x] ~~`src/hooks/use-location.ts`가 PR #50과 서로 다른 방향으로 되돌리고 있어 merge 순서
+      합의가 필요하다(PR #54 리뷰 지적 9번)~~ — **해소됨: 공유 스토어를 유지한다.** develop
+      머지(`0e1045e`)에서 이 브랜치 쪽을 채택했다. PR #50이 훅 인스턴스별 구독으로 되돌린
+      근거("소비자가 `map/index.tsx` 하나뿐")는 `LocationBroadcaster`가 앱 루트에 상주하면서
+      이미 깨졌고, 되돌리면 map과 broadcaster가 각각 고정밀 GPS watcher를 켠다. 자세한 근거는
+      `use-location.ts` 주석 참고.
 
 ## Firebase Authentication
 
