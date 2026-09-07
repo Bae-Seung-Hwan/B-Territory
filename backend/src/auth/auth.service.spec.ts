@@ -5,8 +5,8 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import {
+  CLIENT_CONSENT_DOCUMENTS,
   ConsentDocument,
-  REQUIRED_CONSENT_DOCUMENTS,
 } from '../consents/constants';
 import { ErrorCode } from '../common/errors/error-code';
 import { RegisterDto } from './dto/register.dto';
@@ -17,10 +17,11 @@ function makeDto(overrides: Partial<RegisterDto> = {}): RegisterDto {
   return {
     nickname: '홍길동',
     nationality: 'kr',
-    consents: REQUIRED_CONSENT_DOCUMENTS.map((document) => ({
+    consents: CLIENT_CONSENT_DOCUMENTS.map((document) => ({
       document,
       version: V,
     })),
+    ageConfirmed: true,
     ...overrides,
   };
 }
@@ -63,7 +64,7 @@ describe('AuthService.register', () => {
     // 중간에 죽었을 때 "동의 증거가 없는 계정"이 남는다.
     expect(consentsService.recordAll).toHaveBeenCalledWith(
       'user-1',
-      makeDto().consents,
+      { consents: makeDto().consents, ageConfirmed: true },
       manager,
     );
   });
@@ -109,22 +110,33 @@ describe('AuthService.register', () => {
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
-  it('동의 항목을 클라이언트가 보낸 그대로 넘긴다 — 필수 판정은 서버가 한다', async () => {
-    const { service, consentsService } = makeService();
-    // 클라이언트가 한 항목만 보내도 서비스는 그대로 넘기고, 거절은 recordAll이 한다.
+  it('동의 항목이 모자라면 트랜잭션을 열기 전에 막는다', async () => {
+    const { service, dataSource } = makeService();
+    // 요청 본문만 보면 알 수 있는 400이라, INSERT와 롤백을 쓰지 않고 먼저 걸러야 한다.
     const partial = [{ document: ConsentDocument.SERVICE, version: V }];
 
-    await service.register(
-      makeDto({ consents: partial }),
-      'uid-1',
-      'a@b.com',
-      true,
-    );
+    await expect(
+      service.register(
+        makeDto({ consents: partial }),
+        'uid-1',
+        'a@b.com',
+        true,
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
 
-    expect(consentsService.recordAll).toHaveBeenCalledWith(
-      'user-1',
-      partial,
-      expect.anything(),
-    );
+  it('만 14세 확인이 없으면 가입을 받지 않는다', async () => {
+    const { service, dataSource } = makeService();
+
+    await expect(
+      service.register(
+        makeDto({ ageConfirmed: false }),
+        'uid-1',
+        'a@b.com',
+        true,
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 });

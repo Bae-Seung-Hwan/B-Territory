@@ -9,7 +9,10 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
-import { ConsentsService } from '../consents/consents.service';
+import {
+  ConsentsService,
+  buildConsentRows,
+} from '../consents/consents.service';
 import { RegisterDto } from './dto/register.dto';
 import {
   PG_UNIQUE_VIOLATION,
@@ -60,6 +63,16 @@ export class AuthService {
       );
     }
 
+    const consentInput = {
+      consents: dto.consents,
+      ageConfirmed: dto.ageConfirmed,
+    };
+
+    // 동의 항목 검사를 트랜잭션 밖에서 한 번 먼저 돌린다. 부수효과가 없어 recordAll 안의
+    // 같은 검사와 결과가 같고, 요청 본문만 보면 알 수 있는 400에 INSERT와 롤백을 쓰지 않게
+    // 된다. 최종 방어선은 그대로 recordAll이다 — 여기를 지워도 계약은 깨지지 않는다.
+    buildConsentRows(consentInput);
+
     const nationality = dto.nationality.toUpperCase();
     try {
       // 이용자 INSERT와 동의 이력을 한 트랜잭션에 묶는다. 따로 커밋하면 그 사이에 프로세스가
@@ -75,7 +88,7 @@ export class AuthService {
             team: nationality,
           }),
         );
-        await this.consentsService.recordAll(created.id, dto.consents, manager);
+        await this.consentsService.recordAll(created.id, consentInput, manager);
         return created;
       });
       return this.usersService.toProfile(user);

@@ -9,7 +9,11 @@ import { configureApp } from '../src/app-setup';
 import { FirebaseService } from '../src/common/firebase/firebase.service';
 import { User } from '../src/users/entities/user.entity';
 import { UserConsent } from '../src/consents/entities/user-consent.entity';
-import { REQUIRED_CONSENT_DOCUMENTS } from '../src/consents/constants';
+import {
+  AGE_POLICY_VERSION,
+  CLIENT_CONSENT_DOCUMENTS,
+  ConsentDocument,
+} from '../src/consents/constants';
 
 const FIREBASE_UID = 'e2e-relogin-uid';
 const RACE_UID = 'e2e-relogin-race-uid';
@@ -47,9 +51,9 @@ interface ErrorBody {
 
 const CONSENT_VERSION = '2026-09-07';
 
-/** 가입에 필요한 필수 동의 전체. 항목이 늘면 서버 상수에서 자동으로 따라온다. */
+/** 클라이언트가 보내는 문서 동의. 항목이 늘면 서버 상수에서 자동으로 따라온다. */
 const consents = () =>
-  REQUIRED_CONSENT_DOCUMENTS.map((document) => ({
+  CLIENT_CONSENT_DOCUMENTS.map((document) => ({
     document,
     version: CONSENT_VERSION,
   }));
@@ -103,7 +107,12 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${UNVERIFIED_UID}:login-session-1`)
-      .send({ nickname: '미인증', nationality: 'KR', consents: consents() })
+      .send({
+        nickname: '미인증',
+        nationality: 'KR',
+        consents: consents(),
+        ageConfirmed: true,
+      })
       .expect(403);
 
     expect((res.body as ErrorBody).message).toContain('이메일 인증');
@@ -118,7 +127,12 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${FIREBASE_UID}:login-session-1`)
-      .send({ nickname: '홍길동', nationality: 'KR', consents: consents() })
+      .send({
+        nickname: '홍길동',
+        nationality: 'KR',
+        consents: consents(),
+        ageConfirmed: true,
+      })
       .expect(201);
 
     expect(res.body).toMatchObject({ nickname: '홍길동', nationality: 'KR' });
@@ -128,7 +142,12 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${FIREBASE_UID}:login-session-2`) // 재로그인으로 발급된 다른 토큰
-      .send({ nickname: '다른닉네임', nationality: 'JP', consents: consents() })
+      .send({
+        nickname: '다른닉네임',
+        nationality: 'JP',
+        consents: consents(),
+        ageConfirmed: true,
+      })
       .expect(409);
 
     expect((res.body as ErrorBody).message).toContain('이미 가입된');
@@ -158,7 +177,12 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${NO_EMAIL_UID}:login-session-1`)
-      .send({ nickname: '무이메일', nationality: 'KR', consents: consents() })
+      .send({
+        nickname: '무이메일',
+        nationality: 'KR',
+        consents: consents(),
+        ageConfirmed: true,
+      })
       .expect(400);
 
     expect((res.body as ErrorBody).message).toContain('이메일');
@@ -174,6 +198,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
           nickname: '동시가입',
           nationality: 'KR',
           consents: consents(),
+          ageConfirmed: true,
         });
 
     const [first, second] = await Promise.all([send(), send()]);
@@ -204,6 +229,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
         nickname: '일부동의',
         nationality: 'KR',
         consents: [{ document: 'service', version: CONSENT_VERSION }],
+        ageConfirmed: true,
       })
       .expect(400);
 
@@ -215,21 +241,49 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     expect(count).toBe(0);
   });
 
+  it('만 14세 확인이 없으면 400이고 계정도 만들어지지 않는다', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${CONSENT_UID}:consent-session`)
+      .send({
+        nickname: '연령미확인',
+        nationality: 'KR',
+        consents: consents(),
+        ageConfirmed: false,
+      })
+      .expect(400);
+
+    expect((res.body as ErrorBody).code).toBe('CONSENT_INCOMPLETE');
+
+    const count = await userRepo.count({ where: { firebaseUid: CONSENT_UID } });
+    expect(count).toBe(0);
+  });
+
   it('가입에 성공하면 동의 이력이 문서별로 남는다', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${CONSENT_UID}:consent-session`)
-      .send({ nickname: '동의완료', nationality: 'KR', consents: consents() })
+      .send({
+        nickname: '동의완료',
+        nationality: 'KR',
+        consents: consents(),
+        ageConfirmed: true,
+      })
       .expect(201);
 
     const userId = (res.body as ProfileBody).id;
     const rows = await consentRepo.find({ where: { userId } });
 
     expect(rows.map((r) => r.document).sort()).toEqual(
-      [...REQUIRED_CONSENT_DOCUMENTS].sort(),
+      [...CLIENT_CONSENT_DOCUMENTS, ConsentDocument.AGE_14_OVER].sort(),
     );
     for (const row of rows) {
-      expect(row.version).toBe(CONSENT_VERSION);
+      // age14는 조항 전문이 없어 클라이언트가 version을 보내지 않는다 — 서버가 채운다.
+      const expected =
+        row.document === String(ConsentDocument.AGE_14_OVER)
+          ? AGE_POLICY_VERSION
+          : CONSENT_VERSION;
+      expect(row.version).toBe(expected);
       expect(row.agreedAt).toBeInstanceOf(Date);
     }
   });

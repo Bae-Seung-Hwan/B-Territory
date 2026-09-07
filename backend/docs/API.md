@@ -37,22 +37,25 @@ Firebase ID Token을 검증하고, 최초 1회 프로필(닉네임/국적)과 **
 |---|---|---|---|
 | `nickname` | string | O | 2~20자 |
 | `nationality` | string | O | ISO 3166-1 alpha-2 국가코드 2자 (예: `KR`, `JP`). 소문자로 보내도 서버가 대문자로 변환함 |
-| `consents` | object[] | O | 필수 동의 이력. **네 항목이 모두 있어야 하고, 중복되면 안 됩니다** (아래 참고) |
+| `consents` | object[] | O | 문서 동의 이력. **세 항목이 모두 있어야 하고, 중복되면 안 됩니다** (아래 참고) |
+| `ageConfirmed` | boolean | O | 만 14세 이상 확인. `true`가 아니면 거절합니다 |
 
 `consents[]`의 각 원소:
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `document` | string | `service` \| `privacy` \| `location` \| `age14`. 프론트 `LegalDocumentKey`와 값이 같습니다 |
-| `version` | string | 화면에 실제로 표시한 문서의 개정일(`LegalDocument.version`, 예: `2026-09-07`) |
+| `document` | string | `service` \| `privacy` \| `location`. 프론트 `LegalDocumentKey`와 값이 같습니다. **`age14`는 여기 넣지 않습니다** |
+| `version` | string | 화면에 실제로 표시한 문서의 개정일(`LegalDocument.version`). **`YYYY-MM-DD` 형식만 받습니다** — append-only 원장이라 잘못 들어간 값은 나중에 고칠 수 없어서, `"undefined"` 같은 배선 사고를 형식에서 먼저 막습니다 |
 
-**필수 항목을 정하는 쪽은 서버입니다**(`REQUIRED_CONSENT_DOCUMENTS`). 클라이언트가 보낸 목록을
+**필수 항목을 정하는 쪽은 서버입니다**(`CLIENT_CONSENT_DOCUMENTS`). 클라이언트가 보낸 목록을
 그대로 믿으면 화면에서 항목을 빠뜨렸을 때 서버도 함께 속아 넘어가기 때문입니다.
 
-`age14`(만 14세 이상 확인)만 대응하는 조항 전문이 없습니다. 본문을 읽고 하는 동의가 아니라
-이용자의 진술이지만, 기록해야 하는 이유(개인정보보호법상 14세 미만은 법정대리인 동의 없이
-가입시킬 수 없음)와 입증 필요성이 같아 같은 형태로 받습니다. 이 항목의 `version`은 최소연령
-정책의 결정 시점을 가리킵니다(`docs/compliance.md` 2.5).
+**`age14`가 `consents` 배열이 아니라 `ageConfirmed` 불리언인 이유** — 만 14세 이상 확인에는
+대응하는 조항 전문이 없어 **클라이언트가 보낼 `version`이 존재하지 않습니다.** 그런데도 기록은
+해야 합니다(개인정보보호법상 14세 미만은 법정대리인 동의 없이 가입시킬 수 없어 확인 사실의
+입증 필요성이 나머지와 같습니다). 그래서 원장에는 `age14` 행으로 같은 형태로 남되 `version`만
+서버가 `AGE_POLICY_VERSION`으로 채웁니다(`docs/compliance.md` 2.5). `age14`를 `consents`에
+넣어 보내면 서버가 채운 행과 중복되므로 400으로 거절합니다.
 
 **`version`을 왜 함께 보내야 하나** — 문서를 개정했을 때 누구에게 재동의를 받아야 하는지는
 "그 사람이 어느 버전에 동의했는가"로만 판단할 수 있습니다. 이 값을 남기지 않으면 기존 이용자
@@ -65,9 +68,9 @@ Firebase ID Token을 검증하고, 최초 1회 프로필(닉네임/국적)과 **
   "consents": [
     { "document": "service", "version": "2026-09-07" },
     { "document": "privacy", "version": "2026-09-07" },
-    { "document": "location", "version": "2026-09-07" },
-    { "document": "age14", "version": "2026-09-07" }
-  ]
+    { "document": "location", "version": "2026-09-07" }
+  ],
+  "ageConfirmed": true
 }
 ```
 
@@ -86,7 +89,7 @@ Firebase ID Token을 검증하고, 최초 1회 프로필(닉네임/국적)과 **
 curl -X POST http://localhost:3000/api/auth/register \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer {Firebase ID Token}" \
-  -d '{"nickname":"여행자123","nationality":"KR","consents":[{"document":"service","version":"2026-09-07"},{"document":"privacy","version":"2026-09-07"},{"document":"location","version":"2026-09-07"},{"document":"age14","version":"2026-09-07"}]}'
+  -d '{"nickname":"여행자123","nationality":"KR","consents":[{"document":"service","version":"2026-09-07"},{"document":"privacy","version":"2026-09-07"},{"document":"location","version":"2026-09-07"}],"ageConfirmed":true}'
 ```
 
 **예시: 실제 응답 (201 Created)**
@@ -108,8 +111,8 @@ curl -X POST http://localhost:3000/api/auth/register \
 | 유효하지 않은 토큰 | 401 | `{"message":"유효하지 않은 토큰입니다.","error":"Unauthorized","statusCode":401}` |
 | 이메일 정보가 없는 계정 (전화번호/익명 로그인 등) | 400 | `{"message":"이메일 정보가 있는 계정만 가입할 수 있습니다.","error":"Bad Request","statusCode":400}` |
 | 이미 가입된 사용자로 재호출 | 409 | `{"message":"이미 가입된 사용자입니다.","error":"Conflict","statusCode":409}` (기존 프로필을 덮어쓰지 않고 그대로 유지. 동시 중복 요청이 경합한 경우에도 409) |
-| `consents` 자체가 없거나 배열이 아님 | 400 | class-validator 형식(`{"statusCode":400,"message":[...],"error":"Bad Request"}`) |
-| 필수 동의 항목 누락·중복 | 400 | `{"code":"CONSENT_INCOMPLETE","message":"필수 동의 항목이 올바르지 않습니다. (누락: location)","error":"Bad Request","statusCode":400}` |
+| `consents`/`ageConfirmed` 누락, `version` 형식 오류 | 400 | class-validator 형식(`{"statusCode":400,"message":[...],"error":"Bad Request"}`) |
+| 필수 동의 항목 누락·중복, `ageConfirmed:false` | 400 | `{"code":"CONSENT_INCOMPLETE","message":"필수 동의 항목이 올바르지 않습니다. (누락: location)","error":"Bad Request","statusCode":400}` |
 
 > **동의 기록과 계정 생성은 한 트랜잭션입니다.** 동의가 올바르지 않으면 계정도 만들어지지
 > 않습니다 — "동의했다는 증거가 없는 계정"이 남지 않게 하는 것이 이 API의 계약입니다.
