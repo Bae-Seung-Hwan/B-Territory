@@ -16,6 +16,12 @@ export enum ScoreEventType {
   CLAIM_REVISIT = 'CLAIM_REVISIT',
   DUEL_WIN = 'DUEL_WIN',
   DUEL_LOSS = 'DUEL_LOSS',
+  // 결투 신청을 거절한 쪽의 소액 차감. 승패가 갈리지 않았으므로 상대에게 주는 점수는
+  // 없고(원장 행도 거절자 한 줄뿐), 이 유출분만큼 개인 점수 총량이 줄어든다.
+  DUEL_REJECT = 'DUEL_REJECT',
+  // 응답 없이 만료된 신청에서 응답하지 않은 쪽의 차감. 금액은 DUEL_REJECT와 같지만,
+  // "거절했다"와 "무시했다"는 운영상 구분되어야 해서 타입을 나눈다.
+  DUEL_NO_RESPONSE = 'DUEL_NO_RESPONSE',
   // 미션 보너스 — 개인 점수에만 기여(teamPoints=0). 팀/영토 집계는 CLAIM_*만 계산하므로
   // 미션은 결투(DUEL_*)와 같이 개인 랭킹·user.score에만 반영된다.
   MISSION_PHOTO = 'MISSION_PHOTO',
@@ -27,11 +33,11 @@ export enum ScoreEventType {
  * 행 자체는 절대 수정/삭제하지 않는다 (감사 로그 겸용).
  *
  * 점수는 개인/팀 두 축으로 분리 저장한다:
- * - personalPoints: user.score·개인 랭킹의 근거. 모든 이벤트가 기여하며 결투 패배는 음수.
+ * - personalPoints: user.score·개인 랭킹의 근거. 모든 이벤트가 기여하며 결투 패배·거절·무응답은 음수.
  * - teamPoints: 구 집계·팀 랭킹의 근거. 점령(CLAIM_*)만 값을 갖고, 결투 이벤트는 항상 0.
  *
  * 팀 점수 집계 시에는 반드시 SUM(teamPoints) + type IN (CLAIM_NEW, CLAIM_REVISIT)로 필터링할 것 —
- * 결투 점수(DUEL_WIN/DUEL_LOSS)는 개인 점수에만 반영되고 팀 점수에는 절대 포함되지 않는다.
+ * 결투 점수(DUEL_* 전부)는 개인 점수에만 반영되고 팀 점수에는 절대 포함되지 않는다.
  */
 @Entity('score_events')
 @Index(['team', 'createdAt'])
@@ -57,7 +63,7 @@ export class ScoreEvent {
   @Column({ type: 'enum', enum: ScoreEventType })
   type: ScoreEventType;
 
-  // 개인 점수 기여분 (개인 랭킹·user.score). 결투 패배는 음수가 될 수 있다.
+  // 개인 점수 기여분 (개인 랭킹·user.score). 결투 패배·거절·무응답은 음수가 될 수 있다.
   @Column({ type: 'int' })
   personalPoints: number;
 

@@ -160,6 +160,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
       duelsService as unknown as DuelsService,
       minigameService as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
     const error = jest
       .spyOn(gateway['logger'], 'error')
@@ -260,6 +262,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
         discardSession: jest.fn(),
       } as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
 
     await gateway.handleDuelAccept(mockSocket() as never, { duelId: duel.id });
@@ -299,6 +303,8 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
         }),
       } as never,
       { record: jest.fn() } as never,
+      // 이 스펙들은 소켓 세션 훅을 타지 않는다 — 생성자 시그니처만 맞춘다.
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
     );
 
     const result = await gateway.handleGameSubmit(mockSocket() as never, {
@@ -364,5 +370,266 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+/**
+ * 무응답 페널티는 "초대를 받고도 응답하지 않았다"에 대한 청구다.
+ *
+ * 그 전제는 **emit 시점에** 확정된다 — duel:requested가 살아 있는 소켓으로 나갔으면
+ * 초대는 화면에 떴고, 큐로 갔으면 뜬 적이 없다. 예전에는 만료 시점(T+30s)에 소켓 생존을
+ * 다시 읽어 판단했는데, 끊김은 ping timeout만큼 늦게 드러나므로 창 후반부의 단절을
+ * 놓쳤고 타이머가 유실되면 확인할 방법조차 없었다. 이제 게이트웨이는 전달 여부만
+ * 기록하고(markInviteDelivered), 청구 판단은 DB 값을 보는 expireDuel이 한다.
+ */
+describe('duel:requested 전달 기록', () => {
+  const duelId = 11;
+  const targetUserId = 'user-2';
+
+  function make(opponentSocket: { connected: boolean } | undefined) {
+    const socket = opponentSocket && { ...opponentSocket, emit: jest.fn() };
+    const queueNotification = jest.fn().mockResolvedValue(undefined);
+    const markInviteDelivered = jest.fn().mockResolvedValue(undefined);
+    const requestDuel = jest.fn().mockResolvedValue({ id: duelId });
+    const gateway = new RealtimeGateway(
+      {} as unknown as FirebaseService,
+      {} as unknown as UsersService,
+      {
+        getUserMeta: jest.fn().mockResolvedValue({
+          team: 'JP',
+          socketId: 'sock-opponent',
+        }),
+        queueNotification,
+      } as unknown as RedisService,
+      {
+        setNotifier: jest.fn(),
+        requestDuel,
+        markInviteDelivered,
+      } as unknown as DuelsService,
+      { start: jest.fn(), discardSession: jest.fn() } as never,
+      { record: jest.fn() } as never,
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
+    );
+    gateway.server = {
+      sockets: new Map(socket ? [['sock-opponent', socket]] : []),
+    } as never;
+    const client = {
+      data: { user: { id: 'user-1', team: 'KR', nickname: 'me' } },
+    } as never;
+    return { gateway, client, markInviteDelivered, queueNotification, socket };
+  }
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('살아 있는 소켓으로 초대가 나가면 전달로 기록한다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered, socket } = make({
+      connected: true,
+    });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(socket!.emit).toHaveBeenCalledWith(
+      'duel:requested',
+      expect.objectContaining({ duelId }),
+    );
+    expect(markInviteDelivered).toHaveBeenCalledWith(duelId);
+  });
+
+  // 메타 TTL(120초)이 남아 있어 신청 자체는 통과했지만, 정작 소켓은 사라진 케이스다.
+  it('상대 소켓이 사라지면 전달로 기록하지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered } = make(undefined);
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+  });
+
+  // ping 타임아웃 전이라 Map에는 남아 있지만 connected가 내려간 소켓.
+  it('소켓이 남아 있어도 connected가 아니면 전달로 기록하지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered } = make({ connected: false });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 초대는 30초(DUEL_REQUEST_TTL)짜리인데 알림 큐는 30분(NOTIFICATION_QUEUE_TTL)을 보관한다.
+   * 큐에 넣으면 20분 뒤 접속한 유저가 이미 EXPIRED된 결투의 초대 모달을 받고, 곧이어
+   * 재생되는 duel:expired에 그 모달이 사라진다.
+   */
+  it('전달하지 못한 초대는 큐에 쌓지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, queueNotification } = make(undefined);
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(queueNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * markInviteDelivered는 실패해도 삼키는 부수적 쓰기다 — 그걸 await한 뒤에 타이머를 걸면
+   * DB가 느린 만큼 만료가 30초보다 늦게 발화한다(startGameRound가 같은 이유로 emit보다
+   * 타이머를 먼저 건다).
+   */
+  it('만료 타이머를 전달 기록보다 먼저 건다', async () => {
+    jest.useFakeTimers();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const { gateway, client, markInviteDelivered } = make({ connected: true });
+    let timerArmedWhenMarked: boolean | null = null;
+    markInviteDelivered.mockImplementation(() => {
+      timerArmedWhenMarked = setTimeoutSpy.mock.calls.length > 0;
+      return Promise.resolve();
+    });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(markInviteDelivered).toHaveBeenCalled();
+    expect(timerArmedWhenMarked).toBe(true);
+    setTimeoutSpy.mockRestore();
+  });
+});
+
+/**
+ * 보호막이 걸린 유저에게는 requestDuel이 DUEL_TARGET_SHIELDED로 막는다. 조우 payload가
+ * 그 사실을 싣지 않으면 클라이언트는 30분 내내 실패할 신청 버튼을 열어둔 채 왕복만 한다.
+ */
+describe('RealtimeGateway 조우 알림의 보호막 안내', () => {
+  const me = { id: 'user-1', team: 'KR', nickname: '나' };
+  const opponentId = 'user-2';
+
+  function make(shieldTtlByUser: Record<string, number>) {
+    const queueNotification = jest.fn().mockResolvedValue(undefined);
+    const getDuelShieldTtl = jest
+      .fn()
+      .mockImplementation((id: string) =>
+        Promise.resolve(shieldTtlByUser[id] ?? 0),
+      );
+    const findByIds = jest
+      .fn()
+      .mockResolvedValue([{ id: opponentId, nickname: '상대' }]);
+    const gateway = new RealtimeGateway(
+      {} as unknown as FirebaseService,
+      { findByIds } as unknown as UsersService,
+      {
+        geoAdd: jest.fn().mockResolvedValue(undefined),
+        // 쿨다운을 처음 잡는 상황 = 새 조우로 알림이 나가는 경로.
+        tryAcquireLock: jest.fn().mockResolvedValue(true),
+        getDuelShieldTtl,
+        // 상대 소켓을 못 찾게 두면 payload가 큐로 흘러 그대로 확인할 수 있다.
+        getUserMeta: jest.fn().mockResolvedValue(null),
+        queueNotification,
+      } as unknown as RedisService,
+      {
+        setNotifier: jest.fn(),
+        findNearbyOpponents: jest
+          .fn()
+          .mockResolvedValue([{ userId: opponentId, team: 'JP' }]),
+      } as unknown as DuelsService,
+      {} as never,
+      { record: jest.fn() } as never,
+      { register: jest.fn(), disconnectUser: jest.fn() } as never,
+    );
+    const client = { ...mockSocket(), data: { user: me } };
+    return { gateway, client, queueNotification, getDuelShieldTtl, findByIds };
+  }
+
+  const update = (gateway: RealtimeGateway, client: unknown) =>
+    gateway.handleLocationUpdate(client as never, {
+      lat: 37.5,
+      lng: 127,
+    });
+
+  interface EncounterPayload {
+    userId: string;
+    nickname: string | null;
+    shieldUntil: string | null;
+  }
+
+  /** 내 화면으로 나간 조우 payload (client.emit(event, payload)). */
+  const emitted = (client: MockSocket): EncounterPayload =>
+    (client.emit.mock.calls as unknown[][]).find(
+      (call) => call[0] === 'encounter:detected',
+    )?.[1] as EncounterPayload;
+
+  /** 상대에게 나간 조우 payload (queueNotification(userId, event, payload, ttl)). */
+  const queued = (queueNotification: jest.Mock): EncounterPayload =>
+    (queueNotification.mock.calls as unknown[][]).find(
+      (call) => call[1] === 'encounter:detected',
+    )?.[2] as EncounterPayload;
+
+  it('보호 중인 상대의 조우에는 shieldUntil을 실어보낸다', async () => {
+    const { gateway, client } = make({ [opponentId]: 600 });
+
+    await update(gateway, client);
+
+    const payload = emitted(client);
+    expect(payload.userId).toBe(opponentId);
+    // 남은 초가 아니라 절대 시각이어야 한다(duelPenaltyPayload와 같은 표현).
+    expect(Date.parse(payload.shieldUntil as string)).toBeGreaterThan(
+      Date.now(),
+    );
+  });
+
+  // 상대에게 가는 payload의 주체는 나다 — 여기에 상대의 보호막을 실으면 "못 건다"의
+  // 대상이 뒤바뀐다.
+  it('상대에게 보내는 조우에는 내 보호막을 싣는다', async () => {
+    const { gateway, client, queueNotification } = make({ [me.id]: 600 });
+
+    await update(gateway, client);
+
+    const toOpponent = queued(queueNotification);
+    expect(toOpponent.userId).toBe(me.id);
+    expect(Date.parse(toOpponent.shieldUntil as string)).toBeGreaterThan(
+      Date.now(),
+    );
+    // 상대는 보호 중이 아니므로 내 화면의 신청 버튼은 열려 있어야 한다.
+    expect(emitted(client).shieldUntil).toBeNull();
+  });
+
+  it('보호막이 없으면 null로 나간다', async () => {
+    const { gateway, client } = make({});
+
+    await update(gateway, client);
+
+    expect(emitted(client).shieldUntil).toBeNull();
+  });
+
+  /**
+   * 이 조회는 판정이 아니라 안내값이다(판정은 언제나 requestDuel이 Redis를 다시 읽는다).
+   * 여기서 던지면 잃는 것은 보호막이 아니라 조우 자체다 — 핸들러는 이 조회 **전에** 이미
+   * ENCOUNTER_COOLDOWN_TTL 락을 소모했으므로, 예외가 올라가면 양쪽 다 encounter:detected를
+   * 못 받고 그 쌍은 쿨다운이 풀릴 때까지 조우가 다시 뜨지 않는다.
+   */
+  // 닉네임도 같은 성질이다 — 이 조회 전에 쿨다운 락이 이미 소모됐으므로, 던지면
+  // 이름 하나 때문에 조우 이벤트 전체가 사라진다. payload는 nickname: null을 이미 허용한다.
+  it('닉네임 조회가 실패해도 조우 알림은 나간다 (안내는 fail-open)', async () => {
+    const { gateway, client, findByIds } = make({});
+    findByIds.mockRejectedValue(new Error('db down'));
+
+    await expect(update(gateway, client)).resolves.toEqual({ status: 'ok' });
+
+    const payload = emitted(client);
+    expect(payload.userId).toBe(opponentId);
+    expect(payload.nickname).toBeNull();
+  });
+
+  it('보호막 조회가 실패해도 조우 알림은 나간다 (안내는 fail-open)', async () => {
+    const { gateway, client, queueNotification, getDuelShieldTtl } = make({
+      [opponentId]: 600,
+    });
+    getDuelShieldTtl.mockRejectedValue(new Error('redis down'));
+
+    await expect(update(gateway, client)).resolves.toEqual({ status: 'ok' });
+
+    // 조우는 양쪽에 그대로 나가고, 안내값만 "보호막 없음"으로 넘어진다.
+    expect(emitted(client).userId).toBe(opponentId);
+    expect(emitted(client).shieldUntil).toBeNull();
+    expect(queued(queueNotification).shieldUntil).toBeNull();
   });
 });

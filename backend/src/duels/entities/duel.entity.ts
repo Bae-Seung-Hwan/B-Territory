@@ -53,6 +53,13 @@ export class Duel {
   @Column({ type: 'uuid', nullable: true })
   loserId: string | null;
 
+  /**
+   * 확정된 점수 증감의 **크기**(항상 양수, 명목값).
+   * - COMPLETED: 승자 +scoreDelta, 패자 -scoreDelta
+   * - REJECTED / EXPIRED: 응답하지 않은 쪽(opponentId)에 -scoreDelta. 승자가 없으므로
+   *   winnerId/loserId는 null이다. 차감이 실제로 일어난 행에만 채워지므로, 상대가 이미
+   *   탈퇴해 깎을 대상이 없었던 만료나 탈퇴로 끝난 결투에서는 null로 남는다
+   */
   @Column({ type: 'int', nullable: true })
   scoreDelta: number | null;
 
@@ -61,6 +68,17 @@ export class Duel {
 
   @CreateDateColumn()
   requestedAt: Date;
+
+  /**
+   * duel:requested를 상대의 살아 있는 소켓으로 실제 emit한 시각. 큐에만 쌓였으면 NULL이다.
+   *
+   * 무응답 페널티의 유일한 근거다 — 받은 적 없는 초대에 "무응답"을 물릴 수는 없다.
+   * 전달 여부는 emit 시점에 확정되는 사실이라 여기에 남긴다. 만료 시점(T+30s)에 소켓
+   * 생존을 다시 확인하는 방식은 ping timeout만큼의 감지 지연이 있어 창 후반부의 단절을
+   * 놓쳤고, 타이머가 유실돼 sweepStaleDuels로 넘어간 신청은 아예 확인할 방법이 없었다.
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  inviteDeliveredAt: Date | null;
 
   @Column({ type: 'timestamp', nullable: true })
   respondedAt: Date | null;

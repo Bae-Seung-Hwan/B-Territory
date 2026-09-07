@@ -23,6 +23,10 @@ import {
   userRoomOf,
   WsSessionsService,
 } from '../common/ws/ws-sessions.service';
+import {
+  SOCKET_PING_INTERVAL_MS,
+  SOCKET_PING_TIMEOUT_MS,
+} from '../common/ws/socket-options';
 import { ChatMessageDto } from './dto/chat-message.dto';
 import { ModerationService } from '../moderation/moderation.service';
 
@@ -44,7 +48,14 @@ const MSG_WINDOW_SEC = 5;
  * 서버가 매칭에만 쓰고 남에게 넘기지 않아 해당되지 않는다. 재도입 시 신고서 변경과
  * 동의 절차 설계가 선행되어야 한다.
  */
-@WebSocketGateway({ namespace: '/chat', cors: { origin: '*' } })
+@WebSocketGateway({
+  namespace: '/chat',
+  cors: { origin: '*' },
+  // realtime과 같은 socket.io 서버를 공유한다 — 먼저 뜬 쪽 옵션이 서버에 적용되므로
+  // 양쪽을 같은 값으로 맞춰 둔다 (socket-options.ts 주석 참고).
+  pingInterval: SOCKET_PING_INTERVAL_MS,
+  pingTimeout: SOCKET_PING_TIMEOUT_MS,
+})
 // realtime 게이트웨이와 같은 필터를 건다. 없으면 NestJS 기본 필터가 예외를
 // `{ status, message, cause }`로 내보내 code 필드가 빠지는데, 프론트는 code로 문구를
 // 매핑하므로 이 게이트웨이의 실패만 분기할 수 없게 된다.

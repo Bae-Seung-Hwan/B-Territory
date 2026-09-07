@@ -10,6 +10,7 @@ describe('RedisService', () => {
     eval: jest.Mock;
     scan: jest.Mock;
     unlink: jest.Mock;
+    ttl: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -27,9 +28,44 @@ describe('RedisService', () => {
       eval: jest.fn(),
       scan: jest.fn(),
       unlink: jest.fn(),
+      ttl: jest.fn(),
     };
     // onModuleInit은 실제 접속을 생성하므로 클라이언트를 목으로 대체
     (service as unknown as { client: typeof client }).client = client;
+  });
+
+  describe('결투 거절 보호막', () => {
+    it('setDuelShield는 TTL을 건 단순 키로 저장한다', async () => {
+      await service.setDuelShield('user-1', 600);
+
+      expect(client.set).toHaveBeenCalledWith(
+        'duel:shield:user-1',
+        '1',
+        'EX',
+        600,
+      );
+    });
+
+    // TTL은 키가 없으면 -2, TTL이 없으면 -1을 준다. 그대로 흘리면 호출측의
+    // `ttl > 0` 판정 밖에서 음수가 "보호 중"으로 읽힐 여지가 생긴다.
+    it.each([
+      [-2, 0],
+      [-1, 0],
+      [0, 0],
+      [300, 300],
+    ])('getDuelShieldTtl은 TTL %i를 %i로 정규화한다', async (raw, expected) => {
+      client.ttl.mockResolvedValueOnce(raw);
+
+      await expect(service.getDuelShieldTtl('user-1')).resolves.toBe(expected);
+    });
+
+    it('clearDuelShield는 실제로 지웠을 때만 true를 반환한다', async () => {
+      client.del.mockResolvedValueOnce(1);
+      await expect(service.clearDuelShield('user-1')).resolves.toBe(true);
+
+      client.del.mockResolvedValueOnce(0);
+      await expect(service.clearDuelShield('user-1')).resolves.toBe(false);
+    });
   });
 
   describe('markDailyClaim / clearDailyClaim', () => {
@@ -180,6 +216,9 @@ describe('RedisService', () => {
       expect(deleted.sort()).toEqual(
         [
           'penalty:user-1',
+          // 거절 보호막. 남겨두면 탈퇴 후 재가입해도 같은 id가 아니라 무해하지만,
+          // 페널티와 같은 성격의 유저 상태라 함께 걷는다.
+          'duel:shield:user-1',
           'notify:user-1',
           'report:rate:user-1',
           // "나를 차단한 사람" 캐시와 그 버전 키.

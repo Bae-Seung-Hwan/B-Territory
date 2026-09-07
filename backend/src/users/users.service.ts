@@ -18,9 +18,16 @@ export class UsersService {
     return this.userRepository.findOne({ where: { id } });
   }
 
-  async findByIds(ids: string[]): Promise<User[]> {
+  /**
+   * manager를 넘기면 그 트랜잭션의 커넥션으로 읽는다. **진행 중인 트랜잭션 안에서
+   * 호출할 때는 반드시 넘길 것** — 기본 리포지토리는 풀에서 두 번째 커넥션을 잡으므로,
+   * 트랜잭션 하나가 커넥션을 쥔 채 또 하나를 요청하게 되어 동시 호출이 풀 크기를 넘기면
+   * 전원이 서로를 기다리다 acquire 타임아웃까지 멈춘다.
+   */
+  async findByIds(ids: string[], manager?: EntityManager): Promise<User[]> {
     if (ids.length === 0) return [];
-    return this.userRepository.find({ where: { id: In(ids) } });
+    const repo = manager ? manager.getRepository(User) : this.userRepository;
+    return repo.find({ where: { id: In(ids) } });
   }
 
   /**
