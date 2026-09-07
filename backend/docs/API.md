@@ -111,7 +111,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 | 유효하지 않은 토큰 | 401 | `{"message":"유효하지 않은 토큰입니다.","error":"Unauthorized","statusCode":401}` |
 | 이메일 정보가 없는 계정 (전화번호/익명 로그인 등) | 400 | `{"message":"이메일 정보가 있는 계정만 가입할 수 있습니다.","error":"Bad Request","statusCode":400}` |
 | 이미 가입된 사용자로 재호출 | 409 | `{"message":"이미 가입된 사용자입니다.","error":"Conflict","statusCode":409}` (기존 프로필을 덮어쓰지 않고 그대로 유지. 동시 중복 요청이 경합한 경우에도 409) |
-| `consents`/`ageConfirmed` 누락, `version` 형식 오류 | 400 | class-validator 형식(`{"statusCode":400,"message":[...],"error":"Bad Request"}`) |
+| `consents`/`ageConfirmed` 누락, `version` 형식 오류 | 400 | class-validator 형식 — `{"statusCode":400,"code":"BAD_REQUEST","message":[...],"error":"Bad Request"}`. `message`가 문자열 배열인 것이 아래 `CONSENT_INCOMPLETE`와 다른 점입니다 (`code`는 스키마 오류에도 항상 붙습니다 — `HttpExceptionFilter`가 상태코드에서 채웁니다) |
 | 필수 동의 항목 누락·중복, `ageConfirmed:false` | 400 | `{"code":"CONSENT_INCOMPLETE","message":"필수 동의 항목이 올바르지 않습니다. (누락: location)","error":"Bad Request","statusCode":400}` |
 
 > **동의 기록과 계정 생성은 한 트랜잭션입니다.** 동의가 올바르지 않으면 계정도 만들어지지

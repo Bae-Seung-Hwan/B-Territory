@@ -3,10 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { UserConsent } from './entities/user-consent.entity';
 import {
-  AGE_POLICY_VERSION,
   CLIENT_CONSENT_DOCUMENTS,
   ConsentDocument,
   SERVER_CONSENT_DOCUMENTS,
+  SERVER_CONSENT_ROWS,
 } from './constants';
 import { ErrorCode, errBody } from '../common/errors/error-code';
 
@@ -116,10 +116,8 @@ export function buildConsentRows(input: RecordConsentsInput): ConsentRow[] {
         document: item.document,
         version: item.version,
       })),
-      ...SERVER_CONSENT_DOCUMENTS.map((document) => ({
-        document,
-        version: AGE_POLICY_VERSION,
-      })),
+      // 항목별 버전이 상수 표에 함께 적혀 있다 — 여기서 버전을 고르지 않는다.
+      ...SERVER_CONSENT_ROWS,
     ];
 
   const detail = [

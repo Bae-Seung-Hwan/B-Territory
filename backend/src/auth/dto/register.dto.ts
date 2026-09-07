@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
@@ -11,6 +12,7 @@ import {
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  CLIENT_CONSENT_DOCUMENTS,
   CONSENT_VERSION_PATTERN,
   ConsentDocument,
 } from '../../consents/constants';
@@ -57,7 +59,7 @@ export class RegisterDto {
 
   /**
    * 필수 동의 항목 전체. **선택 항목이 아니다** — 빠지면 400이고 계정은 만들어지지 않는다.
-   * 어느 항목이 필수인지는 서버가 정한다(`REQUIRED_CONSENT_DOCUMENTS`). 클라이언트가 보낸
+   * 어느 항목이 필수인지는 서버가 정한다(`CLIENT_CONSENT_DOCUMENTS`). 클라이언트가 보낸
    * 목록을 그대로 믿으면 화면에서 항목을 빠뜨렸을 때 서버도 함께 속아 넘어간다.
    */
   @ApiProperty({
@@ -67,6 +69,9 @@ export class RegisterDto {
   })
   @IsArray()
   @ArrayNotEmpty()
+  // 정당한 요청은 정확히 CLIENT_CONSENT_DOCUMENTS 개수다. 상한이 없으면 본문 크기 한도까지
+  // 채운 배열의 모든 원소에 대해 @IsEnum·@Matches가 먼저 돌고 나서야 거절된다.
+  @ArrayMaxSize(CLIENT_CONSENT_DOCUMENTS.length)
   @ValidateNested({ each: true })
   @Type(() => ConsentItemDto)
   consents: ConsentItemDto[];

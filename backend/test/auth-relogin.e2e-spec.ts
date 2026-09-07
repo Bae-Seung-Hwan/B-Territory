@@ -221,7 +221,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
 
   it('필수 동의가 일부 빠지면 400이고 계정도 만들어지지 않는다 (롤백)', async () => {
     // 서비스 약관 하나만 보낸다 — 스키마상으론 유효한 배열이라 ValidationPipe를 통과하고,
-    // 필수 항목 판정은 서버(REQUIRED_CONSENT_DOCUMENTS)가 한다.
+    // 필수 항목 판정은 서버(CLIENT_CONSENT_DOCUMENTS)가 한다.
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
       .set('Authorization', `Bearer ${CONSENT_UID}:consent-session`)

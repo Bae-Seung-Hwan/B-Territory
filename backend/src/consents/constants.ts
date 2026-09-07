@@ -1,9 +1,15 @@
 /**
  * 가입 시 동의를 받는 항목의 식별자.
  *
- * 값은 프론트엔드 `frontend/src/legal/index.ts`의 `LegalDocumentKey`와 **문자열이 일치해야
- * 한다** — 한 번 쌓인 이력과의 연결이 끊기므로 값 자체는 절대 바꾸지 않는다. 문서를 개정할
- * 때 바뀌는 것은 이 키가 아니라 함께 저장하는 `version`이다.
+ * 값은 프론트엔드의 `LegalDocumentKey`와 **문자열이 일치해야 한다** — 한 번 쌓인 이력과의
+ * 연결이 끊기므로 값 자체는 절대 바꾸지 않는다. 문서를 개정할 때 바뀌는 것은 이 키가 아니라
+ * 함께 저장하는 `version`이다.
+ *
+ * ⚠️ 그 `LegalDocumentKey`는 아직 develop에 없다 — 미병합 브랜치
+ * `feature/Ryu/terms-of-service`(PR #55)의 `frontend/src/legal/index.ts`가 들여온다. 대조할
+ * 상대가 없으므로 지금은 리뷰도 CI도 불일치를 잡지 못한다. **그 PR을 머지할 때 세 값이
+ * 같은지 눈으로 확인할 것** — `document`는 append-only 원장의 varchar라 어긋난 채로 쌓이면
+ * 되돌릴 수 없다.
  */
 export enum ConsentDocument {
   SERVICE = 'service',
@@ -29,31 +35,58 @@ export enum ConsentDocument {
  * `Record`라 enum에 항목을 추가하면 여기 등록을 빠뜨릴 수 없다 — 손으로 적은 배열이면
  * 새 항목이 조용히 어느 쪽에도 속하지 않게 된다.
  */
-const CONSENT_VERSION_SOURCE: Record<ConsentDocument, 'client' | 'server'> = {
-  [ConsentDocument.SERVICE]: 'client',
-  [ConsentDocument.PRIVACY]: 'client',
-  [ConsentDocument.LOCATION]: 'client',
-  [ConsentDocument.AGE_14_OVER]: 'server',
-};
-
-/**
- * 클라이언트가 `consents`로 보내야 하는 문서. 하나라도 빠지거나 중복되면 가입을 받지 않는다.
- * 위 표에서 파생시키므로 새 문서를 추가하면 자동으로 필수가 된다.
- */
-export const CLIENT_CONSENT_DOCUMENTS: readonly ConsentDocument[] = (
-  Object.keys(CONSENT_VERSION_SOURCE) as ConsentDocument[]
-).filter((doc) => CONSENT_VERSION_SOURCE[doc] === 'client');
-
-/** 서버가 `version`을 채우는 항목. 현재는 만 14세 확인 하나뿐이다. */
-export const SERVER_CONSENT_DOCUMENTS: readonly ConsentDocument[] = (
-  Object.keys(CONSENT_VERSION_SOURCE) as ConsentDocument[]
-).filter((doc) => CONSENT_VERSION_SOURCE[doc] === 'server');
-
 /**
  * 최소연령 정책의 결정 시점(docs/compliance.md 2.5에서 만 14세로 확정).
  * 기준 연령을 바꾸면 이 값을 올려 그때부터의 동의를 구분할 수 있게 한다.
  */
 export const AGE_POLICY_VERSION = '2026-09-07';
+
+/** 클라이언트가 표시한 문서의 개정일을 그대로 받는 항목. */
+const CLIENT_SOURCED = 'client' as const;
+
+const CONSENT_VERSION_SOURCE: Record<
+  ConsentDocument,
+  typeof CLIENT_SOURCED | { readonly serverVersion: string }
+> = {
+  [ConsentDocument.SERVICE]: CLIENT_SOURCED,
+  [ConsentDocument.PRIVACY]: CLIENT_SOURCED,
+  [ConsentDocument.LOCATION]: CLIENT_SOURCED,
+  // 서버가 채우는 항목은 **자기 버전을 여기 함께 적는다.** 카테고리 하나에 상수 하나를
+  // 공유하면, 두 번째 서버 항목을 추가했을 때 그 행이 엉뚱하게 최소연령 정책의 개정일로
+  // 적재된다 — 컴파일도 테스트도 통과하고, append-only라 사후에 고칠 수도 없다.
+  [ConsentDocument.AGE_14_OVER]: { serverVersion: AGE_POLICY_VERSION },
+};
+
+const CONSENT_DOCUMENTS = Object.keys(
+  CONSENT_VERSION_SOURCE,
+) as ConsentDocument[];
+
+/**
+ * 클라이언트가 `consents`로 보내야 하는 문서. 하나라도 빠지거나 중복되면 가입을 받지 않는다.
+ * 위 표에서 파생시키므로 새 문서를 추가하면 자동으로 필수가 된다.
+ */
+export const CLIENT_CONSENT_DOCUMENTS: readonly ConsentDocument[] =
+  CONSENT_DOCUMENTS.filter(
+    (doc) => CONSENT_VERSION_SOURCE[doc] === CLIENT_SOURCED,
+  );
+
+/**
+ * 서버가 `version`을 채우는 항목과 그 버전. 현재는 만 14세 확인 하나뿐이다.
+ * 항목별로 버전을 들고 있어, 새 항목을 추가하면 버전을 함께 적지 않고는 등록할 수 없다.
+ */
+export const SERVER_CONSENT_ROWS: readonly {
+  document: ConsentDocument;
+  version: string;
+}[] = CONSENT_DOCUMENTS.flatMap((document) => {
+  const source = CONSENT_VERSION_SOURCE[document];
+  return source === CLIENT_SOURCED
+    ? []
+    : [{ document, version: source.serverVersion }];
+});
+
+/** 서버가 채우는 항목의 식별자만. 클라이언트가 이 항목을 보내면 중복이 되므로 막는 데 쓴다. */
+export const SERVER_CONSENT_DOCUMENTS: readonly ConsentDocument[] =
+  SERVER_CONSENT_ROWS.map((row) => row.document);
 
 /**
  * `version`의 형식 — 문서 개정일(YYYY-MM-DD).
