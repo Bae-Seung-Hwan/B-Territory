@@ -21,6 +21,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed:spots": "ts-node -r tsconfig-paths/register scripts/seed-spots-csv.ts",
     "seed:festivals": "ts-node -r tsconfig-paths/register scripts/seed-festivals-csv.ts",
+    "archive:show": "ts-node -r tsconfig-paths/register scripts/withdrawal-archive.ts show",
+    "archive:erase": "ts-node -r tsconfig-paths/register scripts/withdrawal-archive.ts erase",
     "typeorm": "typeorm-ts-node-commonjs -d src/data-source.ts",
     "migration:generate": "npm run typeorm -- migration:generate",
     "migration:create": "typeorm-ts-node-commonjs migration:create",
