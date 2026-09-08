@@ -174,7 +174,8 @@ Build로 전환한 지금도 그대로 쓰고 있다. 세션 영속화만
 2. **가입 여부 확인**: 로그인 화면에서 로그인 성공 직후, 발급받은 ID Token으로 `GET /api/auth/me` 호출 (`login.tsx`의 `finishLogin`에서만 호출됨)
    - `200` → 이미 가입된 사용자. 응답 프로필(`id`/`email`/`nickname`/`nationality`/`team`)이 `queryKeys.auth.me` 캐시에 담기고 바로 메인 화면 진입
    - `404` → Firebase 계정은 있지만 백엔드 프로필이 없음. 예전엔 회원가입 화면으로 자동 이동시켰으나, [계정 불일치 문제](./known-issues.md#firebase--백엔드-계정-불일치) 때문에 지금은 이메일/비밀번호를 다시 확인해달라는 alert만 띄우고 로그인 화면에 머무름. 이때 `signOut(auth)`으로 세션도 함께 정리해, 프로필 없는 토큰이 이후 요청에 계속 붙거나 다음 부팅 때 어정쩡한 상태로 남지 않게 한다
-   - 신규 가입은 이 흐름과 별개로 진행됨: 로그인 화면의 "회원가입 하기" 링크 → 약관 동의 바텀시트 → `use-registration-flow.ts`에서 `createUserWithEmailAndPassword` → 이메일 인증 → `POST /api/auth/register` 호출 (최초 1회만; 재호출 시 `409`)
+   - 신규 가입은 이 흐름과 별개로 진행됨: 로그인 화면의 "회원가입 하기" 링크 → 약관 동의 바텀시트(동의 스냅샷을 `lib/pending-consent.ts`에 보관) → `use-registration-flow.ts`에서 `createUserWithEmailAndPassword` → 이메일 인증 → `POST /api/auth/register` 호출 (최초 1회만; 재호출 시 `409`)
+   - `register`는 `nickname`/`nationality`와 함께 **`consents`(문서별 `document`+`version`)와 `ageConfirmed`를 필수로** 받는다. 필수 항목을 정하는 쪽은 서버라 클라이언트가 하나라도 빠뜨리면 `400 CONSENT_INCOMPLETE`다. 보관된 동의가 없으면 요청을 **보내기 전에** 멈추고 동의 시트로 되돌린다 — 그 400은 아래 롤백 규칙(409 아닌 4xx)에 걸려 이메일 인증까지 마친 Firebase 계정을 지운다
 3. **보관**: ID Token은 Firebase SDK가 AsyncStorage에 보관하고, 프로필은 React Query 캐시(`queryKeys.auth.me`) **한 곳에만** 둔다
 4. **요청 시 첨부**: 인증이 필요한 API 호출 시 `Authorization: Bearer <idToken>` 헤더로 전송
 5. **갱신**: ID Token은 약 1시간 후 만료된다. `src/lib/api-client.ts`의 axios 인터셉터가 요청마다 `getIdToken()`을 붙이고, `401`이 오면 `getIdToken(true)`로 강제 갱신한 뒤 원요청을 1회 재시도한다
@@ -240,6 +241,9 @@ Build로 전환한 지금도 그대로 쓰고 있다. 세션 영속화만
 `complete-profile.tsx`는 이 흐름 전용 화면이라 계정 생성·이메일 인증 단계가 없고
 `registerUser()` 한 번만 남는다. 여기로 보낼 때 `push`가 아니라 `replace`를 쓰는 이유는, 백
 제스처로 로그인 화면에 돌아가는 순간 "세션은 있는데 미가입" 상태가 다시 만들어지기 때문이다.
+동의는 시트에서 이미 받았으므로 이 화면은 `lib/pending-consent.ts`가 보관한 스냅샷을 **읽어서
+실어 보내기만 한다** — 없으면 `signOut` 후 로그인 화면으로 되돌린다(만들어내면 받은 적 없는
+동의를 서버 원장에 남기는 것이고, 세션을 남긴 채 되돌리면 위의 "고아 세션" 문제가 된다).
 
 #### Google — 동작 중
 

@@ -10,6 +10,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useRegisterMutation } from '@/hooks/use-auth';
 import { useAuthSession } from '@/providers/AuthProvider';
+import { clearPendingConsent, loadPendingConsent } from '@/lib/pending-consent';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { Button } from '@/components/ui/Button';
@@ -38,7 +39,28 @@ export default function CompleteProfileScreen() {
   const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
     try {
-      await registerMutation.mutateAsync({ nickname: nickname.trim(), nationality: selectedCode });
+      // 소셜 경로의 약관 동의도 로그인 화면의 시트에서 받는다 — useFinishSocialLogin이
+      // "신규 유저"로 판명된 뒤에만 동의를 요청하고, 동의하면 이 화면으로 replace한다.
+      // 그래서 여기서는 읽기만 한다. 없으면 보낼 값을 만들어낼 수 없다(만들어내면 받은
+      // 적 없는 동의를 원장에 남기는 것이다).
+      const consent = await loadPendingConsent();
+      if (!consent) {
+        // 세션을 남긴 채 로그인 화면으로 보내면 "Firebase 세션은 있는데 미가입" 상태가
+        // 되어, 그 화면의 "회원가입 하기"가 register.tsx를 폼이 아니라 인증 대기 단계로
+        // 열어버린다(use-social-auth.ts의 동의 거부 경로와 같은 이유로 정리한다).
+        await signOut(auth);
+        Alert.alert(t('auth.errors.title'), t('auth.errors.consentRequired'));
+        router.replace('/(auth)/login');
+        return;
+      }
+
+      await registerMutation.mutateAsync({
+        nickname: nickname.trim(),
+        nationality: selectedCode,
+        consents: consent.consents,
+        ageConfirmed: consent.ageConfirmed,
+      });
+      void clearPendingConsent();
       router.replace('/');
     } catch (err) {
       // 다른 기기에서 거의 동시에 가입을 마친 레이스는 에러가 아니라 정상 진입으로 취급한다.
@@ -70,6 +92,8 @@ export default function CompleteProfileScreen() {
             router.replace('/(auth)/login');
             return;
           }
+          // 이미 가입이 끝난 계정이라 이 스냅샷은 쓸 곳이 없다.
+          void clearPendingConsent();
           router.replace('/');
         } catch (refetchErr) {
           handleAuthError(refetchErr, 'auth.errors.registerFailed');
