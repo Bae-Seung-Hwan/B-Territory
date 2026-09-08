@@ -6,6 +6,7 @@ import { RedisService } from '../common/redis/redis.service';
 import { DuelsService } from '../duels/duels.service';
 import { HallOfFameService } from '../hall-of-fame/hall-of-fame.service';
 import { WsSessionsService } from '../common/ws/ws-sessions.service';
+import { WithdrawalArchiveService } from './withdrawal-archive.service';
 
 /**
  * 계정 삭제(탈퇴) — 앱스토어·플레이스토어가 계정 생성 앱에 요구하는 필수 기능이다.
@@ -27,6 +28,7 @@ export class AccountService {
     private readonly duelsService: DuelsService,
     private readonly hallOfFame: HallOfFameService,
     private readonly sessions: WsSessionsService,
+    private readonly archive: WithdrawalArchiveService,
   ) {}
 
   /**
@@ -39,6 +41,12 @@ export class AccountService {
    * - `location_usage_logs`는 **건드리지 않는다.** 위치정보법 제16조 2항의 법정 보존
    *   자료(6개월)이며, 그래서 애초에 users FK를 걸지 않았다(docs/compliance.md 4장).
    *   개인정보처리방침에 "탈퇴 후에도 이 기록은 보존된다"를 명시해야 한다.
+   * - **약관 동의·신고 제재·계정 식별자** 셋만 가명으로 보관한다(WithdrawalArchiveService).
+   *   `user_consents`는 CASCADE로 사라지고 `reports`는 FK가 SET NULL이라 "누구에 대한
+   *   신고였는지"를 잃는데, 분쟁이 탈퇴 이후에 불거지는 가장 흔한 경우(제재 불복 이의제기)에
+   *   정작 양쪽 다 증거로 쓰이지 못했다. 옮기는 것은 문서·버전·동의 시각과 신고 연결뿐이고
+   *   식별정보는 두지 않는다(자세한 이유는 WithdrawnAccount). 개인정보처리방침의 "탈퇴 후에도
+   *   남는 항목"에 이 표들을 함께 적어야 한다.
    * - Firebase Auth 계정도 지운다. 남겨두면 같은 이메일로 재가입이 영구 불가해진다.
    *
    * 순서가 중요하다. DB 삭제를 먼저 커밋한 뒤 Firebase를 지운다 — 반대로 하면 Firebase만
@@ -75,6 +83,11 @@ export class AccountService {
         user.id,
         manager,
       );
+      // users 행을 지우기 전에 옮겨야 한다 — 삭제가 먼저면 동의 원장은 CASCADE로 이미
+      // 사라졌고 신고의 targetUserId도 NULL이라 옮길 대상을 못 고른다. 같은 트랜잭션이므로
+      // 보관에 실패하면 탈퇴도 롤백된다: 계정만 사라지고 기록은 없는 상태를 만들지 않는 것이
+      // 이 보관의 목적이다.
+      await this.archive.archive(user.id, user.email, manager);
       await manager.delete(User, { id: user.id });
       return rows;
     });

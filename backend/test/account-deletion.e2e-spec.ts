@@ -13,6 +13,11 @@ import {
   ScoreEvent,
   ScoreEventType,
 } from '../src/scores/entities/score-event.entity';
+import { UserConsent } from '../src/consents/entities/user-consent.entity';
+import { Report, ReportReason } from '../src/moderation/entities/report.entity';
+import { WithdrawnAccount } from '../src/account/entities/withdrawn-account.entity';
+import { ConsentArchive } from '../src/account/entities/consent-archive.entity';
+import { WithdrawalArchiveService } from '../src/account/withdrawal-archive.service';
 
 const deleted: string[] = [];
 const mockFirebaseService = {
@@ -35,11 +40,16 @@ describe('Account deletion (e2e)', () => {
   let userRepo: Repository<User>;
   let duelRepo: Repository<Duel>;
   let scoreRepo: Repository<ScoreEvent>;
+  let consentRepo: Repository<UserConsent>;
+  let reportRepo: Repository<Report>;
+  let withdrawalRepo: Repository<WithdrawnAccount>;
+  let archiveRepo: Repository<ConsentArchive>;
+  let archiveService: WithdrawalArchiveService;
   let dataSource: DataSource;
 
   const truncateAll = () =>
     dataSource.query(
-      'TRUNCATE TABLE "score_events", "duels", "spot_claims", "users" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "score_events", "duels", "spot_claims", "reports", "consent_archives", "withdrawn_accounts", "users" RESTART IDENTITY CASCADE',
     );
 
   beforeAll(async () => {
@@ -56,6 +66,11 @@ describe('Account deletion (e2e)', () => {
     userRepo = moduleFixture.get(getRepositoryToken(User));
     duelRepo = moduleFixture.get(getRepositoryToken(Duel));
     scoreRepo = moduleFixture.get(getRepositoryToken(ScoreEvent));
+    consentRepo = moduleFixture.get(getRepositoryToken(UserConsent));
+    reportRepo = moduleFixture.get(getRepositoryToken(Report));
+    withdrawalRepo = moduleFixture.get(getRepositoryToken(WithdrawnAccount));
+    archiveRepo = moduleFixture.get(getRepositoryToken(ConsentArchive));
+    archiveService = moduleFixture.get(WithdrawalArchiveService);
     dataSource = moduleFixture.get(DataSource);
   });
 
@@ -181,6 +196,76 @@ describe('Account deletion (e2e)', () => {
     ).ranking.map((r) => r.nickname);
     expect(nicknames).not.toContain('Del A');
     expect(nicknames).toContain('Del B');
+  });
+
+  it('약관 동의·신고 제재·계정 식별자만 가명으로 남는다', async () => {
+    const { a, b } = await seed();
+    await consentRepo.insert([
+      { userId: a.id, document: 'service', version: '2026-09-08' },
+      { userId: a.id, document: 'age14', version: '2026-09-07' },
+    ]);
+    await reportRepo.insert({
+      reporterId: b.id,
+      targetUserId: a.id,
+      targetNickname: 'Del A',
+      reason: ReportReason.ABUSE,
+    });
+
+    await request(app.getHttpServer())
+      .delete('/api/users/me')
+      .set('Authorization', `Bearer ${a.firebaseUid}`)
+      .expect(204);
+
+    // 원장은 CASCADE로 사라지고, 보관 표에만 남는다.
+    expect(await consentRepo.count()).toBe(0);
+    const [withdrawal] = await withdrawalRepo.find();
+    expect(withdrawal).toBeDefined();
+    // 식별정보는 옮기지 않는다 — 남는 것은 소금과 해시뿐이다.
+    expect(JSON.stringify(withdrawal)).not.toContain(a.id);
+    expect(JSON.stringify(withdrawal)).not.toContain('del-a@test.com');
+
+    const archived = await archiveRepo.find({ order: { id: 'ASC' } });
+    expect(archived.map((row) => row.document)).toEqual(['service', 'age14']);
+    expect(archived.every((row) => row.withdrawalId === withdrawal.id)).toBe(
+      true,
+    );
+
+    // 신고 기록은 남되(SET NULL) 누구에 대한 것이었는지가 가명으로 되살아난다.
+    const [report] = await reportRepo.find();
+    expect(report.targetUserId).toBeNull();
+    expect(report.withdrawnTargetId).toBe(withdrawal.id);
+  });
+
+  it('탈퇴자가 이메일을 제시하면 그 기록을 찾을 수 있다 (이의제기 대응)', async () => {
+    const { a, b } = await seed();
+    await consentRepo.insert({
+      userId: a.id,
+      document: 'service',
+      version: '2026-09-08',
+    });
+    await reportRepo.insert({
+      reporterId: b.id,
+      targetUserId: a.id,
+      reason: ReportReason.ABUSE,
+    });
+
+    await request(app.getHttpServer())
+      .delete('/api/users/me')
+      .set('Authorization', `Bearer ${a.firebaseUid}`)
+      .expect(204);
+
+    // 이 표가 존재하는 이유 자체 — 탈퇴 후에도 "동의를 받았고, 어떤 신고가 있었는지"에
+    // 답할 수 있어야 한다.
+    const found = await archiveService.findByEmail('DEL-A@TEST.COM');
+    expect(found?.consents).toEqual([
+      expect.objectContaining({ document: 'service', version: '2026-09-08' }),
+    ]);
+    expect(found?.reports).toHaveLength(1);
+
+    // 다른 사람의 이메일로는 아무것도 나오지 않는다.
+    await expect(
+      archiveService.findByEmail('del-b@test.com'),
+    ).resolves.toBeNull();
   });
 
   it('탈퇴 후 같은 토큰으로 조회하면 404 (계정이 실제로 사라짐)', async () => {
