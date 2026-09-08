@@ -67,8 +67,8 @@ describe('registerUser', () => {
   /**
    * `document`는 append-only 원장의 varchar라 백엔드 `ConsentDocument`와 어긋난 채로
    * 쌓이면 되돌릴 수 없다. 프론트가 보내는 값이 문서 키 그대로인지 여기서 못 박는다 —
-   * 두 저장소를 잇는 자동 검증이 없어(백엔드 consents/constants.ts 주석 참고) 값이
-   * 갈라지는 것을 CI가 잡지 못한다.
+   * 두 저장소를 잇는 자동 검증은 백엔드 consent-document-contract.spec.ts가 맡고
+   * 있으므로(consents/constants.ts 주석 참고), 이쪽은 그 계약이 기대하는 값을 고정한다.
    */
   it('document는 문서 키를 그대로 쓴다 (백엔드 ConsentDocument와 같은 문자열)', () => {
     expect(payload.consents.map((item) => item.document)).toEqual([

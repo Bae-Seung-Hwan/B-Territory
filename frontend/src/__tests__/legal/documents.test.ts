@@ -277,8 +277,9 @@ describe('buildConsentSnapshot', () => {
 
   /**
    * `document`는 append-only 원장(backend `user_consents`)의 varchar라, 백엔드
-   * `ConsentDocument`와 어긋난 채로 쌓이면 되돌릴 수 없다. 두 저장소를 잇는 자동 검증이
-   * 없으므로(backend `src/consents/constants.ts` 주석 참고) 최소한 이쪽 값을 고정해 둔다.
+   * `ConsentDocument`와 어긋난 채로 쌓이면 되돌릴 수 없다. 두 저장소를 잇는 자동 검증은
+   * backend `consent-document-contract.spec.ts`가 맡고 있으므로(`src/consents/constants.ts`
+   * 주석 참고), 이쪽에서도 그 계약이 기대하는 값을 고정해 둔다.
    */
   it('document 값이 백엔드 ConsentDocument와 같은 문자열이다', () => {
     const snapshot = buildConsentSnapshot(allAgreed, true);

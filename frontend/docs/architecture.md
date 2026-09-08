@@ -103,8 +103,9 @@
   있다. 동의 항목을 추가할 땐 `legal/index.ts`의 `LEGAL_DOCUMENT_KEYS`도 함께 고쳐야 한다.
   서버로 보낼 동의 페이로드(`buildConsentSnapshot`)는 그 목록에서 파생되므로 따로 고칠 곳은
   없다. 다만 `document` 값은 백엔드 `ConsentDocument`와 **문자열이 같아야 한다** —
-  append-only 원장의 varchar라 어긋난 채로 쌓이면 되돌릴 수 없는데, 두 저장소를 잇는 자동
-  검증이 없어 값이 갈라져도 CI가 잡지 못한다.
+  append-only 원장의 varchar라 어긋난 채로 쌓이면 되돌릴 수 없다. 두 저장소를 잇는 자동
+  검증은 백엔드 `consent-document-contract.spec.ts`가 프론트 선언을 직접 읽어 대조하므로,
+  값이 갈라지면 CI가 막는다.
 - **`constants/busan.ts`** — 지도 드래그 제한과 "현재 위치가 부산 범위 밖인지" 판정이 같은 좌표
   기준을 써야 하므로 단일 소스로 둔다.
 - **`constants/theme.ts`는 팔레트를 두 벌 들고 있다.** `Colors`는 Expo 기본 템플릿의 라이트/다크
