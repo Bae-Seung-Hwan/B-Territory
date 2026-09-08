@@ -45,7 +45,7 @@ Firebase ID Token을 검증하고, 최초 1회 프로필(닉네임/국적)과 **
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `document` | string | `service` \| `privacy` \| `location`. 프론트 `LegalDocumentKey`와 값이 같습니다. **`age14`는 여기 넣지 않습니다** |
-| `version` | string | 화면에 실제로 표시한 문서의 개정일(`LegalDocument.version`). **`YYYY-MM-DD` 형식만 받습니다** — append-only 원장이라 잘못 들어간 값은 나중에 고칠 수 없어서, `"undefined"` 같은 배선 사고를 형식에서 먼저 막습니다 |
+| `version` | string | 화면에 실제로 표시한 문서의 개정일(`LegalDocument.version`). **`YYYY-MM-DD` 형식이면서 서버가 아는 개정일이어야 합니다** — 형식 검사가 `"undefined"` 같은 배선 사고를, 값 대조가 형식만 맞는 엉뚱한 날짜를 막습니다. append-only 원장이라 잘못 들어간 값은 나중에 고칠 수 없습니다 |
 
 **필수 항목을 정하는 쪽은 서버입니다**(`CLIENT_CONSENT_DOCUMENTS`). 클라이언트가 보낸 목록을
 그대로 믿으면 화면에서 항목을 빠뜨렸을 때 서버도 함께 속아 넘어가기 때문입니다.
@@ -57,6 +57,17 @@ Firebase ID Token을 검증하고, 최초 1회 프로필(닉네임/국적)과 **
 서버가 `AGE_POLICY_VERSION`으로 채웁니다(`docs/compliance.md` 2.5). `age14`를 `consents`에
 넣어 보내면 서버가 채운 행과 중복되므로 400으로 거절합니다.
 
+**서버가 받아주는 `version`은 정해져 있습니다** — 문서별로 **현재 개정일과 지난 개정일**만
+받고(`ACCEPTED_CONSENT_VERSIONS`), 그 밖의 값은 `CONSENT_VERSION_UNKNOWN`으로 거절합니다.
+형식만 보면 `"2020-01-01"` 같은 실재하지 않는 날짜가 "동의했다"는 기록으로 영구히 남기
+때문입니다. 지난 개정일까지 받아주는 것은 앱 업데이트가 원자적이지 않아서입니다 — 현재
+버전만 받으면 문서를 개정하는 순간 아직 업데이트하지 않은 설치본 전체의 가입이 막힙니다.
+
+> **문서를 개정할 때는 백엔드를 먼저 배포하세요.** 서버 상수에 새 개정일을 올려 둔 뒤 앱을
+> 내보내면 그 사이 구버전 설치본도 계속 가입할 수 있습니다. 순서를 뒤집으면 새 앱이 서버가
+> 모르는 개정일을 보내 가입이 막힙니다. (백엔드 상수와 프론트 `LegalDocument.version`이
+> 어긋나는지는 CI가 대조합니다.)
+
 **`version`을 왜 함께 보내야 하나** — 문서를 개정했을 때 누구에게 재동의를 받아야 하는지는
 "그 사람이 어느 버전에 동의했는가"로만 판단할 수 있습니다. 이 값을 남기지 않으면 기존 이용자
 전원이 미상 버전이 되어 재동의 대상을 고를 수 없습니다.
@@ -66,9 +77,9 @@ Firebase ID Token을 검증하고, 최초 1회 프로필(닉네임/국적)과 **
   "nickname": "여행자123",
   "nationality": "KR",
   "consents": [
-    { "document": "service", "version": "2026-09-07" },
-    { "document": "privacy", "version": "2026-09-07" },
-    { "document": "location", "version": "2026-09-07" }
+    { "document": "service", "version": "2026-09-08" },
+    { "document": "privacy", "version": "2026-09-08" },
+    { "document": "location", "version": "2026-09-08" }
   ],
   "ageConfirmed": true
 }
@@ -89,7 +100,7 @@ Firebase ID Token을 검증하고, 최초 1회 프로필(닉네임/국적)과 **
 curl -X POST http://localhost:3000/api/auth/register \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer {Firebase ID Token}" \
-  -d '{"nickname":"여행자123","nationality":"KR","consents":[{"document":"service","version":"2026-09-07"},{"document":"privacy","version":"2026-09-07"},{"document":"location","version":"2026-09-07"}],"ageConfirmed":true}'
+  -d '{"nickname":"여행자123","nationality":"KR","consents":[{"document":"service","version":"2026-09-08"},{"document":"privacy","version":"2026-09-08"},{"document":"location","version":"2026-09-08"}],"ageConfirmed":true}'
 ```
 
 **예시: 실제 응답 (201 Created)**
@@ -113,6 +124,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 | 이미 가입된 사용자로 재호출 | 409 | `{"message":"이미 가입된 사용자입니다.","error":"Conflict","statusCode":409}` (기존 프로필을 덮어쓰지 않고 그대로 유지. 동시 중복 요청이 경합한 경우에도 409) |
 | `consents`/`ageConfirmed` 누락, `version` 형식 오류 | 400 | class-validator 형식 — `{"statusCode":400,"code":"BAD_REQUEST","message":[...],"error":"Bad Request"}`. `message`가 문자열 배열인 것이 아래 `CONSENT_INCOMPLETE`와 다른 점입니다 (`code`는 스키마 오류에도 항상 붙습니다 — `HttpExceptionFilter`가 상태코드에서 채웁니다) |
 | 필수 동의 항목 누락·중복, `ageConfirmed:false` | 400 | `{"code":"CONSENT_INCOMPLETE","message":"필수 동의 항목이 올바르지 않습니다. (누락: location)","error":"Bad Request","statusCode":400}` |
+| 서버가 모르는 `version` | 400 | `{"code":"CONSENT_VERSION_UNKNOWN","message":"동의한 문서의 개정일이 서버가 아는 값이 아닙니다. (privacy: 2020-01-01 (허용: 2026-09-08))","error":"Bad Request","statusCode":400}`. 필수 항목이 다 갖춰진 뒤에 검사하므로 누락과 함께 틀리면 `CONSENT_INCOMPLETE`가 먼저 납니다 |
 
 > **동의 기록과 계정 생성은 한 트랜잭션입니다.** 동의가 올바르지 않으면 계정도 만들어지지
 > 않습니다 — "동의했다는 증거가 없는 계정"이 남지 않게 하는 것이 이 API의 계약입니다.

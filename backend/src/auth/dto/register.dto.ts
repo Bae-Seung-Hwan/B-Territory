@@ -32,14 +32,17 @@ export class ConsentItemDto {
   document: ConsentDocument;
 
   @ApiProperty({
-    example: '2026-09-07',
+    example: '2026-09-08',
     description:
-      '동의한 문서의 개정일(`LegalDocument.version`). 재동의 대상 판단의 기준값이라 화면에 실제로 표시한 문서의 값을 그대로 보낸다.',
+      '동의한 문서의 개정일(`LegalDocument.version`). 재동의 대상 판단의 기준값이라 화면에 실제로 표시한 문서의 값을 그대로 보낸다. **형식뿐 아니라 값도 검사한다** — 서버가 아는 개정일(현재 또는 지난 버전)이 아니면 `CONSENT_VERSION_UNKNOWN`으로 거절한다.',
   })
   @IsString()
   @Length(1, 20)
   // 형식을 강제해 "undefined"·빈 값 같은 배선 사고가 그대로 적재되는 것을 막는다.
   // append-only 원장이라 잘못 들어간 값은 나중에 고칠 수 없다.
+  // 형식이 맞는 엉뚱한 날짜는 여기서 걸러지지 않는다 — 값 자체의 대조는 실제 허용 목록을
+  // 아는 ConsentsService(buildConsentRows)가 한다. 여기서 하면 상수 표가 DTO로 새어
+  // 나가고, 소셜 가입 등 다른 호출부가 이 DTO를 안 쓰면 검사도 함께 빠진다.
   @Matches(CONSENT_VERSION_PATTERN, {
     message: 'version은 YYYY-MM-DD 형식이어야 합니다.',
   })

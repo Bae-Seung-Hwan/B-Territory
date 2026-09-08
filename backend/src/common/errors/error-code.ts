@@ -22,6 +22,9 @@ export enum ErrorCode {
   TEAM_NOT_ASSIGNED = 'TEAM_NOT_ASSIGNED',
   // 가입 시 필수 동의 항목이 누락되거나 중복된 경우.
   CONSENT_INCOMPLETE = 'CONSENT_INCOMPLETE',
+  // 동의한 문서의 개정일이 서버가 아는 값이 아닌 경우. 형식(YYYY-MM-DD)은 맞지만 실재한
+  // 개정일이 아니라는 뜻이라, 대개 배선 사고이거나 프론트가 백엔드보다 먼저 배포된 상태다.
+  CONSENT_VERSION_UNKNOWN = 'CONSENT_VERSION_UNKNOWN',
 
   // 관광지 / 점령
   SPOT_NOT_FOUND = 'SPOT_NOT_FOUND',

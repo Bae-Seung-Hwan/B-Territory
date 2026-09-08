@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { UserConsent } from './entities/user-consent.entity';
 import {
+  ACCEPTED_CONSENT_VERSIONS,
   CLIENT_CONSENT_DOCUMENTS,
   ConsentDocument,
   SERVER_CONSENT_DOCUMENTS,
@@ -79,7 +80,8 @@ export class ConsentsService {
 }
 
 /**
- * 요청을 원장 행으로 바꾼다. 필수 항목이 빠지거나 중복되면 400을 던진다.
+ * 요청을 원장 행으로 바꾼다. 필수 항목이 빠지거나 중복되면 `CONSENT_INCOMPLETE`,
+ * 개정일이 서버가 아는 값이 아니면 `CONSENT_VERSION_UNKNOWN`으로 400을 던진다.
  *
  * 중복까지 거르는 이유: 같은 문서를 서로 다른 버전으로 두 번 보내면 어느 쪽이 실제 동의인지
  * 알 수 없는데, append-only라 나중에 구분할 방법도 없다. 애매한 이력을 남기느니 거절한다.
@@ -110,7 +112,11 @@ export function buildConsentRows(input: RecordConsentsInput): ConsentRow[] {
     missing.length === 0 &&
     duplicated.length === 0 &&
     notAllowed.length === 0
-  )
+  ) {
+    // 항목이 다 갖춰진 뒤에야 버전을 본다 — 문서가 빠졌거나 보내면 안 되는 항목이 섞인
+    // 상태에서는 어느 문서의 허용 목록과 대조해야 하는지가 정해지지 않는다.
+    assertKnownVersions(input.consents);
+
     return [
       ...input.consents.map((item) => ({
         document: item.document,
@@ -119,6 +125,7 @@ export function buildConsentRows(input: RecordConsentsInput): ConsentRow[] {
       // 항목별 버전이 상수 표에 함께 적혀 있다 — 여기서 버전을 고르지 않는다.
       ...SERVER_CONSENT_ROWS,
     ];
+  }
 
   const detail = [
     missing.length ? `누락: ${missing.join(', ')}` : '',
@@ -132,6 +139,40 @@ export function buildConsentRows(input: RecordConsentsInput): ConsentRow[] {
     errBody(
       ErrorCode.CONSENT_INCOMPLETE,
       `필수 동의 항목이 올바르지 않습니다. (${detail})`,
+    ),
+  );
+}
+
+/**
+ * 보내온 개정일이 서버가 아는 값인지 확인한다. 하나라도 모르는 값이면 가입을 받지 않는다.
+ *
+ * DTO의 `@Matches`는 형식(YYYY-MM-DD)만 보므로 `"2020-01-01"` 같은 실재하지 않는 개정일이
+ * 그대로 통과한다. append-only 원장이라 한 번 들어가면 고칠 수 없고, 그러면 "동의 사실을
+ * 입증한다"는 이 표의 목적이 그 행에 대해서는 성립하지 않는다.
+ *
+ * 지난 개정일까지 받아주므로(`ACCEPTED_CONSENT_VERSIONS`) 아직 업데이트하지 않은 설치본의
+ * 가입은 막히지 않는다. 반대로 **서버가 모르는 값은 대개 프론트가 백엔드보다 먼저 배포된
+ * 상태**라, 거절이 곧 배포 순서가 뒤집혔다는 신호가 된다.
+ */
+function assertKnownVersions(consents: ConsentInput[]): void {
+  const unknown = consents.filter(
+    (item) => !ACCEPTED_CONSENT_VERSIONS[item.document]?.includes(item.version),
+  );
+  if (unknown.length === 0) return;
+
+  const detail = unknown
+    .map(
+      (item) =>
+        `${item.document}: ${item.version} (허용: ${(
+          ACCEPTED_CONSENT_VERSIONS[item.document] ?? []
+        ).join(', ')})`,
+    )
+    .join(' / ');
+
+  throw new BadRequestException(
+    errBody(
+      ErrorCode.CONSENT_VERSION_UNKNOWN,
+      `동의한 문서의 개정일이 서버가 아는 값이 아닙니다. (${detail})`,
     ),
   );
 }

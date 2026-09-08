@@ -6,12 +6,20 @@ import {
 import { AuthService } from './auth.service';
 import {
   CLIENT_CONSENT_DOCUMENTS,
+  CURRENT_CONSENT_VERSIONS,
   ConsentDocument,
 } from '../consents/constants';
 import { ErrorCode } from '../common/errors/error-code';
 import { RegisterDto } from './dto/register.dto';
 
-const V = '2026-09-07';
+/**
+ * 문서별 현재 개정일. 손으로 적지 않고 상수 표에서 가져온다 — 서버가 `version` 값까지
+ * 대조하므로, 날짜를 박아 두면 문서를 개정하는 순간 이 스펙이 통째로 깨진다.
+ */
+const currentVersion = (document: ConsentDocument): string =>
+  CURRENT_CONSENT_VERSIONS[document] as string;
+
+const V = currentVersion(ConsentDocument.SERVICE);
 
 function makeDto(overrides: Partial<RegisterDto> = {}): RegisterDto {
   return {
@@ -19,7 +27,7 @@ function makeDto(overrides: Partial<RegisterDto> = {}): RegisterDto {
     nationality: 'kr',
     consents: CLIENT_CONSENT_DOCUMENTS.map((document) => ({
       document,
-      version: V,
+      version: currentVersion(document),
     })),
     ageConfirmed: true,
     ...overrides,

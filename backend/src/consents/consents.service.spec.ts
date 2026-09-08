@@ -1,17 +1,29 @@
 import { BadRequestException } from '@nestjs/common';
 import { ConsentsService, buildConsentRows } from './consents.service';
 import {
+  ACCEPTED_CONSENT_VERSIONS,
   AGE_POLICY_VERSION,
   CLIENT_CONSENT_DOCUMENTS,
   CONSENT_VERSION_PATTERN,
+  CURRENT_CONSENT_VERSIONS,
   ConsentDocument,
   SERVER_CONSENT_ROWS,
 } from './constants';
 import { ErrorCode } from '../common/errors/error-code';
 
-const V = '2026-09-07';
+/**
+ * 문서별 현재 개정일. 손으로 적지 않고 상수 표에서 가져온다 — 서버가 `version` 값을
+ * 대조하게 된 뒤로, 문서를 개정할 때마다 여기 적힌 날짜가 통째로 거절당하기 때문이다.
+ */
+const currentVersion = (document: ConsentDocument): string =>
+  CURRENT_CONSENT_VERSIONS[document] as string;
+
+const V = currentVersion(ConsentDocument.SERVICE);
 const clientItems = () =>
-  CLIENT_CONSENT_DOCUMENTS.map((document) => ({ document, version: V }));
+  CLIENT_CONSENT_DOCUMENTS.map((document) => ({
+    document,
+    version: currentVersion(document),
+  }));
 const validInput = () => ({ consents: clientItems(), ageConfirmed: true });
 
 /**
@@ -163,6 +175,53 @@ describe('buildConsentRows', () => {
     expect(body.message).toContain('서버가 채우는 항목');
   });
 
+  it('서버가 모르는 개정일이면 CONSENT_VERSION_UNKNOWN으로 막는다', () => {
+    // 형식(YYYY-MM-DD)은 맞지만 실재한 적 없는 날짜다. DTO의 @Matches는 통과하므로
+    // 여기서 막지 않으면 "동의했다"는 거짓 기록이 append-only 원장에 영구히 남는다.
+    const input = {
+      consents: clientItems().map((item) =>
+        item.document === ConsentDocument.PRIVACY
+          ? { ...item, version: '2020-01-01' }
+          : item,
+      ),
+      ageConfirmed: true,
+    };
+
+    const body = expectThrownBody(() => buildConsentRows(input));
+
+    expect(body.code).toBe(ErrorCode.CONSENT_VERSION_UNKNOWN);
+    // 어느 문서의 어떤 값이 걸렸는지 드러나야 배선 실수를 바로 찾는다.
+    expect(body.message).toContain(ConsentDocument.PRIVACY);
+    expect(body.message).toContain('2020-01-01');
+  });
+
+  it('현재 개정일은 그대로 받아 원장 행으로 만든다', () => {
+    const rows = buildConsentRows(validInput());
+
+    for (const document of CLIENT_CONSENT_DOCUMENTS) {
+      expect(rows).toContainEqual({
+        document,
+        version: currentVersion(document),
+      });
+    }
+  });
+
+  it('항목이 빠진 채로 개정일까지 틀리면 누락을 먼저 알린다', () => {
+    // 순서가 뒤바뀌면 "버전이 틀렸다"는 메시지를 받고 고쳤는데 이번엔 누락으로 막히는,
+    // 원인을 한 번에 못 보는 상태가 된다. 어느 문서의 허용 목록과 대조할지도 항목이
+    // 갖춰진 뒤에야 정해진다.
+    const input = {
+      consents: clientItems()
+        .filter((item) => item.document !== ConsentDocument.LOCATION)
+        .map((item) => ({ ...item, version: '2020-01-01' })),
+      ageConfirmed: true,
+    };
+
+    const body = expectThrownBody(() => buildConsentRows(input));
+
+    expect(body.code).toBe(ErrorCode.CONSENT_INCOMPLETE);
+  });
+
   it('빈 배열이면 필수 항목 전체를 누락으로 보고한다', () => {
     const body = expectThrownBody(() =>
       buildConsentRows({ consents: [], ageConfirmed: false }),
@@ -183,6 +242,25 @@ describe('상수 표', () => {
     expect(
       CLIENT_CONSENT_DOCUMENTS.filter((doc) => serverDocs.includes(doc)),
     ).toEqual([]);
+  });
+
+  it('허용 개정일 목록은 클라이언트 문서마다 있고 현재 버전을 포함한다', () => {
+    for (const document of CLIENT_CONSENT_DOCUMENTS) {
+      const accepted = ACCEPTED_CONSENT_VERSIONS[document];
+      // 목록이 비면 그 문서는 어떤 값으로도 가입할 수 없게 된다.
+      expect(accepted).toBeDefined();
+      expect(accepted).toContain(currentVersion(document));
+      for (const version of accepted ?? []) {
+        expect(version).toMatch(CONSENT_VERSION_PATTERN);
+      }
+    }
+  });
+
+  it('서버가 채우는 항목은 허용 목록에 없다 — 클라이언트가 보낼 값이 아니다', () => {
+    for (const row of SERVER_CONSENT_ROWS) {
+      expect(ACCEPTED_CONSENT_VERSIONS[row.document]).toBeUndefined();
+      expect(CURRENT_CONSENT_VERSIONS[row.document]).toBeUndefined();
+    }
   });
 
   it('서버가 채우는 항목은 저마다 형식이 유효한 version을 갖는다', () => {

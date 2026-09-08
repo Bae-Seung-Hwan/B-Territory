@@ -12,6 +12,7 @@ import { UserConsent } from '../src/consents/entities/user-consent.entity';
 import {
   AGE_POLICY_VERSION,
   CLIENT_CONSENT_DOCUMENTS,
+  CURRENT_CONSENT_VERSIONS,
   ConsentDocument,
 } from '../src/consents/constants';
 
@@ -49,13 +50,18 @@ interface ErrorBody {
   message: string;
 }
 
-const CONSENT_VERSION = '2026-09-07';
+/**
+ * 문서별 현재 개정일. 서버가 `version` 값까지 대조하므로 상수 표에서 가져온다 —
+ * 날짜를 손으로 적으면 문서를 개정하는 순간 이 e2e 전체가 CONSENT_VERSION_UNKNOWN으로 깨진다.
+ */
+const versionOf = (document: ConsentDocument): string =>
+  CURRENT_CONSENT_VERSIONS[document] as string;
 
 /** 클라이언트가 보내는 문서 동의. 항목이 늘면 서버 상수에서 자동으로 따라온다. */
 const consents = () =>
   CLIENT_CONSENT_DOCUMENTS.map((document) => ({
     document,
-    version: CONSENT_VERSION,
+    version: versionOf(document),
   }));
 
 interface ProfileBody {
@@ -228,7 +234,12 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
       .send({
         nickname: '일부동의',
         nationality: 'KR',
-        consents: [{ document: 'service', version: CONSENT_VERSION }],
+        consents: [
+          {
+            document: 'service',
+            version: versionOf(ConsentDocument.SERVICE),
+          },
+        ],
         ageConfirmed: true,
       })
       .expect(400);
@@ -259,6 +270,29 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
     expect(count).toBe(0);
   });
 
+  it('서버가 모르는 개정일이면 400이고 계정도 만들어지지 않는다', async () => {
+    // 형식은 맞지만 실재한 적 없는 날짜라 ValidationPipe(@Matches)는 통과한다.
+    // 여기서 막지 않으면 거짓 개정일이 append-only 원장에 영구히 남는다.
+    const res = await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .set('Authorization', `Bearer ${CONSENT_UID}:consent-session`)
+      .send({
+        nickname: '버전오류',
+        nationality: 'KR',
+        consents: consents().map((item) => ({
+          ...item,
+          version: '2020-01-01',
+        })),
+        ageConfirmed: true,
+      })
+      .expect(400);
+
+    expect((res.body as ErrorBody).code).toBe('CONSENT_VERSION_UNKNOWN');
+
+    const count = await userRepo.count({ where: { firebaseUid: CONSENT_UID } });
+    expect(count).toBe(0);
+  });
+
   it('가입에 성공하면 동의 이력이 문서별로 남는다', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/auth/register')
@@ -282,7 +316,7 @@ describe('Auth 재로그인 시 중복 가입 방지 및 프로필 조회 (e2e)'
       const expected =
         row.document === String(ConsentDocument.AGE_14_OVER)
           ? AGE_POLICY_VERSION
-          : CONSENT_VERSION;
+          : versionOf(row.document as ConsentDocument);
       expect(row.version).toBe(expected);
       expect(row.agreedAt).toBeInstanceOf(Date);
     }

@@ -22,11 +22,38 @@ export enum ConsentDocument {
 }
 
 /**
- * 항목별로 `version`을 **누가 공급하는지**.
+ * 최소연령 정책의 결정 시점(docs/compliance.md 2.5에서 만 14세로 확정).
+ * 기준 연령을 바꾸면 이 값을 올려 그때부터의 동의를 구분할 수 있게 한다.
+ */
+export const AGE_POLICY_VERSION = '2026-09-07';
+
+/**
+ * 클라이언트가 개정일을 보내는 항목과, 서버가 **받아줄 개정일 전부**.
  *
- * - `client`: 조항 전문이 있는 문서. 화면에 실제로 표시한 문서의 개정일을 클라이언트가 보낸다.
- * - `server`: 조항 전문이 없는 항목. 클라이언트가 보낼 `version`이 존재하지 않으므로 서버가
- *   자기 상수로 채운다.
+ * `current`는 지금 배포된 문서의 개정일이고, `superseded`는 지난 개정일이다. 둘 다 받는다 —
+ * 앱 업데이트는 원자적이지 않아서, 현재 버전만 받으면 문서를 개정하는 순간 아직 업데이트하지
+ * 않은 설치본 전체의 가입이 400이 된다. 지난 개정일은 실재했던 문서의 값이라 원장에 남아도
+ * 거짓이 아니고, `version`이 남아 있으므로 재동의 대상으로 나중에 골라낼 수 있다.
+ */
+type ClientSourced = {
+  readonly current: string;
+  readonly superseded: readonly string[];
+};
+
+type ServerSourced = { readonly serverVersion: string };
+
+function isServerSourced(
+  source: ClientSourced | ServerSourced,
+): source is ServerSourced {
+  return 'serverVersion' in source;
+}
+
+/**
+ * 항목별로 `version`을 **누가 공급하는지**, 그리고 클라이언트가 보내는 값 중 **무엇을 받아줄지**.
+ *
+ * - `ClientSourced`: 조항 전문이 있는 문서. 화면에 실제로 표시한 문서의 개정일을 클라이언트가 보낸다.
+ * - `ServerSourced`: 조항 전문이 없는 항목. 클라이언트가 보낼 `version`이 존재하지 않으므로
+ *   서버가 자기 상수로 채운다.
  *
  * `age14`(만 14세 이상 확인)가 후자다. 본문을 읽고 하는 동의가 아니라 이용자의 진술이라
  * 프론트에 대응하는 `LegalDocument`가 없고, 따라서 보낼 개정일도 없다. 그런데도 기록은
@@ -37,23 +64,24 @@ export enum ConsentDocument {
  *
  * `Record`라 enum에 항목을 추가하면 여기 등록을 빠뜨릴 수 없다 — 손으로 적은 배열이면
  * 새 항목이 조용히 어느 쪽에도 속하지 않게 된다.
+ *
+ * ⚠️ **`current`의 원본은 프론트의 `LegalDocument.version`이고 여기 적힌 것은 사본이다.**
+ * 조항 전문과 개정일이 같은 파일에 있어야 "본문을 고치면서 버전을 안 올리는" 실수를 막을 수
+ * 있어 원본을 그쪽에 뒀다. 두 값이 어긋나는지는 `consent-document-contract.spec.ts`가
+ * 대조하므로 한쪽만 고치면 CI가 막는다.
+ *
+ * **그래서 문서를 개정할 때는 백엔드를 먼저 배포한다.** 여기에 새 개정일을 `current`로 올리고
+ * 기존 값을 `superseded`로 내린 뒤 프론트를 배포하면, 그 사이에는 구버전 설치본이 계속
+ * 가입할 수 있어 중단이 없다. 순서를 뒤집으면 새 앱이 서버가 모르는 개정일을 보내 가입이
+ * 막힌다(`CONSENT_VERSION_UNKNOWN`).
  */
-/**
- * 최소연령 정책의 결정 시점(docs/compliance.md 2.5에서 만 14세로 확정).
- * 기준 연령을 바꾸면 이 값을 올려 그때부터의 동의를 구분할 수 있게 한다.
- */
-export const AGE_POLICY_VERSION = '2026-09-07';
-
-/** 클라이언트가 표시한 문서의 개정일을 그대로 받는 항목. */
-const CLIENT_SOURCED = 'client' as const;
-
 const CONSENT_VERSION_SOURCE: Record<
   ConsentDocument,
-  typeof CLIENT_SOURCED | { readonly serverVersion: string }
+  ClientSourced | ServerSourced
 > = {
-  [ConsentDocument.SERVICE]: CLIENT_SOURCED,
-  [ConsentDocument.PRIVACY]: CLIENT_SOURCED,
-  [ConsentDocument.LOCATION]: CLIENT_SOURCED,
+  [ConsentDocument.SERVICE]: { current: '2026-09-08', superseded: [] },
+  [ConsentDocument.PRIVACY]: { current: '2026-09-08', superseded: [] },
+  [ConsentDocument.LOCATION]: { current: '2026-09-08', superseded: [] },
   // 서버가 채우는 항목은 **자기 버전을 여기 함께 적는다.** 카테고리 하나에 상수 하나를
   // 공유하면, 두 번째 서버 항목을 추가했을 때 그 행이 엉뚱하게 최소연령 정책의 개정일로
   // 적재된다 — 컴파일도 테스트도 통과하고, append-only라 사후에 고칠 수도 없다.
@@ -70,8 +98,34 @@ const CONSENT_DOCUMENTS = Object.keys(
  */
 export const CLIENT_CONSENT_DOCUMENTS: readonly ConsentDocument[] =
   CONSENT_DOCUMENTS.filter(
-    (doc) => CONSENT_VERSION_SOURCE[doc] === CLIENT_SOURCED,
+    (doc) => !isServerSourced(CONSENT_VERSION_SOURCE[doc]),
   );
+
+/**
+ * 문서별 **현재** 개정일. 프론트 `LegalDocument.version`과 같아야 하는 값이며, 계약 테스트가
+ * 대조하는 대상도 이것이다. 재동의 대상 판단(원장의 `version`과 비교)의 기준값이기도 하다.
+ */
+export const CURRENT_CONSENT_VERSIONS: Readonly<
+  Partial<Record<ConsentDocument, string>>
+> = Object.fromEntries(
+  CLIENT_CONSENT_DOCUMENTS.map((document) => [
+    document,
+    (CONSENT_VERSION_SOURCE[document] as ClientSourced).current,
+  ]),
+);
+
+/**
+ * 문서별로 **받아주는** 개정일 전부(현재 + 지난 값). 여기 없는 값은 거절한다 —
+ * 형식만 맞는 엉뚱한 날짜가 "동의했다"는 기록으로 영구히 남는 것을 막는다.
+ */
+export const ACCEPTED_CONSENT_VERSIONS: Readonly<
+  Partial<Record<ConsentDocument, readonly string[]>>
+> = Object.fromEntries(
+  CLIENT_CONSENT_DOCUMENTS.map((document) => {
+    const source = CONSENT_VERSION_SOURCE[document] as ClientSourced;
+    return [document, [source.current, ...source.superseded]];
+  }),
+);
 
 /**
  * 서버가 `version`을 채우는 항목과 그 버전. 현재는 만 14세 확인 하나뿐이다.
@@ -82,9 +136,9 @@ export const SERVER_CONSENT_ROWS: readonly {
   version: string;
 }[] = CONSENT_DOCUMENTS.flatMap((document) => {
   const source = CONSENT_VERSION_SOURCE[document];
-  return source === CLIENT_SOURCED
-    ? []
-    : [{ document, version: source.serverVersion }];
+  return isServerSourced(source)
+    ? [{ document, version: source.serverVersion }]
+    : [];
 });
 
 /** 서버가 채우는 항목의 식별자만. 클라이언트가 이 항목을 보내면 중복이 되므로 막는 데 쓴다. */
@@ -94,9 +148,9 @@ export const SERVER_CONSENT_DOCUMENTS: readonly ConsentDocument[] =
 /**
  * `version`의 형식 — 문서 개정일(YYYY-MM-DD).
  *
- * 형식 검사만으로도 재동의 판단을 망가뜨리는 가장 흔한 사고("undefined", 빈 문자열 등이
- * 그대로 적재되는 것)를 막는다. 다만 **형식이 맞는 엉뚱한 날짜는 걸러지지 않는다** —
- * 서버가 문서별 현재 버전을 알아야 잡을 수 있고, 그건 문서 개정마다 백엔드 배포를 묶는
- * 선택이라 별도 결정으로 남겨 뒀다(docs/compliance.md 6장).
+ * DTO 단계에서 형식을 먼저 걸러 "undefined"·빈 문자열 같은 배선 사고가 값 대조까지 가지
+ * 않게 한다. **형식이 맞는 엉뚱한 날짜는 여기서 걸러지지 않는다** — 값 자체는 허용 목록을
+ * 아는 `buildConsentRows`가 `ACCEPTED_CONSENT_VERSIONS`와 대조해 거절한다
+ * (`CONSENT_VERSION_UNKNOWN`).
  */
 export const CONSENT_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

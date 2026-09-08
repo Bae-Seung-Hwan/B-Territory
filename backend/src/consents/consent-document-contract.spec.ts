@@ -1,6 +1,10 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join, relative, resolve } from 'path';
-import { CLIENT_CONSENT_DOCUMENTS, ConsentDocument } from './constants';
+import {
+  CLIENT_CONSENT_DOCUMENTS,
+  CURRENT_CONSENT_VERSIONS,
+  ConsentDocument,
+} from './constants';
 
 /**
  * 백엔드 `ConsentDocument`와 프론트엔드 `LegalDocumentKey`의 **문자열 일치**를 CI에서 강제한다.
@@ -99,6 +103,86 @@ function readFrontendDocumentKeys(): string[] {
   return members.map((member) => member.slice(1, -1));
 }
 
+/** `LEGAL_DOCUMENTS: Record<…> = { service: termsOfService, … }`의 본문을 뽑는다. */
+const DOCUMENT_MAP_PATTERN =
+  /LEGAL_DOCUMENTS\s*:\s*Record<[^=]*>\s*=\s*\{([^}]*)\}/;
+/** 그 본문의 `키: 식별자,` 한 줄. */
+const DOCUMENT_MAP_ENTRY_PATTERN = /(\w+)\s*:\s*(\w+)\s*,/g;
+
+/**
+ * 프론트 각 문서의 개정일(`LegalDocument.version`)을 문서 키별로 읽어 온다.
+ *
+ * 개정일의 **원본은 프론트다** — 조항 전문과 같은 파일에 둬야 "본문을 고치면서 버전을 안
+ * 올리는" 실수를 막을 수 있어서다. 백엔드의 `CURRENT_CONSENT_VERSIONS`는 그 사본이고, 서버가
+ * 값을 대조하려면(형식만 보던 것을 값까지 보게 하려면) 사본을 들 수밖에 없다. 둘이 어긋나면
+ * 갱신하지 않은 쪽 때문에 멀쩡한 가입이 `CONSENT_VERSION_UNKNOWN`으로 막히거나, 반대로
+ * 개정 전 개정일이 최신인 척 원장에 쌓인다. 그 어긋남을 여기서 잡는다.
+ *
+ * 문서 키 → 식별자 → 그 식별자의 선언 순으로 따라간다. 어느 단계든 못 따라가면 실패다.
+ */
+function readFrontendDocumentVersions(): Record<string, string> {
+  if (!existsSync(FRONTEND_SRC)) {
+    throw new Error(
+      `프론트엔드 소스를 찾지 못했다(${FRONTEND_SRC}). ` +
+        '이 검사는 저장소 전체가 체크아웃된 상태를 전제한다.',
+    );
+  }
+
+  const sources = tsFilesUnder(FRONTEND_SRC).map((file) => ({
+    file,
+    text: readFileSync(file, 'utf8'),
+  }));
+
+  const withMap = sources.filter((source) =>
+    DOCUMENT_MAP_PATTERN.test(source.text),
+  );
+  if (withMap.length !== 1) {
+    throw new Error(
+      `\`LEGAL_DOCUMENTS\` 선언을 ${withMap.length}곳에서 찾았다(1곳이어야 한다). ` +
+        '문서 키와 개정일을 잇는 표라 이걸 못 찾으면 버전을 대조할 수 없다.',
+    );
+  }
+
+  const body = DOCUMENT_MAP_PATTERN.exec(withMap[0].text)?.[1] ?? '';
+  const entries = [...body.matchAll(DOCUMENT_MAP_ENTRY_PATTERN)];
+  if (entries.length === 0) {
+    throw new Error(
+      '`LEGAL_DOCUMENTS`에서 `키: 식별자` 항목을 하나도 읽지 못했다. ' +
+        '표의 형태가 바뀌었다면 이 테스트의 DOCUMENT_MAP_ENTRY_PATTERN도 함께 고칠 것.',
+    );
+  }
+
+  return Object.fromEntries(
+    entries.map(([, key, identifier]) => {
+      // 식별자의 선언을 찾아 그 객체 리터럴의 첫 version을 읽는다. 본문(body)에도 날짜
+      // 문자열이 흔하지만 version 필드보다 뒤에 오므로 첫 매치가 정답이다.
+      const declaration = new RegExp(
+        `export\\s+const\\s+${identifier}\\s*:\\s*LegalDocument\\s*=\\s*\\{`,
+      );
+      const source = sources.find((candidate) =>
+        declaration.test(candidate.text),
+      );
+      if (!source) {
+        throw new Error(
+          `\`LEGAL_DOCUMENTS.${key}\`가 가리키는 \`${identifier}\`의 선언을 찾지 못했다.`,
+        );
+      }
+
+      const after = source.text.slice(
+        (declaration.exec(source.text)?.index ?? 0) + 1,
+      );
+      const version = /version\s*:\s*'([^']*)'/.exec(after)?.[1];
+      if (!version) {
+        throw new Error(
+          `\`${identifier}\`에 \`version\`이 없다(${relative(FRONTEND_SRC, source.file)}). ` +
+            '개정일 없이는 재동의 대상을 고를 수 없으므로 실패시킨다.',
+        );
+      }
+      return [key, version];
+    }),
+  );
+}
+
 describe('동의 문서 식별자 계약 (백엔드 ↔ 프론트엔드)', () => {
   it('프론트엔드의 LegalDocumentKey 선언을 하나만 찾아 파싱한다', () => {
     expect(() => readFrontendDocumentKeys()).not.toThrow();
@@ -118,5 +202,12 @@ describe('동의 문서 식별자 계약 (백엔드 ↔ 프론트엔드)', () =>
     expect(readFrontendDocumentKeys()).not.toContain(
       ConsentDocument.AGE_14_OVER,
     );
+  });
+
+  it('CURRENT_CONSENT_VERSIONS가 프론트 문서의 개정일과 같다', () => {
+    // 서버가 `version` 값을 대조하게 되면서 백엔드도 개정일을 들게 됐다(사본이다).
+    // 한쪽만 올리면 멀쩡한 가입이 CONSENT_VERSION_UNKNOWN으로 막히거나, 개정 전 날짜가
+    // 최신인 척 원장에 쌓인다 — 둘 다 배포 전에 잡아야 한다.
+    expect(readFrontendDocumentVersions()).toEqual(CURRENT_CONSENT_VERSIONS);
   });
 });
