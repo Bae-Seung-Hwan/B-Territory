@@ -12,7 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { BottomSheetModal } from '@gorhom/bottom-sheet';
+import { BottomSheetModal, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { auth } from '@/lib/firebase';
 import { getMe } from '@/api/auth';
 import { queryKeys } from '@/lib/query-keys';
@@ -23,33 +23,60 @@ import { useSocialLoginConsent } from '@/hooks/use-social-login-consent';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BottomSheet } from '@/components/ui/BottomSheet';
+import { LEGAL_DOCUMENTS, LEGAL_DOCUMENT_KEYS, legalBody, type LegalDocumentKey } from '@/legal';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
+
+const NO_AGREEMENTS = Object.fromEntries(LEGAL_DOCUMENT_KEYS.map((key) => [key, false])) as Record<
+  LegalDocumentKey,
+  boolean
+>;
+
+const ALL_AGREEMENTS = Object.fromEntries(LEGAL_DOCUMENT_KEYS.map((key) => [key, true])) as Record<
+  LegalDocumentKey,
+  boolean
+>;
 
 export default function LoginScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const termsSheetRef = useRef<BottomSheetModal>(null);
-  const [agreeTerms, setAgreeTerms] = useState(false);
-  const [agreePrivacy, setAgreePrivacy] = useState(false);
-  const [termsView, setTermsView] = useState<'list' | 'service' | 'privacy'>('list');
-  const allAgreed = agreeTerms && agreePrivacy;
+  // 문서별 동의를 개별 state가 아니라 하나의 맵으로 든다 — 위치기반서비스 약관이 세 번째
+  // 항목으로 들어오면서(위치정보법상 개인정보처리방침으로 갈음할 수 없다), 항목이 늘 때마다
+  // useState와 allAgreed를 따로 고쳐야 하는 구조였다. 하나를 빠뜨리면 동의를 받지 않은 문서가
+  // 조용히 생긴다.
+  // 현재는 이 맵을 서버로 보내지 않는다 — registerUser 페이로드는 {nickname, nationality}뿐이고
+  // 동의 여부·버전은 클라이언트에만 남는다. 서버 측 저장은 PR #56(`user_consents` 원장,
+  // `POST /api/auth/register`에 `consents[]`·`ageConfirmed` 추가)이 구현 중이다 — 이 PR이
+  // 머지되면 여기서 `agreed`/`agreeAge`를 그 페이로드 형태로 변환해 보내도록 이 파일도 고칠 것.
+  // `ConsentDocument`(service/privacy/location) 값은 LegalDocumentKey와 문자열이 같아야 한다.
+  const [agreed, setAgreed] = useState<Record<LegalDocumentKey, boolean>>(NO_AGREEMENTS);
+  // 만 14세 미만은 법정대리인 동의가 필요해 가입 자체를 받지 않는다(docs/compliance.md 2.5에서
+  // 만 14세로 확정). 생년월일을 받지 않는 것은 의도된 선택이다 — 확인만 하면 되는데 생년월일을
+  // 받으면 수집 항목이 늘어 최소수집 원칙과 어긋난다.
+  const [agreeAge, setAgreeAge] = useState(false);
+  const [termsView, setTermsView] = useState<'list' | LegalDocumentKey>('list');
+  const allAgreed = LEGAL_DOCUMENT_KEYS.every((key) => agreed[key]) && agreeAge;
+
+  // 아래 useSocialLoginConsent가 렌더 중에 이 함수를 참조하므로 훅 호출보다 먼저 선언한다.
+  const openTermsSheet = () => {
+    // 시트를 열 때마다 동의를 전부 되돌린다 — 이전에 열었다 닫은 체크가 남아 있으면
+    // 사용자가 읽지 않은 문서에 이미 동의한 상태로 시작한다.
+    setAgreed(NO_AGREEMENTS);
+    setAgreeAge(false);
+    setTermsView('list');
+    termsSheetRef.current?.present();
+  };
+
   const {
     requestConsent: requestSocialConsent,
     resolveConsent,
     isAwaitingConsent,
-  } = useSocialLoginConsent({
-    onRequest: () => {
-      setAgreeTerms(false);
-      setAgreePrivacy(false);
-      setTermsView('list');
-      termsSheetRef.current?.present();
-    },
-  });
+  } = useSocialLoginConsent({ onRequest: openTermsSheet });
 
   const canSubmit = email.trim().length > 0 && password.length > 0 && !loading;
 
@@ -125,18 +152,18 @@ export default function LoginScreen() {
     }
   };
 
-  const openTermsSheet = () => {
-    setAgreeTerms(false);
-    setAgreePrivacy(false);
-    setTermsView('list');
-    termsSheetRef.current?.present();
-  };
-
+  // 문서 동의와 함께 연령 확인도 켠다. 연령 확인은 문서에 대한 동의가 아니라 이용자에 관한
+  // 사실 주장이라 성격이 다르므로, 범위를 라벨(auth.terms.agreeAll)이 밝히도록 해뒀다.
+  // 일괄 토글에서 빼는 선택지도 있었으나, 그러면 "전체 동의"를 누르고도 가입 버튼이 안 열려
+  // 이유를 찾아야 한다.
   const handleToggleAgreeAll = () => {
     const next = !allAgreed;
-    setAgreeTerms(next);
-    setAgreePrivacy(next);
+    setAgreed(next ? ALL_AGREEMENTS : NO_AGREEMENTS);
+    setAgreeAge(next);
   };
+
+  const toggleAgreement = (key: LegalDocumentKey) =>
+    setAgreed((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const handleContinueToRegister = () => {
     const wasAwaitingSocialConsent = isAwaitingConsent();
@@ -220,11 +247,25 @@ export default function LoginScreen() {
 
       <BottomSheet
         ref={termsSheetRef}
-        snapPoints={[termsView === 'list' ? '58%' : '70%']}
+        snapPoints={[termsView === 'list' ? '70%' : '85%']}
         onDismiss={handleTermsSheetDismiss}
+        /*
+          두 화면 모두 자체 스크롤을 가진다(BottomSheetView는 자신을 정적 콘텐츠로 등록해
+          내부 스크롤을 죽이므로 감싸지 않는다).
+
+          목록도 스크롤이 필요하다 — 위치기반서비스 약관과 연령 확인이 들어오며 카드가
+          3개(전체동의 + 문서 2)에서 5개(전체동의 + 문서 3 + 연령)로 늘었다. snap이 70%라
+          작은 화면이나 큰 접근성 폰트에서는 "동의하고 계속하기" 버튼이 시트 밖으로 밀리는데,
+          정적 콘텐츠는 넘쳐도 스크롤되지 않고 **잘리므로** 가입 자체가 불가능해진다.
+
+          겸해서 살아 있는 시트에서 BottomSheetView ↔ BottomSheetScrollView를 갈아끼우는
+          동적 전환도 사라진다 — 다른 시트(NicknameNationalityFields·MessageActionSheet·
+          SpotDetailSheet)는 모두 정적으로 지정하고 있어 이 파일만 예외였다.
+        */
+        scrollable
       >
         {termsView === 'list' ? (
-          <>
+          <BottomSheetScrollView contentContainerStyle={styles.sheetScrollContent}>
             <Text style={styles.termsTitle}>{t('auth.terms.title')}</Text>
             <Text style={styles.termsSubtitle}>{t('auth.terms.subtitle')}</Text>
 
@@ -233,35 +274,33 @@ export default function LoginScreen() {
                 {allAgreed ? '☑' : '☐'} {t('auth.terms.agreeAll')}
               </Text>
             </Card>
-            <Card selected={agreeTerms} style={styles.termsItem}>
-              <View style={styles.termsRow}>
-                <TouchableOpacity
-                  style={styles.termsCheckArea}
-                  onPress={() => setAgreeTerms((prev) => !prev)}
-                >
-                  <Text style={styles.termsItemText}>
-                    {agreeTerms ? '☑' : '☐'} {t('auth.terms.serviceTerms')}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setTermsView('service')}>
-                  <Text style={styles.termsViewLink}>{t('auth.terms.viewLabel')}</Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
-            <Card selected={agreePrivacy} style={styles.termsItem}>
-              <View style={styles.termsRow}>
-                <TouchableOpacity
-                  style={styles.termsCheckArea}
-                  onPress={() => setAgreePrivacy((prev) => !prev)}
-                >
-                  <Text style={styles.termsItemText}>
-                    {agreePrivacy ? '☑' : '☐'} {t('auth.terms.privacyPolicy')}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setTermsView('privacy')}>
-                  <Text style={styles.termsViewLink}>{t('auth.terms.viewLabel')}</Text>
-                </TouchableOpacity>
-              </View>
+            {LEGAL_DOCUMENT_KEYS.map((key) => (
+              <Card key={key} selected={agreed[key]} style={styles.termsItem}>
+                <View style={styles.termsRow}>
+                  <TouchableOpacity
+                    style={styles.termsCheckArea}
+                    onPress={() => toggleAgreement(key)}
+                  >
+                    <Text style={styles.termsItemText}>
+                      {agreed[key] ? '☑' : '☐'} {t(`auth.terms.${LEGAL_DOCUMENTS[key].labelKey}`)}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setTermsView(key)}>
+                    <Text style={styles.termsViewLink}>{t('auth.terms.viewLabel')}</Text>
+                  </TouchableOpacity>
+                </View>
+              </Card>
+            ))}
+
+            {/* 연령 확인만 '보기'가 없다 — 읽을 문서가 아니라 사실 확인이다. */}
+            <Card
+              onPress={() => setAgreeAge((prev) => !prev)}
+              selected={agreeAge}
+              style={styles.termsItem}
+            >
+              <Text style={styles.termsItemText}>
+                {agreeAge ? '☑' : '☐'} {t('auth.terms.ageConfirm')}
+              </Text>
             </Card>
 
             <Button
@@ -270,26 +309,21 @@ export default function LoginScreen() {
               disabled={!allAgreed}
               style={styles.termsContinueButton}
             />
-          </>
+          </BottomSheetScrollView>
         ) : (
-          <>
+          <BottomSheetScrollView contentContainerStyle={styles.sheetScrollContent}>
             <Text style={styles.termsTitle}>
-              {termsView === 'service'
-                ? t('auth.terms.serviceTermsTitle')
-                : t('auth.terms.privacyPolicyTitle')}
+              {t(`auth.terms.${LEGAL_DOCUMENTS[termsView].titleKey}`)}
             </Text>
-            <Text style={styles.detailBody}>
-              {termsView === 'service'
-                ? t('auth.terms.serviceTermsBody')
-                : t('auth.terms.privacyPolicyBody')}
-            </Text>
+            {/* locale이 'ko'|'en'을 벗어나도 빈 화면이 되지 않게 legalBody가 en으로 떨어뜨린다. */}
+            <Text style={styles.detailBody}>{legalBody(termsView, locale)}</Text>
             <Button
               title={t('common.close')}
               onPress={() => setTermsView('list')}
               variant="secondary"
               style={styles.termsContinueButton}
             />
-          </>
+          </BottomSheetScrollView>
         )}
       </BottomSheet>
     </KeyboardAvoidingView>
@@ -345,4 +379,7 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   detailBody: { fontSize: 13, color: '#ccc', lineHeight: 20, marginTop: 4 },
+  // 목록·상세 두 화면이 공유한다. BottomSheet가 scrollable일 때는 기본 BottomSheetView
+  // (padding:16)로 감싸지 않으므로 여기서 같은 여백을 준다.
+  sheetScrollContent: { padding: 16, paddingBottom: 32 },
 });
