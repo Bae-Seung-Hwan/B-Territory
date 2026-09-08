@@ -22,9 +22,12 @@
 ### 확장 포인트 (점령 시각화 / 실시간 소켓)
 
 - `BusanMapView`는 `occupiedDistricts`/`onDistrictPress` 같은 prop을 받지 않는다(`style`/`spots`/`coords`/`onReady`뿐). `onDistrictPress`는 `DistrictPolygons`가 갖는 prop이고, `BusanMapView`가 내부적으로 이미 배선해(`handleDistrictPress`) 탭 시 `DistrictDetailSheet`를 연다 — 외부에서 값을 넘기는 지점이 아니다.
-- 점령 색상도 아직 연결돼 있지 않다. `DistrictPolygons.tsx`는 `src/utils/districtColors.ts#getDistrictFillColor(sigCd)`가 반환하는 그래프 컬러링 폴백 팔레트를 모듈 로드 시점에 `DISTRICT_RINGS`로 구워 두고 쓴다 — `sigCd`만 받는 시그니처라 지금 형태로는 점령 맵을 반영할 수 없다.
-- `useGameStore`의 `occupiedDistricts`가 실제로 채워지면, `districtColors.ts`에 이미 적혀 있는 설계 의도대로 `DistrictPolygons`가 그 스토어를 직접 구독하게 만든다(`MapHUD`가 같은 방식으로 읽는다) — `BusanMapView`에 신규 prop을 추가하는 방향이 아니다.
-- `BusanMapView`는 `useSocket()`이나 어떤 스토어도 직접 구독하지 않는 controlled 컴포넌트로 유지했다. 실시간 플레이어 위치 같은 데이터가 필요해지면 `spots`/`coords`와 동일한 패턴으로 신규 prop을 추가하면 되고, 소켓 배선 자체는 `map/index.tsx`(또는 상위)에서 처리한다.
+- 점령 색상은 아직 연결돼 있지 않다. `DistrictPolygons.tsx`는 `src/utils/districtColors.ts#getDistrictFillColor(sigCd)`가 반환하는 그래프 컬러링 폴백 팔레트를 모듈 로드 시점에 `DISTRICT_RINGS`로 구워 두고 쓴다 — `sigCd`만 받는 시그니처라 지금 형태로는 점령 맵을 반영할 수 없다.
+- **다만 "스토어를 직접 구독한다"는 방향은 이미 한 번 실행됐다.** `DistrictPolygons`는 이번 주 수도 강조 링을 그리려고 `useGameStore((s) => s.capitalDistrict)`를 직접 구독한다(`MapHUD`가 읽는 방식과 같다). `BusanMapView`에 prop을 늘리지 않고 자식이 필요한 값만 스토어에서 꺼내 쓰는 이 형태가 점령 색상에도 그대로 적용할 패턴이다.
+- 남은 것은 `useGameStore`의 `occupiedDistricts`를 **채우는 쪽**이다. 세터는 있지만 호출부가 없어 항상 비어 있다(`teamScores`도 마찬가지라 `MapHUD`의 "1위팀" 칸이 지금 비어 있다). 값이 채워지면 `districtColors.ts`에 적힌 설계 의도대로 폴백 팔레트를 팀 색상으로 교체하면 된다.
+- `BusanMapView` **자신**은 여전히 `useSocket()`이나 어떤 스토어도 구독하지 않는 controlled 컴포넌트다(스토어를 읽는 것은 자식인 `DistrictPolygons`다). 실시간 플레이어 위치처럼 지도 전체가 필요로 하는 데이터는 `spots`/`coords`와 동일하게 prop으로 넘기고, 소켓 배선 자체는 `map/index.tsx`(또는 상위)에서 처리한다.
+
+> ⚠️ 수도 강조는 백엔드 `sigunguCode`(KTO 1~16 체계)와 GeoJSON의 `SIG_CD`(통계청 5자리) 사이를 `constants/districts.ts#toSigunguCode()`로 변환해야 맞는다. 이 변환을 빼먹어 `"16" === "26350"`이 항상 거짓이 되는 바람에 강조 링이 한 번도 렌더되지 않았던 이력이 있다(PR #47). 구 하나가 섬·매립지로 폴리곤 조각을 여러 개 갖는 경우도 있어 조각 전체를 묶어 칠한다.
 
 ## 실시간 통신 (Socket.io)
 
@@ -129,19 +132,33 @@
 - **소켓 리스너 effect에 `useTranslation()`의 `t`를 넣지 않는다.** 매 렌더 새로 bind되는 함수라 리스너 전체가 렌더마다 재등록된다. 핸들러 안에서는 `i18n.t`를 직접 호출한다.
 - **GPS 구독은 `useLocation`이 모듈 스코프에 하나만 유지한다.** 호출한 화면 수만큼 `watchPositionAsync`가 생기지 않도록 공유하며, 마지막 구독자가 사라질 때만 해제한다.
 
-### 필요 작업 (TODO)
+> 남은 작업은 [known-issues.md의 "결투 · 실시간"](./known-issues.md#결투--실시간)에 모아둔다. 이
+> 문서에 체크박스를 따로 두면 코드가 바뀌어도 따라가지 않아 두 문서가 어긋난다(실제로 그랬다).
 
-- [ ] `DuelPending`에 취소 수단이 없다(백엔드에 `duel:cancel`이 없어 30초 만료에 의존) — 백엔드 협의 시 함께 논의
-- [x] ~~`src/hooks/use-location.ts`가 PR #50과 서로 다른 방향으로 되돌리고 있어 merge 순서
-      합의가 필요하다(PR #54 리뷰 지적 9번)~~ — **해소됨: 공유 스토어를 유지한다.** develop
-      머지(`0e1045e`)에서 이 브랜치 쪽을 채택했다. PR #50이 훅 인스턴스별 구독으로 되돌린
-      근거("소비자가 `map/index.tsx` 하나뿐")는 `LocationBroadcaster`가 앱 루트에 상주하면서
-      이미 깨졌고, 되돌리면 map과 broadcaster가 각각 고정밀 GPS watcher를 켠다. 자세한 근거는
-      `use-location.ts` 주석 참고.
+## 팀 채팅 (Socket.io — `/chat`)
+
+**결투용 `/realtime`과는 별개의 소켓이다.** `SocketProvider`가 아니라
+`hooks/use-chat-socket.ts`가 채팅 탭에서 직접 `/chat` 네임스페이스로 연결한다.
+
+- 메시지는 **서버에 저장되지 않는다**(릴레이 전용). 그래서 클라이언트가 `useChatStore`에
+  들고 있는 목록이 유일한 사본이고, 앱을 끄면 사라진다. 신고 시 메시지 원문을 함께 보내는
+  것도 같은 이유다 — 서버엔 근거가 남지 않는다.
+- 내가 보낸 메시지는 `status: 'sending' | 'failed'`로 낙관적으로 먼저 그린다. 서버가 릴레이해
+  돌아오면 확정되고, 실패하면 재시도 버튼이 뜬다(`retryMessage`).
+- **실패는 ack가 아니라 `exception` 이벤트로 온다.** 서버 핸들러가 레이트리밋 등으로 throw하면
+  `emit(..., ack)`의 콜백은 **호출되지 않는다**(`WsExceptionsFilter`). 그래서 ack 타임아웃과
+  `exception` 구독을 함께 두고, 어떤 emit이 거부됐는지는 서버가 알려주지 않으므로
+  (`{ code }`만 온다) 훅이 자체적으로 시도를 추적한다.
+- 차단은 클라이언트 필터링이 아니라 **서버가 릴레이에서 제외**한다. 다만 이미 화면에 남아 있는
+  메시지는 서버가 회수할 수 없으므로 `removeMessagesByUser`로 로컬에서도 지운다.
+- 신고·차단 UI는 메시지 롱프레스 → `components/chat/MessageActionSheet.tsx`이고, 차단 목록
+  관리는 `app/(main)/profile/blocked-users.tsx`다. Apple 심사 가이드라인 1.2 대응이라
+  빼면 안 된다 — [docs/community-policy.md](../../docs/community-policy.md) 참고.
 
 ## Firebase Authentication
 
-이메일/비밀번호 로그인·가입, Google 로그인(현재 임시 비활성화 — 아래 참고), Apple 로그인 골격까지 구현되어 있음.
+이메일/비밀번호 로그인·가입과 Google 로그인이 동작한다. Apple 로그인은 구현이 끝났지만 지금은
+버튼을 노출하지 않는다 — 사유는 아래 "Apple Sign In" 참고.
 
 네이티브 모듈이 필요 없는 `firebase` JS SDK를 쓴다. Expo Go를 쓰던 시절에 그래서 골랐고, Dev
 Build로 전환한 지금도 그대로 쓰고 있다. 세션 영속화만
@@ -164,7 +181,7 @@ Build로 전환한 지금도 그대로 쓰고 있다. 세션 영속화만
 
 ### 이메일 인증 (Firebase 내장)
 
-과거엔 Resend로 자체 발송하는 매직링크(`/api/email/send-link`+`verify-token`, `app/verify.tsx`)를 썼으나, 발신 도메인 구매·DKIM 설정 없이는 실사용이 불가능해(테스트 모드는 계정 소유자 본인에게만 발송) **Firebase 내장 이메일 인증(`email_verified` 클레임)으로 전환했다.** 백엔드 PR #26(`feature/Bae/firebase-email-verification`)이 짝을 이루는 변경이며, 반드시 함께 머지돼야 한다(한쪽만 가면 프론트는 새 흐름인데 백엔드는 옛 마커를 찾다가 403, 또는 그 반대로 마커 없이도 통과되는 구멍이 생긴다).
+과거엔 Resend로 자체 발송하는 매직링크(`/api/email/send-link`+`verify-token`, `app/verify.tsx`)를 썼으나, 발신 도메인 구매·DKIM 설정 없이는 실사용이 불가능해(테스트 모드는 계정 소유자 본인에게만 발송) **Firebase 내장 이메일 인증(`email_verified` 클레임)으로 전환했다.** 짝을 이루는 백엔드 변경(PR #26)도 함께 머지돼 **양쪽 전환이 끝난 상태다.**
 
 `register()`가 여전히 게이트를 걸지만(`auth.service.ts`), 이제 확인하는 값이 Redis 마커가 아니라 `FirebaseAuthGuard`가 디코딩한 ID Token의 `email_verified` 클레임이다(`req.user.email_verified`). `/api/email/*` 엔드포인트와 `EmailService`/`MailService`는 백엔드에서 완전히 삭제됐다.
 
@@ -192,31 +209,76 @@ Build로 전환한 지금도 그대로 쓰고 있다. 세션 영속화만
 > ⚠️ Firebase 계정과 백엔드 프로필이 어긋나 고착되는 경우가 있다 —
 > [known-issues.md](./known-issues.md#firebase--백엔드-계정-불일치) 참고.
 
-### Google 로그인 — 임시 비활성화
+### 소셜 로그인 (Google / Apple)
 
-구현(`src/hooks/use-google-login.ts`, `expo-auth-session` generic `useAuthRequest` +
-`GoogleAuthProvider.credential`)은 남아 있지만 `login.tsx`가 호출하지 않고 "준비 중" alert만 띄우는
-스텁(`handleGoogleLogin`)을 노출한다.
+두 경로 모두 Provider에서 자격증명을 받아 Firebase로 교환한 뒤,
+**`hooks/use-social-auth.ts`의 `useFinishSocialLogin`이라는 공통 후처리 한 곳으로 합류**한다.
+버튼별로 갈리는 것은 자격증명을 얻는 방법뿐이고, 그 뒤 분기·정리·라우팅은 전부 여기서 끝난다.
 
-> **현재 상태:** 비활성화 사유였던 Expo Go 제약은 Dev Build 전환으로 해소됐지만 스텁은 아직
-> 그대로다. 즉 아래 설명은 비활성화의 *배경*이고, 지금은 되돌릴 수 있는 상태인데 아직 되돌리지
-> 않은 것이다.
+```
+[Google 또는 Apple 자격증명] → signInWithCredential → useFinishSocialLogin
+                                                          │
+                                    getMe() 200 ─────────→ "/" (기존 유저)
+                                    getMe() 404 → 약관 동의 → /(auth)/complete-profile (신규)
+                                                    └ 거부 → signOut
+```
 
-Google의 OAuth "Web" 클라이언트는 redirect URI로 `http`/`https`만 허용해 커스텀 스킴(`exp://...`)을 거부한다. 따라서 Expo Go 앱으로 실기기/시뮬레이터에서 실행하면 `AuthSession.makeRedirectUri({ scheme: 'b-territory' })`가 `exp://...` 형태가 되어 Google이 `redirect_uri_mismatch`로 거부하는 게 **정상 동작**이다. 예전에 이를 우회하던 Expo `auth.expo.io` 프록시는 최신 `expo-auth-session`에서 제거됐다.
+**이메일 경로와 의도적으로 다른 점 세 가지**가 있고, 셋 다 되돌리면 알려진 버그가 재발한다.
 
-문제는 여기서 그치지 않는다: 실기기(Expo Go)에서 이 mismatch 에러 화면을 X로 닫으면 Auth Session이 비정상 종료되면서 **Expo Go 앱 자체가 꺼지는 문제**가 확인되어, 구글 로그인 버튼을 Apple 로그인과 동일한 스텁으로 임시 전환해뒀다.
+- **`404`를 에러로 보지 않는다.** 이메일 흐름은 `404`에 "이메일/비밀번호를 다시 확인해달라"고
+  안내하는데, 그건 비밀번호 재확인이라는 복구 수단이 있을 때만 의미가 있다. 소셜은 Provider가
+  이미 신원과 이메일 인증을 보장하므로 `404` = 신규 유저로 보고 프로필 완성 화면으로 보낸다.
+- **약관 동의는 인증 *전*이 아니라 신규 유저로 판명된 *뒤에* 요청한다.** 인증 전에는 신규/기존을
+  구분할 수 없어서, 무조건 물으면 이미 동의한 기존 유저도 로그인할 때마다 체크박스를 다시
+  눌러야 한다. 동의 시트의 Promise/resolver 상태만 `hooks/use-social-login-consent.ts`가 들고
+  있고(버튼 연타 시 같은 Promise를 돌려줘 첫 탭이 유실되지 않게 한다), 시트를 그리는 책임은
+  `login.tsx`에 있다.
+- **중간에 실패하면 반드시 `signOut`한다.** 동의 거부·`getMe` 실패 어느 쪽이든 Firebase 세션만
+  고아로 남으면, 이후 "회원가입 하기"가 `use-registration-flow.ts`의 `auth.currentUser` 기반
+  판단 때문에 `register.tsx`를 폼이 아니라 "인증 메일을 확인하세요" 단계로 잘못 연다.
 
-- **지금 검증 가능한 방법**: `npm run web`(`expo start --web`) — redirect URI가 `http://localhost:...`가 되어 Google이 허용. 단 실기기 버튼은 스텁 상태라 알럿만 뜨므로, 실제 로그인을 확인하려면 웹에서 `login.tsx`에 `useGoogleLogin` 호출을 임시로 되돌려야 함
-- **재활성화 방법**: 네이티브 `@react-native-google-signin/google-signin`으로 교체하면서 `login.tsx`의 스텁을 실제 훅 호출로 되돌린다. Dev Build 전환은 이미 끝났으므로 지금 착수 가능하다
-- **설정 필요(재활성화 시)**: Firebase 콘솔 → Authentication → Sign-in method → Google 활성화 시 자동 발급되는 **Web client ID**를 `.env`의 `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`에 채워야 함(콘솔 접근 권한이 있는 사람이 직접)
+`complete-profile.tsx`는 이 흐름 전용 화면이라 계정 생성·이메일 인증 단계가 없고
+`registerUser()` 한 번만 남는다. 여기로 보낼 때 `push`가 아니라 `replace`를 쓰는 이유는, 백
+제스처로 로그인 화면에 돌아가는 순간 "세션은 있는데 미가입" 상태가 다시 만들어지기 때문이다.
 
-## Apple Sign In
+#### Google — 동작 중
 
-> ⚠️ 골격만 구현됨 — `src/components/auth/AppleSignInButton.tsx`는 iOS에서만 렌더링되고, 탭하면 "준비 중" alert만 뜨는 비활성 버튼. App Store 심사 Guideline 4.8(소셜 로그인 제공 시 Apple 로그인도 필수)에 대비한 자리만 마련해둔 상태.
+`hooks/use-google-login.ts`가 네이티브 `@react-native-google-signin/google-signin`을 쓴다
+(`GoogleSignin.signIn()` → `GoogleAuthProvider.credential`). `login.tsx`가 실제로 호출하며
+스텁이 아니다.
 
-네이티브 모듈(`expo-apple-authentication`)이 필요하다. Dev Build로는 이미 전환했고
-`app.config.js`에 `ios.bundleIdentifier`(`com.bterritory.app`)도 설정돼 있어 전제 조건 자체는
-갖춰졌다. 다만 `eas.json`의 `development`/`preview` 프로필엔 `android` 하위 설정만 있고 iOS 전용
-설정(credentials 등)이 없어 iOS 빌드를 한 번도 돌리지 않았다.
+- **설정 필요**: `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`(Firebase 콘솔에서 Google Provider 활성화 시
+  자동 발급되는 Web client ID). iOS는 `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`와 그것을 뒤집은
+  `EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME`이 추가로 필요하다 — [setup.md](./setup.md#환경-설정) 참고.
+- **버튼 활성화 조건은 `isGoogleLoginConfigured()` 한 줄이 정한다** — `webClientId`가 있고,
+  플랫폼이 웹이 아니고, iOS라면 `iosClientId`도 있을 것. 하나라도 빠지면 버튼이 눌리지 않는다.
+  네이티브 SDK가 로그인 시도 시점에 던지는 것보다 앞에서 막으려는 것이라, **버튼이 회색이면
+  콘솔 장애가 아니라 `.env`부터 확인한다.**
+- **웹(`npm run web`)에서는 아예 활성화되지 않는다.** `google-signin`이 웹에서는 스텁만 제공해
+  `signIn()`이 항상 거부되기 때문에, 위 조건이 `platformOS !== 'web'`으로 미리 잘라낸다. 웹은
+  지도(네이티브 모듈)도 못 쓰므로 로그인 검증 용도로만 쓰던 경로였고, Dev Build 전환 후로는
+  실기기/에뮬레이터에서 확인한다.
 
-남은 작업은 [known-issues.md](./known-issues.md#apple-sign-in) 참고.
+> 예전엔 `expo-auth-session`의 generic OAuth 플로우를 썼다. Google의 OAuth "Web" 클라이언트가
+> redirect URI로 `http`/`https`만 허용해 Expo Go의 `exp://...` 스킴을 `redirect_uri_mismatch`로
+> 거부했고(우회하던 `auth.expo.io` 프록시는 제거됨), 그 에러 화면을 닫으면 Expo Go 앱 자체가
+> 꺼지는 문제까지 있어 한동안 스텁으로 막아뒀던 이력이 있다. Dev Build + 네이티브 SDK로 옮기며
+> 원인이 통째로 사라졌다. `package.json`에 `expo-auth-session`이 남아 있지만 쓰는 곳은 없다.
+
+#### Apple Sign In
+
+> **구현은 끝났고 노출만 막혀 있다.**
+
+`components/auth/AppleSignInButton.tsx`는 스텁이 아니다. `expo-apple-authentication`의
+네이티브 버튼을 그리고 `signInAsync({ requestedScopes: [FULL_NAME, EMAIL] })` →
+`OAuthProvider('apple.com').credential` → 위 공통 후처리까지 실제로 연결돼 있다(테스트도 있다).
+
+**다만 `login.tsx`가 이 버튼을 렌더하지 않는다.** `app.config.js`의 `ios` 블록에
+`usesAppleSignIn: true`가 빠져 있어 entitlement 없이 `signInAsync()`가 모든 기기에서
+`ERR_REQUEST_NOT_HANDLED`로 실패하기 때문이다. 컴포넌트와 테스트는 그대로 두고 노출만 막아둔
+상태이며, `login.tsx`에 그 사유가 주석으로 남아 있다.
+
+다시 연결하려면 `app.config.js` 수정 + iOS 실기기 검증이 필요하다 —
+[known-issues.md](./known-issues.md#apple-sign-in) 참고. App Store 심사 Guideline 4.8이
+"소셜 로그인을 제공하면 Apple 로그인도 제공"을 요구하므로, **Google 로그인이 켜져 있는 지금
+상태로 iOS에 제출하면 리젝 사유가 된다.**

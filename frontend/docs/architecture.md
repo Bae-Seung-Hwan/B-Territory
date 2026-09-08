@@ -8,8 +8,9 @@
 | `zustand` | 전역 상태 관리 |
 | `@tanstack/react-query` | 서버 상태 캐싱 |
 | `axios` | HTTP 클라이언트 (백엔드 API 요청) |
-| `firebase` | Authentication (이메일/비밀번호, Google, Apple 골격) |
-| `expo-auth-session` | Google OAuth 로그인 흐름 |
+| `firebase` | Authentication (이메일/비밀번호, Google, Apple) |
+| `@react-native-google-signin/google-signin` | Google 네이티브 로그인 |
+| `expo-apple-authentication` | Apple 로그인 (구현 완료, 현재 미노출 — [integrations.md](./integrations.md#apple-sign-in)) |
 | `@react-native-async-storage/async-storage` | Firebase Auth 세션 영속화 |
 | `socket.io-client` | 실시간 WebSocket |
 | `expo-location` | GPS 위치 추적 |
@@ -29,12 +30,13 @@
 | 디렉터리 | 책임 |
 |---|---|
 | `app/` | expo-router 파일 기반 라우트. `(auth)`/`(main)` 두 그룹과 루트 레이아웃 |
-| `api/` | axios 기반 순수 API 함수 (`auth` · `spots` · `districts` · `claims`) |
-| `lib/` | 앱 전역 인프라 — axios 인스턴스, Firebase 초기화, React Query 클라이언트/키 팩토리, 에러 매핑 |
-| `hooks/` | 화면이 쓰는 로직 단위. 인증·가입 상태기계·위치·점령 시도 |
+| `api/` | axios 기반 순수 API 함수 (`auth` · `account` · `spots` · `districts` · `claims` · `missions` · `moderation` · `ranking`) |
+| `lib/` | 앱 전역 인프라 — axios 인스턴스, Firebase 초기화, React Query 클라이언트/키 팩토리, 에러 매핑, 방문 창 캐시 |
+| `hooks/` | 화면이 쓰는 로직 단위. 인증·가입 상태기계·소셜 로그인·위치·점령 시도·미션·채팅·랭킹·신고차단 |
 | `providers/` | Context 두 개 — Firebase 세션(`AuthProvider`), 소켓(`SocketProvider`) |
-| `components/` | `ui/`(공용) · `map/`(지도 조립) · `overlay/`(전역 오버레이) · `auth/` |
-| `store/` | zustand. 게임 상태와 오버레이 표시 상태 **둘뿐** |
+| `components/` | `ui/`(공용) · `map/`(지도 조립) · `overlay/`(전역 오버레이 + `minigames/`) · `auth/` · `battle/` · `chat/` |
+| `store/` | zustand 네 개 — 게임(`useGameStore`) · 오버레이(`useOverlayStore`) · 근처 상대(`useBattleStore`) · 채팅(`useChatStore`) |
+| `legal/` | 약관·방침 **본문**과 `version`. 화면 라벨은 `i18n/`, 법적 본문은 여기 — 규칙은 아래 참고 |
 | `constants/` | 좌표·코드표·카테고리·미션 정의 등 하드코딩 데이터의 단일 소스 |
 | `utils/` | 순수 계산 — 좌표/거리, 줌 임계, 폴리곤 색 배정 |
 | `i18n/` | ko/en 번역 세트, `useTranslation()`, 런타임 로케일 전환 |
@@ -42,13 +44,26 @@
 
 ### 화면 구성
 
-`(main)`은 5탭이고, 이 중 **`map`만 기능이 들어가 있다.** `profile`은 프로필 카드와 로그아웃까지
-있고, 나머지 3개(`spots` · `chat` · `ranking`)는 텍스트만 있는 동일 구조의 플레이스홀더다. 실제
-기능으로 교체될 예정이라 공용 컴포넌트로 추상화하지 않고 각 파일을 그대로 두었다.
+`(main)`은 5탭이고 **전부 기능이 들어가 있다.**
 
-`(auth)`는 `onboarding` · `login` · `register` 3개다. `register.tsx`는 렌더링만 담당하고 가입
-상태기계는 `hooks/use-registration-flow.ts`에 있다 —
-[integrations.md의 "이메일 인증"](./integrations.md#이메일-인증-firebase-내장) 참고.
+| 탭 | 내용 |
+|---|---|
+| `map` | 지도·마커·구 폴리곤, 관광지 상세 시트(점령 시도 + 리뷰 미션), HUD |
+| `battle` | `useBattleStore`가 들고 있는 근처 상대 목록. 행마다 결투 신청(`BattleEnemyRow`) |
+| `chat` | 같은 팀 실시간 채팅(`use-chat-socket.ts`), 메시지 길게 눌러 신고·차단 |
+| `ranking` | 시즌 팀·개인 랭킹(`use-season-ranking.ts`) |
+| `profile` | 프로필 카드, 로그아웃, 계정 삭제, 차단 목록(`profile/blocked-users.tsx`) |
+
+> 한때 있던 `spots` 탭은 지도 상세 시트가 같은 역할을 하게 되면서 삭제됐다. 문서에 남아 있던
+> "플레이스홀더 3개(`spots`·`chat`·`ranking`)" 서술도 이때 함께 수명이 끝났다.
+
+`(auth)`는 `onboarding` · `login` · `register` · `complete-profile` 4개다.
+
+- `register.tsx`는 렌더링만 담당하고 가입 상태기계는 `hooks/use-registration-flow.ts`에 있다 —
+  [integrations.md의 "이메일 인증"](./integrations.md#이메일-인증-firebase-내장) 참고.
+- `complete-profile.tsx`는 **소셜 로그인 전용**이다. Google/Apple 계정은 이미 인증된 이메일을
+  들고 오므로 이메일 인증 단계가 필요 없고, 백엔드 프로필에 없는 닉네임·국적만 마저 받는다 —
+  [integrations.md의 "소셜 로그인"](./integrations.md#소셜-로그인-google--apple) 참고.
 
 ### 코드만 봐서는 알기 어려운 것들
 
@@ -61,8 +76,22 @@
   누르러 나갔다가 앱이 꺼져도 닉네임/국적을 다시 입력하지 않게 하려는 것이다. 비밀번호는 담지
   않으므로 복원 후 다시 입력해야 한다.
 - **`components/map/BusanMapView.tsx`는 controlled 컴포넌트다.** `useSocket()`이나 스토어를 직접
-  구독하지 않고 prop만 받는다 —
+  구독하지 않고 prop만 받는다. 다만 **자식인 `DistrictPolygons`는 예외적으로 `useGameStore`를 직접
+  구독**해 이번 주 수도 강조 링을 그린다 — 부모에 prop을 늘리지 않는다는 규칙을 지키면서 지도
+  데이터를 붙이는 방식이고, 점령 색상도 같은 경로로 붙일 자리다 —
   [integrations.md의 "확장 포인트"](./integrations.md#확장-포인트-점령-시각화--실시간-소켓) 참고.
+- **`useGameStore`의 `occupiedDistricts`·`teamScores`는 아직 아무도 채우지 않는다.** 세터는 있지만
+  호출부가 없어(`setCapitalDistrict`만 `map/index.tsx`가 호출한다) 값이 늘 비어 있다. 그래서
+  `MapHUD`의 "1위팀" 칸은 **현재 항상 비어 있고**, 수도 칸만 실제로 동작한다. HUD가 안 뜬다는
+  제보를 받으면 컴포넌트가 아니라 이 스토어가 비어 있는지를 먼저 본다.
+- **"미션"이라는 이름이 서로 다른 두 곳에 있다.** `constants/claimMissions.ts`의 *점령 미션*은
+  `POST /api/claims/visit`으로 지점을 점령하는 행위(`GPS_VISIT` 하나)이고,
+  `api/missions.ts`의 *관광지 미션*은 체크인 후 별점·후기를 남겨 점수를 얻는 별개 기능이다.
+  전자는 [decisions/0002](./decisions/0002-claim-mission-extensibility.md)가 다루는 확장 구조이고,
+  후자는 그 구조를 쓰지 않는다.
+- **법적 본문은 `src/legal/`, 화면 라벨은 `src/i18n/`.** 조항이 길어 UI 문구와 섞으면 관리가 안
+  되고, 문서의 `version`을 본문과 같은 파일에 둬야 조항만 고치고 버전을 안 올리는 실수를 막을 수
+  있다. 동의 항목을 추가할 땐 `legal/index.ts`의 `LEGAL_DOCUMENT_KEYS`도 함께 고쳐야 한다.
 - **`constants/busan.ts`** — 지도 드래그 제한과 "현재 위치가 부산 범위 밖인지" 판정이 같은 좌표
   기준을 써야 하므로 단일 소스로 둔다.
 - **`constants/theme.ts`는 팔레트를 두 벌 들고 있다.** `Colors`는 Expo 기본 템플릿의 라이트/다크
@@ -76,7 +105,14 @@
   환산한다. 경도는 위도에 따라 실거리가 달라지지만 부산처럼 좁은 범위(34.8~35.4°N)에서는 위도
   기준 근사로 충분하다.
 - **`components/` 루트의 `themed-text` · `themed-view` · `hint-row` · `animated-icon(.web)` ·
-  `external-link` · `web-badge`** 는 Expo 템플릿에서 딸려온 공용 요소다.
+  `external-link` · `web-badge`와 `components/ui/collapsible.tsx`는 Expo 템플릿 잔여물이고 지금은
+  어느 화면도 쓰지 않는다.** 서로만 참조하다가 자기 테스트에서 끝나는 닫힌 묶음이라
+  (`app/` 전체에서 참조 0건) 실질적으로 죽은 코드다. "공용 요소"로 읽고 새 화면에서 가져다
+  쓰지 말 것 — 게임 화면은 `constants/theme.ts`의 `BrandColors`와 `components/ui/`를 쓴다.
+  삭제 후보는 [known-issues.md](./known-issues.md#정리-대상) 참고.
+- **`components/LocationBroadcaster.tsx`는 화면이 아니라 앱 루트에 상주하는 부수효과 컴포넌트다.**
+  아무것도 렌더하지 않고 좌표를 `location:update`로 내보내기만 한다. 특정 탭에 묶지 않은 이유는
+  [integrations.md의 "안정성 관련 구현 메모"](./integrations.md#안정성-관련-구현-메모) 참고.
 
 ## 상태 관리 설계
 

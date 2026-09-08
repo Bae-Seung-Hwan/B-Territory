@@ -8,6 +8,11 @@
 > 바뀌어도 체크박스가 따라가지 않아 실제로 어긋났다(구현이 끝난 "이어서 가입"이 미완료로
 > 남아 있고, 같은 문서의 다른 절은 "해결됨"이라 적혀 있었다). 한곳에 모아둔 지금 상태도
 > 임시방편이고, 제대로 된 자리는 이슈 트래커다.
+>
+> 그 뒤로도 같은 일이 반복됐다 — 소켓 배선·팀 채팅·구글 로그인이 전부 구현된 뒤에도 이 문서엔
+> "통째로 미구현"으로 남아 있었고, 소켓 재연결 항목은 `integrations.md`가 "그렇게 하지 말라"고
+> 적어둔 방식(`connect_error`마다 강제 토큰 갱신 + 직접 `connect()`)을 지시하고 있었다.
+> **완료된 항목은 지우고, 남은 것만 남긴다** — 완료 표시(`[x]`)로 쌓아두면 다시 같은 상태가 된다.
 
 ## 알려진 결함
 
@@ -46,6 +51,28 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
   존재하는지는 확인하지 않는다. 그래서 계정이 삭제되기 전 이미 발급된 ID Token은 만료 시간
   (최대 1시간)까지는 계속 유효한 것으로 통과된다.
 
+### 생성된 expo-router 타입이 낡으면 `tsc`가 실패한다
+
+`npx tsc --noEmit`이 아래처럼 **실제 코드와 무관한 라우트 타입 에러**로 실패할 수 있다.
+
+```
+src/hooks/use-social-auth.ts(72,22): error TS2345:
+  Argument of type '"/(auth)/complete-profile"' is not assignable to parameter of type ...
+```
+
+`tsconfig.json`이 `include`에 넣는 `.expo/types/router.d.ts`는 expo-router가 **파일 기반 라우트를
+훑어 생성**하는 산출물인데, `.expo/`가 `.gitignore` 대상이라 저장소에 없고 dev 서버를 띄우거나
+prebuild를 돌릴 때만 갱신된다. 그래서 새 라우트 파일이 추가된 브랜치를 **받아만 놓고 앱을 한 번도
+띄우지 않으면**, 낡은 목록에 그 라우트가 없어 `router.replace('/(auth)/complete-profile')` 같은
+호출이 타입 에러로 잡힌다.
+
+- 코드 문제가 아니므로 **호출부를 고치지 말 것.** `npx expo start`를 한 번 띄우거나
+  `npx expo prebuild -p android`를 돌리면 재생성되면서 사라진다.
+- CI(`frontend-ci.yml`)는 이 산출물이 **아예 없는** 상태로 `tsc`를 돌린다(체크아웃 후 생성하는 건
+  `expo-env.d.ts`뿐이다). 파일이 없으면 라우트 타입이 느슨해져 같은 코드가 그대로 통과한다 —
+  실제로 이 파일만 치우고 돌려보면 클린하다. 즉 **로컬에만 낡은 파일이 남아 있을 때 재현되는
+  종류**라, CI 통과와 로컬 실패가 동시에 성립하는 게 정상이다.
+
 ## 미해결 설계 질문
 
 ### 콜드부트 중 `(main)` 딥링크 진입
@@ -68,60 +95,56 @@ Firebase Auth 계정과 백엔드 `users` 테이블 row는 하나의 트랜잭�
 
 ## 남은 작업
 
-### 실시간 통신 (Socket.io)
+### 결투 · 실시간
 
-연결·이벤트 배선이 통째로 미구현이다. 현재 상태는
+연결·이벤트 배선은 완료됐다. 계약과 현재 동작은
 [integrations.md의 "실시간 통신"](./integrations.md#실시간-통신-socketio) 참고.
 
-- [ ] 소켓 연결 시작 시점 결정(로그인 직후 vs 지도 화면 진입 시) 및 `SocketProvider`에
-      `connect()`/재연결·에러 처리 구현
-  - **`connect_error` 핸들러는 선택이 아니라 필수다.** 백엔드 인증이 라이프사이클 훅에서
-    네임스페이스 미들웨어로 옮겨가면서(PR #34), 인증 실패가 전송 계층 끊김이 아니라
-    `CONNECT_ERROR` 패킷으로 온다. socket.io-client는 이 패킷을 받으면 `socket.destroy()`를
-    호출해 재접속 구독을 해제하므로 **자동 재접속이 돌지 않는다**(`socket.active === false`).
-    Firebase ID 토큰은 1시간 만료라, 만료된 토큰으로 재접속하는 순간 소켓이 영구히 죽는다.
-  - 대응: `socket.on('connect_error', ...)`에서 `getIdToken(true)`로 토큰을 갱신해
-    `socket.auth.token`에 다시 넣고 `socket.connect()`를 **명시적으로** 호출한다.
-    무한 재시도 방지를 위해 백오프·시도 횟수 제한을 함께 둔다.
-  - 서버는 거부 사유를 `'unauthorized'` 고정 문구로만 보낸다(내부 에러 노출 방지). 만료
-    토큰인지 미가입 유저인지 구분할 수 없으므로, 갱신 후 재시도해도 계속 거부되면 로그인
-    화면으로 보내는 흐름이 필요하다.
-- [ ] 팀 채팅 배선 — `chat` 탭이 플레이스홀더다. 백엔드는 `/chat` 네임스페이스로 완성돼 있고
-      신고·차단 API(`POST /api/reports`, `POST|DELETE /api/blocks/:userId`)도 있다.
-      **UGC라 신고·차단 UI가 함께 있어야 Apple 심사(가이드라인 1.2)를 통과한다** —
-      `docs/community-policy.md` 참고.
-- [ ] `useLocation()`이 지도 화면에서 얻는 좌표를 `location:update`로 보내는 주기/쓰로틀링 결정
-      (훅 연결 자체는 완료)
-- [ ] `encounter:detected` 등 수신 이벤트를 `useOverlayStore`/`useGameStore`에 연결하는 지점 설계
-      (Provider 레벨 일괄 배선 권장 — PR #17 리뷰 코멘트 참고)
-- [ ] `DuelRequest`/`MiniGame`의 버튼 액션(`handleAccept` 등)을 실제 `duel:accept`/`duel:result`
-      소켓 emit으로 교체
+- [ ] `DuelPending`에 취소 수단이 없다 — 백엔드에 `duel:cancel`이 없어 30초 자동 만료에 의존한다.
+      취소를 넣으려면 서버 이벤트가 먼저 필요하므로 백엔드 협의 시 함께 논의한다.
 
 ### 인증
 
-- [ ] 구글 로그인 재활성화 — `login.tsx`의 "준비 중" 스텁(`handleGoogleLogin`)을 `useGoogleLogin`
-      실제 호출로 되돌리기. Dev Build 전환이 끝나 더 이상 막힌 상태가 아니다
-      ([integrations.md](./integrations.md#google-로그인--임시-비활성화) 참고)
-- [ ] 이메일 인증 전환 e2e 검증 — worktree로 백엔드 PR #26을 별도로 띄워 실제 가입→인증→완료
-      흐름을 한 번도 끝까지 돌려보지 않았다
+- [ ] 이메일 인증 e2e 검증 — 실제 기기에서 가입 → 인증 메일 클릭 → 완료까지 한 번도 끝까지
+      돌려본 적이 없다(단위 테스트만 있다)
 - [ ] 위 "B. 백엔드 프로필은 있는데 Firebase 계정 없음" 복구 — 유령 유저 정리 배치 또는 재가입 시
       안내 개선
 - [ ] 위 "콜드부트 중 `(main)` 딥링크 진입" 동작 검증 및 설계 결정
 
 ### Apple Sign In
 
-골격만 있고 `eas.json`의 각 프로필에 iOS 전용 설정(credentials 등)이 없어 iOS 빌드를 한 번도
-돌리지 않았다. 아래는 iOS 빌드 파이프라인을 세우는 시점에 함께 진행한다.
+**구현은 끝났고 노출만 막혀 있다.** `AppleSignInButton.tsx`는 `signInAsync` →
+`OAuthProvider('apple.com').credential` → 소셜 로그인 공통 후처리까지 실제로 연결돼 있으며
+테스트도 있다. 막아둔 이유와 흐름은
+[integrations.md의 "Apple Sign In"](./integrations.md#apple-sign-in) 참고.
 
-- [ ] `eas.json` 각 프로필에 iOS 빌드 설정 추가
+- [ ] `app.config.js`의 `ios` 블록에 `usesAppleSignIn: true` 추가 — **이게 실제 블로커다.**
+      entitlement 없이는 `signInAsync()`가 모든 기기에서 `ERR_REQUEST_NOT_HANDLED`로 실패한다
+- [ ] `eas.json` 각 프로필에 iOS 빌드 설정(credentials 등) 추가 — iOS 빌드를 한 번도 돌린 적이 없다
 - [ ] Apple Developer 계정에서 Sign in with Apple capability 활성화
-- [ ] `npx expo install expo-apple-authentication`
 - [ ] Firebase 콘솔에서 Apple Provider 활성화
-- [ ] `AppleSignInButton`의 stub `onPress`를 `AppleAuthentication.signInAsync(...)` →
-      `OAuthProvider('apple.com').credential(...)` → Google과 동일한 프로필 체크/가입 플로우로 교체
+- [ ] iOS 실기기 검증 후 `login.tsx`의 버튼 노출 되돌리기
+
+> ⚠️ **우선순위 주의**: Google 로그인이 이미 켜져 있으므로, App Store 심사 가이드라인 4.8에 따라
+> **이 목록을 끝내기 전에는 iOS 제출이 리젝된다.** Android 출시에는 영향이 없다.
 
 ### 지도
 
-- [ ] `useGameStore`의 `occupiedDistricts`가 채워지면 `DistrictPolygons`가 그 스토어를 직접
-      구독하도록 만들어 폴백 팔레트 대신 국적/팀별 색상으로 교체(`BusanMapView`에 신규 prop을
-      추가하는 방향이 아니다) ([integrations.md](./integrations.md#확장-포인트-점령-시각화--실시간-소켓) 참고)
+- [ ] `useGameStore`의 `occupiedDistricts`를 채우는 경로가 없다(세터만 있고 호출부가 없다).
+      채워지면 `DistrictPolygons`가 폴백 팔레트 대신 국적/팀별 색상을 쓰게 한다 — 수도 강조가
+      이미 같은 방식(자식이 스토어를 직접 구독)으로 붙어 있으므로 그 패턴을 따르면 되고,
+      `BusanMapView`에 신규 prop을 추가하는 방향이 아니다
+      ([integrations.md](./integrations.md#확장-포인트-점령-시각화--실시간-소켓) 참고)
+- [ ] 같은 이유로 `MapHUD`의 "1위팀" 칸이 항상 비어 있다(`teamScores`도 채우는 곳이 없다)
+
+## 정리 대상
+
+기능에 영향은 없지만 남아 있으면 오해를 부르는 것들.
+
+- [ ] **Expo 템플릿 잔여 컴포넌트** — `components/`의 `themed-text` · `themed-view` · `hint-row` ·
+      `animated-icon(.web)`(+`animated-icon.module.css`) · `external-link` · `web-badge`와
+      `components/ui/collapsible.tsx`. `app/` 어디서도 참조하지 않고 서로만 참조하다 자기
+      테스트에서 끝난다. 지우려면 함께 딸린 테스트(`hint-row.test.tsx`·`collapsible.test.tsx`)도
+      같이 정리해야 한다
+- [ ] **`expo-auth-session` 의존성** — Google 로그인이 네이티브 SDK로 옮겨가면서 실사용처가
+      사라졌다. `package.json`에만 남아 있다

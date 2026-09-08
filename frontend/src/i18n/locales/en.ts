@@ -24,21 +24,19 @@ export const en: Translations = {
     terms: {
       title: 'Agree to Terms',
       subtitle: 'Please agree to the terms below to sign up',
-      agreeAll: 'Agree to all',
+      // ko.ts와 같은 이유 — 이 토글의 범위에 연령 확인이 포함된다는 것을 라벨이 밝힌다.
+      agreeAll: 'Agree to all (including age confirmation)',
       serviceTerms: '(Required) Terms of Service',
       privacyPolicy: '(Required) Privacy Policy',
+      locationTerms: '(Required) Location-Based Services Terms',
+      ageConfirm: '(Required) I am 14 years of age or older',
       continue: 'Agree and Continue',
       viewLabel: 'View',
+      // The full clauses live in src/legal/, not here - they are versioned alongside each
+      // document. Only on-screen labels belong in this file.
       serviceTermsTitle: 'Terms of Service',
-      serviceTermsBody:
-        'Section 1 (Purpose) These terms govern the relationship between the sky and the user regarding the act of counting clouds.\n\n' +
-        'Section 2 (Definitions) In these terms, "cat" refers to a concept that only exists on Tuesdays, and "cloud" means any shape the user chooses to imagine.\n\n' +
-        'Section 3 (Effect) This document is placeholder text with no real legal effect and will be replaced with the final terms.',
       privacyPolicyTitle: 'Privacy Policy',
-      privacyPolicyBody:
-        'Section 1 (Collected Data) This service does not collect information about purple feelings, Thursday moods, or a nonexistent sixth finger.\n\n' +
-        'Section 2 (Retention) Collected data is retained until a rainbow appears, which is not an actual duration.\n\n' +
-        'Section 3 (Effect) This document is placeholder text with no real legal effect and will be replaced with the final privacy policy.',
+      locationTermsTitle: 'Location-Based Services Terms',
     },
     register: {
       title: 'Sign Up',
