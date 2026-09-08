@@ -90,6 +90,19 @@
 >
 > Apple 로그인을 켜는 시점에 **개인정보처리방침 제1조 1호(수집 경로)와 제6조(위탁)에 Apple을 함께 추가**해야 한다. 지금 두 조항에 Apple이 없는 것은 누락이 아니라 "미구현 기능은 넣지 않는다"는 규칙을 따른 것이다.
 
+### 3.1 스토어에 등록할 공개 URL
+
+스토어는 개인정보처리방침과 계정 삭제 안내를 **앱 내 텍스트와 별개로** 웹페이지로 요구한다. 손으로 다시 쓰면 동의를 받은 문서와 공개된 문서가 갈라지므로, `scripts/build-legal-pages.mjs`가 `frontend/src/legal/`에서 **생성**한다(개정일도 같은 값이 실린다). 배포는 `.github/workflows/legal-pages.yml`이 develop 푸시 시 GitHub Pages로 한다.
+
+| 용도 | URL |
+|---|---|
+| 개인정보처리방침 | `https://bae-seung-hwan.github.io/B-Territory/privacy.html` |
+| 계정 삭제 요청 | `https://bae-seung-hwan.github.io/B-Territory/account-deletion.html` |
+| 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/terms.html` |
+| 위치기반서비스 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/location-terms.html` |
+
+영문판은 같은 이름에 `.en.html`이다. 리포지터리 **Settings → Pages → Source를 "GitHub Actions"** 로 한 번 설정해야 워크플로가 배포할 수 있다.
+
 ## 4. 위치정보 이용·제공사실 확인자료 (법 제16조 2항)
 
 위치정보법 제16조 2항은 이용자의 위치정보를 **전송받을 때마다** 그 사실을 위치정보시스템에 자동으로 기록하고 6개월 이상 보존하도록 요구한다. 좌표 자체를 저장하라는 요구가 아니라 "이용한 사실"의 기록이므로, 좌표를 저장하지 않는 현재 구조에서도 별도로 이행해야 한다.
@@ -211,6 +224,6 @@ Apple(가이드라인 5.1.1(v))·Google Play 모두 **계정을 생성하는 앱
 
 - [ ] 위치기반서비스사업자 신고 실제 필요 여부 및 절차 확인 (진행 중). 첨부서류 초안은 `docs/lbs-service-description.md`
 - [ ] 세 문서의 **변호사 검토** — 조항은 코드가 실제로 하는 일에 맞췄으나 검토를 거쳐야 최종본이다. 각 파일 상단 주석에 명시해 두었다
-- [ ] 개인정보처리방침 **공개 URL 호스팅** — 스토어 심사에 앱 내 텍스트와 별개로 웹페이지가 필요하다(3장)
+- [x] 개인정보처리방침·계정 삭제 안내 **공개 URL 호스팅** — GitHub Pages(3장). 본문을 `frontend/src/legal/`에서 생성하므로 앱과 웹이 갈라지지 않는다
 - [ ] Google Maps SDK 이용약관상 고지 의무 확인 (예전 항목은 카카오맵 기준이었다 — 지도는 `PROVIDER_GOOGLE`로 바뀌었고 카카오 SDK 의존성은 없다)
 - [ ] 해외 이전 고지 필요 여부 — Firebase·AWS 리전 기준

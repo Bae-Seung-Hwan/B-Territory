@@ -1,0 +1,55 @@
+name: Legal Pages
+
+# 스토어 심사에 필요한 공개 URL(개인정보처리방침·계정 삭제 안내)을 GitHub Pages로 낸다.
+# 본문은 frontend/src/legal/에서 생성하므로, 조항을 고치면 배포된 페이지도 함께 바뀐다.
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'frontend/src/legal/**'
+      - 'scripts/build-legal-pages.mjs'
+      - '.github/workflows/legal-pages.yml'
+  # 조항을 안 고쳤는데 페이지만 다시 올리고 싶을 때(호스팅 설정 변경 등) 손으로 돌린다.
+  workflow_dispatch: {}
+
+# 동시에 두 번 배포되면 Pages가 중간 상태로 남을 수 있어 직렬화한다.
+concurrency:
+  group: legal-pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      # 생성기가 프론트엔드의 로컬 typescript로 legal/만 떼어 컴파일한다.
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build legal pages
+        run: node scripts/build-legal-pages.mjs
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

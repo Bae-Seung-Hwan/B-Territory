@@ -4,6 +4,10 @@ node_modules/
 # 빌드 결과물
 dist/
 *.tsbuildinfo
+# 법적 문서 정적 페이지 — scripts/build-legal-pages.mjs가 만들고 CI가 배포한다.
+# 커밋하면 조항과 생성물이 갈라질 수 있어(둘 중 하나만 고친 커밋) 산출물은 두지 않는다.
+web/
+.legal-build/
 
 # 환경변수 (절대 커밋 금지!)
 .env
