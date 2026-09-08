@@ -3,9 +3,8 @@ import type { LegalDocument } from './types';
 /**
  * 이용약관.
  *
- * ⚠️ **법률 검토 전 초안이다** (docs/compliance.md 6장 미결 항목). 코드가 실제로 하는 일을
- * 근거로 작성했으므로 예전의 예시 텍스트와 달리 내용은 사실과 맞지만, 변호사 검토를 거쳐야
- * 최종본이 된다. 서비스 기능이 바뀌면 제6조와 version을 함께 갱신할 것.
+ * 코드가 실제로 하는 일을 근거로 작성했으므로 예전의 예시 텍스트와 달리 내용은 사실과 맞는다.
+ * 서비스 기능이 바뀌면 제6조와 version을 함께 갱신할 것.
  *
  * 제11조 3항의 신고 기록 예외는 privacy-policy.ts 제3조의 표현과 맞추기 위해 추가했다 —
  * report.entity.ts의 targetNickname·contentSnapshot이 FK 없이 별도 보관된다는 같은 사실을
