@@ -34,7 +34,7 @@
 - Apple App Store, Google Play 심사 통과에 필수. 앱 내 링크 + 스토어 등록 정보 URL 둘 다 필요.
 - 포함해야 할 항목: 수집 항목(위 표 기준), 수집 목적, 제3자 제공·위탁(Google/Firebase Authentication, Amazon Web Services, 앱에 내장한 Google Maps SDK), 보관 기간, 해외 이전 고지(전세계 확장 시), 이용자 권리(삭제 요청 등), 아동 개인정보 처리 여부.
 - 백그라운드 위치를 실제로 켜는 시점에 Apple은 별도의 정확한 목적 문구(`NSLocationAlwaysAndWhenInUseUsageDescription`)를, Google Play는 "민감한 권한(백그라운드 위치)" 심사 양식 제출을 요구함 — 현재는 포그라운드 권한만 쓰므로 아직 해당 없음.
-- **조항 초안 작성 완료**: `frontend/src/legal/privacy-policy.ts`. 본문은 i18n locale이 아니라 `src/legal/`에 두고 `version`(개정일)을 같은 파일에 둔다 — 조항만 고치고 버전을 안 올리는 실수를 막기 위함이다.
+- **조항 초안 작성 완료**: `frontend/src/legal/privacy-policy.ts`. 본문은 i18n locale이 아니라 `src/legal/`에 두고 `version`(개정일)을 같은 파일에 둔다 — 조항만 고치고 버전을 안 올리는 실수를 막기 위함이다. 법률 검토는 아직 남아 있다(6장).
 
 ### 2.2 이용약관 (Terms of Service) — 사실상 표준
 - 스토어 필수 항목은 아니지만 사용자 행위 규칙(GPS 스푸핑, 어뷰징 금지 등 게임 특성상 중요), 계정 정지/해지 사유, 콘텐츠 소유권, 면책조항, 서비스 중단 관련 조항 포함.
@@ -103,7 +103,9 @@
 
 영문판은 같은 이름에 `.en.html`이다.
 
-> ⚠️ **리포지터리 Settings → Pages → Source를 "GitHub Actions"** 로 한 번 설정해야 워크플로가 실제로 배포한다. **그 전까지 위 URL은 전부 404**이므로 스토어에 등록하기 전에 직접 열어 확인할 것.
+> Pages 설정(Settings → Pages → Source = "GitHub Actions")은 마쳤고, 위 4개와 영문판·목차까지 생성되는 10개 페이지 전부 200인 것을 확인했다(2026-09-08).
+>
+> 조항을 고친 뒤에는 **배포 워크플로가 끝났는지 확인할 것.** 배포가 실패하면 앱은 새 조항, 공개 URL은 옛 조항인 채로 갈라진다 — 생성기를 둔 이유가 그 상태를 막기 위해서다. PR 단계에서는 `legal-pages.yml`의 `verify` 잡이 생성기를 미리 돌려본다.
 
 ## 4. 위치정보 이용·제공사실 확인자료 (법 제16조 2항)
 
@@ -239,6 +241,7 @@ Apple(가이드라인 5.1.1(v))·Google Play 모두 **계정을 생성하는 앱
 - [x] 탈퇴 보관 **구현** — `withdrawn_accounts`/`consent_archives` + 신고 연결 복원 + 6개월 파기 잡(5.1)
 - [x] **"운영 데이터베이스와 분리" 표현 정정** — 조항이 별도 **데이터베이스**를 약속했는데 구현은 같은 Postgres 안의 전용 **테이블**이다. `FK_reports_withdrawn_target`이 걸려 있고 Postgres는 DB를 건너 FK를 걸 수 없으므로, 그 FK의 존재 자체가 같은 DB라는 증명이다. 조항을 구현에 맞춰 "운영에 사용하는 표에서 분리한 전용 보관 표"로 고쳤다(방침 제3조 3항·제9조 4항, 약관 제11조 2항). **별도 DB로 분리하는 안은 택하지 않았다** — 지금 규모에 과하고, 6개월 파기가 FK CASCADE에 기대고 있어 분리하면 그 보증부터 다시 설계해야 한다
 - [x] **제7조 4항(열람·파기 요구)의 실행 경로** — `findByEmail`에 프로덕션 호출부가 없었고 파기는 메서드조차 없어 조항이 거짓이었다. `deleteByEmail`을 추가하고 운영 스크립트(`npm run archive:show` / `archive:erase`)로 잇는다. HTTP로 열지 않은 것은 그대로다 — 이메일만으로 가입·제재 이력이 드러나는 조회라, 서버 접근 권한이 있어야 실행되는 형태가 제9조 4항의 "접근 권한 제한"에도 맞는다
+- [x] **개인정보처리방침·계정 삭제 안내 공개 URL 호스팅** — GitHub Pages 배포 완료(2026-09-08). Settings → Pages → Source를 "GitHub Actions"로 바꾼 뒤 `legal-pages.yml`이 develop 푸시에서 돌아, 3.1의 4개 URL을 포함해 생성되는 10개 페이지 전부 200이다
 - [x] **동의 `version`의 서버측 검증 범위** — **알려진 개정일만 받는다**로 확정(2026-09-08). 서버가 문서별로 현재·지난 개정일을 들고(`ACCEPTED_CONSENT_VERSIONS`) 그 밖의 값은 `CONSENT_VERSION_UNKNOWN`으로 거절한다. 형식만 보면 실재하지 않는 날짜가 "동의했다"는 기록으로 영구히 남는데, append-only라 사후 수정이 불가능해 원장의 목적이 그 행에 대해 성립하지 않기 때문이다. **현재 버전만 받는 안은 택하지 않았다** — 앱 업데이트가 원자적이지 않아 개정 즉시 구버전 설치본 전체의 가입이 막힌다. 대신 **문서 개정 시 백엔드를 먼저 배포**한다. 백엔드 상수와 프론트 `LegalDocument.version`이 어긋나는지는 `consent-document-contract.spec.ts`가 CI에서 대조한다
 
 ### 남은 것 — 코드
@@ -255,6 +258,6 @@ Apple(가이드라인 5.1.1(v))·Google Play 모두 **계정을 생성하는 앱
 ### 남은 것 — 법률·행정
 
 - [ ] 위치기반서비스사업자 신고 실제 필요 여부 및 절차 확인 (진행 중). 첨부서류 초안은 `docs/lbs-service-description.md`
-- [ ] 개인정보처리방침·계정 삭제 안내 **공개 URL 호스팅** — 생성기와 배포 워크플로는 준비됐다(3.1). **리포지터리 Settings → Pages → Source를 "GitHub Actions"로 바꾸기 전까지 URL은 404**이므로, 실제로 200이 확인되면 닫을 것
+- [ ] 세 문서의 **변호사 검토** — 조항은 코드가 실제로 하는 일에 맞췄으나 검토를 거쳐야 최종본이다. 각 파일 상단 주석에 명시해 두었다. **세 문서는 이미 3.1의 공개 URL로 나가 있다** — 검토 결과로 조항이 바뀌면 `version`(개정일)을 함께 올려 재동의가 필요한지까지 판단할 것
 - [ ] Google Maps SDK 이용약관상 고지 의무 확인 (예전 항목은 카카오맵 기준이었다 — 지도는 `PROVIDER_GOOGLE`로 바뀌었고 카카오 SDK 의존성은 없다)
 - [ ] 해외 이전 고지 필요 여부 — Firebase·AWS 리전 기준
