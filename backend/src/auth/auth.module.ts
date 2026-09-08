@@ -2,10 +2,11 @@ import { Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { UsersModule } from '../users/users.module';
+import { ConsentsModule } from '../consents/consents.module';
 import { FirebaseAuthGuard } from '../common/guards/firebase-auth.guard';
 
 @Module({
-  imports: [UsersModule],
+  imports: [UsersModule, ConsentsModule],
   controllers: [AuthController],
   providers: [AuthService, FirebaseAuthGuard],
 })

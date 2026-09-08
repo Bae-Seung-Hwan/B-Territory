@@ -37,17 +37,20 @@ import type { LegalDocument } from './types';
  * (`user_consents`: document·version·agreedAt, append-only)에 근거한다. 만 14세 확인도 같은
  * 원장에 `age14` 행으로 남고, 그 `version`만 서버가 `AGE_POLICY_VERSION`으로 채운다.
  *
- * ⚠️ **제3조 3항(탈퇴 시 동의 이력 백업)은 아직 구현이 없다.** 지금 `user_consents`는 `userId`에
- * `onDelete: 'CASCADE'`를 건 FK라 계정을 지우면 동의 이력이 **함께 사라진다** — 조항이 약속한
- * "별도 보관소로 옮겨 6개월 보관"과 정면으로 반대다. 이 문서가 참이 되려면 다음이 필요하다.
- *   1. `user_consents`의 FK를 떼고 `subjectId`만 남긴다(엔티티 주석이 이미 예고한 전환이다).
- *   2. 탈퇴 트랜잭션에서 동의 이력 + 이메일 주소를 별도 보관소로 옮긴다. `account.service.ts`의
- *      `deleteAccount`가 `manager.delete(User, ...)` 하는 바로 그 트랜잭션 안이어야 한다 —
- *      밖에 두면 "유저는 지워졌는데 백업은 없는" 행이 남고, 그게 증거로 쓸 기록이다.
- *   3. 6개월 만료 삭제 잡. 선례는 `location-logs`의 purge 잡(`RETENTION_INTERVAL`)이며,
- *      보존기간이 6개월로 같으므로 그 주기를 그대로 따라가면 된다.
- * 구현이 들어오기 전까지 제3조 3항·4항, 제7조 4항, 제9조 4항, 이용약관 제11조 2항은 **거짓이다.**
- * 반대로 구현 방식을 바꾸면(기간·항목·보관 위치) 이 조항들부터 고칠 것.
+ * 제3조 3항(탈퇴 시 동의 이력 백업)은 `backend/src/account/withdrawal-archive.service.ts`에
+ * 구현돼 있다. `deleteAccount`가 `manager.delete(User, ...)` 하는 바로 그 트랜잭션 안에서,
+ * 삭제 **직전에** 동의 이력과 이메일 주소를 `withdrawn_accounts`/`consent_archives`로 옮긴다.
+ * 6개월 파기는 `withdrawal-archive` 큐의 purge 잡(매일 04:10 KST)이 맡으며, 보관 건을 지우면
+ * 동의 행은 FK CASCADE로 함께 사라져 3항의 "그 이후에는 서비스도 동의 사실을 확인할 수
+ * 없습니다"가 성립한다. 3항이 금지한 용도(탈퇴자 식별·재가입 제한·광고)로 쓰지 않도록,
+ * 이 표를 읽는 경로는 HTTP로 열지 않았다 — 제7조 4항의 열람·파기 요구는 서버 접근 권한이
+ * 있어야 실행되는 운영 스크립트(`npm run archive:show` / `archive:erase`)로 잇는다.
+ *
+ * 제3조 3항·제9조 4항이 "별도 **보관 표**"라고 적는 것은 구현이 실제로 그렇기 때문이다.
+ * 처음에는 "운영 데이터베이스와 분리"라고 적었는데, `reports`에서 `withdrawn_accounts`로
+ * FK가 걸려 있고 Postgres는 DB를 건너 FK를 걸 수 없으므로 같은 DB일 수밖에 없다 — 조항이
+ * 거짓이었다. 별도 DB로 옮기는 대신 조항을 실제 동작에 맞췄다(compliance.md 6장).
+ * 구현 방식을 바꾸면(기간·항목·보관 위치) 이 조항들부터 고칠 것.
  *
  * 제1조 1호 마지막 줄(Google 계정 로그인)은 `use-google-login.ts`·`login.tsx`의 Google 버튼에
  * 근거한다. Apple은 `login.tsx`에 "임시 비활성화"로 주석 처리돼 있어 의도적으로 넣지 않았다 —
@@ -104,10 +107,10 @@ export const privacyPolicy: LegalDocument = {
 제3조 (보유 기간 및 파기)
 1. 이용자가 계정을 삭제하면 이메일·닉네임·국적·인증 식별자 등 이용자를 직접 식별하는 정보는 서비스 운영 데이터베이스에서 지체 없이 삭제합니다. 다만 이용자가 신고를 당한 이력이 있다면 그 신고 기록에 남은 신고 당시 닉네임은 4항에 따라 계속 보관되며, 약관 동의 이력은 3항에 따라 별도로 보관됩니다.
 2. 점수 원장, 점령 기록, 결투 기록, 미션 사진·후기, 신고 기록은 다른 이용자의 기록 및 팀 집계와 결합되어 있어, 이용자 식별자를 제거한 형태로 남습니다. 다만 신고 기록의 신고 당시 닉네임과 메시지 내용은 예외입니다(4항 참고).
-3. 계정 삭제 시 약관 동의 이력은 서비스 운영 데이터베이스에서 분리해 별도의 보관소로 옮긴 뒤 6개월간 보관하고 파기합니다.
+3. 계정 삭제 시 약관 동의 이력은 서비스 운영에 사용하는 표에서 분리해, 이 목적에만 사용하는 별도의 보관 표로 옮긴 뒤 6개월간 보관하고 파기합니다.
    - 보관하는 항목: 동의한 문서의 종류와 개정일, 만 14세 이상 확인 여부, 동의 일시, 그리고 그 이력을 해당 이용자의 것으로 특정하기 위한 이메일 주소
    - 보관하는 목적: 개인정보 보호법 및 위치정보의 보호 및 이용 등에 관한 법률이 사업자에게 지우는 "동의를 받았다는 사실"의 증명 책임을 이행하고, 동의 여부에 관한 분쟁에 대응하기 위함입니다. 동의를 받으면서 그 증거를 탈퇴와 동시에 없애면 증명 자체가 불가능해지므로 최소한의 항목만 남깁니다.
-   - 이 보관소는 서비스 운영에 사용하지 않습니다. 탈퇴한 이용자를 서비스 안에서 식별하거나, 재가입을 제한하거나, 광고·통계에 이용하지 않습니다.
+   - 이 보관 표는 서비스 운영에 사용하지 않습니다. 탈퇴한 이용자를 서비스 안에서 식별하거나, 재가입을 제한하거나, 광고·통계에 이용하지 않습니다.
    - 보관 기간이 지나면 자동으로 파기하며, 그 이후에는 서비스도 동의 사실을 확인할 수 없습니다.
 4. 다음 네 가지는 계정 삭제 후에도 남습니다.
    - 위치정보 이용·제공사실 확인자료: 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 6개월간 보존한 뒤 삭제합니다.
@@ -155,7 +158,7 @@ export const privacyPolicy: LegalDocument = {
 1. 모든 통신 구간은 암호화된 연결(HTTPS/WSS)로 보호합니다.
 2. 이메일로 가입한 계정의 비밀번호는 서비스가 직접 보관하지 않고 Firebase Authentication에 위임합니다. Google 계정으로 가입한 경우에는 서비스가 비밀번호를 만들지도, 보관하지도 않습니다.
 3. 개인정보에 접근할 수 있는 권한은 업무상 필요한 최소한으로 제한합니다.
-4. 제3조 3항의 동의 이력 백업은 서비스 운영 데이터베이스와 분리해 보관하며, 접근 권한은 동의 사실의 증명이 필요한 경우로 제한합니다.
+4. 제3조 3항의 동의 이력 백업은 서비스 운영에 사용하는 표와 분리된 전용 표에 보관하며, 서비스 기능은 이 표를 조회하지 않습니다. 접근 권한은 동의 사실의 증명이 필요한 경우로 제한합니다.
 
 제10조 (개인정보 보호책임자 및 문의처)
 개인정보 처리에 관한 문의·불만·피해구제는 B.territory123@gmail.com으로 접수하며, 접수 즉시 답변드리겠습니다.
@@ -195,10 +198,10 @@ Article 2 (Purposes of Use)
 Article 3 (Retention and Destruction)
 1. When a user deletes their account, data that directly identifies them - email, nickname, nationality, authentication identifier - is deleted from the operational database without delay. If the user has been reported, however, the nickname recorded at the time of that report is retained under paragraph 4, and the record of terms agreed to is retained separately under paragraph 3.
 2. The point ledger, claim records, duel records, mission photos and reviews, and reports are combined with other users' records and team tallies, and therefore remain with the user identifier removed - except for the reported-nickname and message-content fields in a report record (see paragraph 4).
-3. On account deletion, the record of terms agreed to is moved out of the operational database into a separate archive, kept for six months, and then destroyed.
+3. On account deletion, the record of terms agreed to is moved out of the tables used to operate the Service into separate archive tables used only for this purpose, kept for six months, and then destroyed.
    - What is kept: the type and revision date of each document agreed to, whether age 14+ was confirmed, the time of agreement, and the email address needed to attribute that record to the user.
    - Why it is kept: to discharge the operator's burden, under the Personal Information Protection Act and the Act on the Protection and Use of Location Information, of proving that consent was obtained, and to respond to disputes about whether it was. Destroying the evidence at the moment of withdrawal would make that proof impossible, so only the minimum is retained.
-   - This archive is not used to operate the Service. It is not used to identify a withdrawn user within the Service, to restrict re-registration, or for advertising or statistics.
+   - These archive tables are not used to operate the Service. They are not used to identify a withdrawn user within the Service, to restrict re-registration, or for advertising or statistics.
    - Once the retention period ends the archive is destroyed automatically, after which the Service can no longer confirm that consent was given.
 4. The following four remain after account deletion.
    - Records of location information use: retained for six months under Article 16(2) of the Act on the Protection and Use of Location Information, then deleted.
@@ -246,7 +249,7 @@ Article 9 (Security Measures)
 1. All communication is protected by encrypted connections (HTTPS/WSS).
 2. For accounts created with an email address, passwords are not held by the Service; they are delegated to Firebase Authentication. For accounts created with a Google account, the Service neither creates nor holds a password.
 3. Access to personal data is limited to the minimum necessary for operations.
-4. The archived consent records under Article 3(3) are held separately from the operational database, and access is limited to cases where proof of consent is required.
+4. The archived consent records under Article 3(3) are held in dedicated tables, separate from the tables used to operate the Service, and no Service feature reads them. Access is limited to cases where proof of consent is required.
 
 Article 10 (Contact)
 Enquiries, complaints, and remedy requests concerning the processing of personal data are received at B.territory123@gmail.com and will be answered promptly.

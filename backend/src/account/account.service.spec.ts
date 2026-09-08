@@ -5,6 +5,7 @@ import { RedisService } from '../common/redis/redis.service';
 import { DuelsService } from '../duels/duels.service';
 import { HallOfFameService } from '../hall-of-fame/hall-of-fame.service';
 import { WsSessionsService } from '../common/ws/ws-sessions.service';
+import { WithdrawalArchiveService } from './withdrawal-archive.service';
 
 /**
  * 계정 삭제(탈퇴) — 앱스토어·플레이스토어 필수 요건.
@@ -41,6 +42,7 @@ describe('AccountService.deleteAccount', () => {
       invalidateUserRanking: jest.fn().mockResolvedValue(undefined),
     };
     const sessions = { register: jest.fn(), disconnectUser: jest.fn() };
+    const archive = { archive: jest.fn().mockResolvedValue({ id: 7 }) };
     const service = new AccountService(
       dataSource as never,
       firebaseService as unknown as FirebaseService,
@@ -48,6 +50,7 @@ describe('AccountService.deleteAccount', () => {
       duelsService as unknown as DuelsService,
       hallOfFame as unknown as HallOfFameService,
       sessions as unknown as WsSessionsService,
+      archive as unknown as WithdrawalArchiveService,
     );
     return {
       service,
@@ -58,6 +61,7 @@ describe('AccountService.deleteAccount', () => {
       duelsService,
       hallOfFame,
       sessions,
+      archive,
     };
   }
 
@@ -69,6 +73,30 @@ describe('AccountService.deleteAccount', () => {
     expect(manager.delete).toHaveBeenCalledWith(User, { id: 'user-1' });
     expect(firebaseService.deleteUser).toHaveBeenCalledWith('fuid-1');
     expect(redis.purgeUserKeys).toHaveBeenCalledWith('user-1');
+  });
+
+  it('users 행을 지우기 전에 동의·신고 기록을 보관 표로 옮긴다', async () => {
+    const { service, manager, archive } = make();
+
+    await service.deleteAccount(user);
+
+    // 같은 트랜잭션 manager로, users 삭제보다 **먼저** 불려야 한다 — 삭제가 앞서면
+    // 동의 원장은 CASCADE로 사라졌고 신고의 targetUserId도 NULL이라 옮길 것이 없다.
+    expect(archive.archive).toHaveBeenCalledWith('user-1', 'a@b.com', manager);
+    const archivedAt = archive.archive.mock.invocationCallOrder[0];
+    const deletedAt = manager.delete.mock.invocationCallOrder[0];
+    expect(archivedAt).toBeLessThan(deletedAt);
+  });
+
+  it('보관에 실패하면 탈퇴를 롤백한다 — 계정만 사라진 상태를 만들지 않는다', async () => {
+    const { service, manager, archive, firebaseService } = make();
+    archive.archive.mockRejectedValue(new Error('archive down'));
+
+    await expect(service.deleteAccount(user)).rejects.toThrow('archive down');
+
+    // 트랜잭션 안에서 던졌으므로 users 삭제까지 가지 않고, Firebase도 손대지 않는다.
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(firebaseService.deleteUser).not.toHaveBeenCalled();
   });
 
   // Firebase 계정을 남기면 같은 이메일로 영구 재가입 불가가 된다.
