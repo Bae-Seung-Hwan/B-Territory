@@ -187,7 +187,7 @@ const DELETION = {
 <ul>
 <li>점수 원장, 점령 기록, 결투 기록, 미션 사진·후기 — <strong>이용자 식별자를 제거한 형태</strong>로 남습니다.</li>
 <li>신고 기록 — 신고 당시 닉네임과 신고된 메시지 내용이 함께 남습니다. 신고 처리와 재발 방지에 필요한 자료입니다.</li>
-<li>약관 동의 이력 — 동의한 문서의 종류·개정일, 만 14세 이상 확인 여부, 동의 일시, 그리고 그 이력을 특정하기 위한 이메일 주소를 별도 보관소에서 <strong>6개월간 보관한 뒤 파기</strong>합니다. 이 보관소는 서비스 운영에 사용하지 않으며, 탈퇴한 이용자를 식별하거나 재가입을 제한하거나 광고·통계에 이용하지 않습니다.</li>
+<li>약관 동의 이력 — 동의한 문서의 종류·개정일, 만 14세 이상 확인 여부, 동의 일시, 그리고 그 이력을 특정하기 위한 이메일 주소를 전용 보관 표에서 <strong>6개월간 보관한 뒤 파기</strong>합니다. 이 표는 서비스 운영에 사용하지 않으며, 탈퇴한 이용자를 식별하거나 재가입을 제한하거나 광고·통계에 이용하지 않습니다. 열람·파기를 요구하실 수 있습니다.</li>
 <li>위치정보 이용·제공사실 확인자료 — 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 <strong>6개월간</strong> 보존됩니다.</li>
 </ul>`,
   },
@@ -213,7 +213,7 @@ by law or for dispute handling. See Article 3 of the Privacy Policy for details.
 <ul>
 <li>Score ledger, territory claims, duel records, mission photos and reviews — retained <strong>with user identifiers removed</strong>.</li>
 <li>Report records — the nickname at the time of the report and the reported message content remain, as they are required to handle reports and prevent recurrence.</li>
-<li>Consent records — the documents and revision dates you agreed to, whether you confirmed being 14 or older, the time of consent, and the email address used to identify that record are kept in a separate store for <strong>six months and then destroyed</strong>. This store is not used to operate the service, to identify former users, to restrict re-registration, or for advertising or statistics.</li>
+<li>Consent records — the documents and revision dates you agreed to, whether you confirmed being 14 or older, the time of consent, and the email address used to identify that record are kept in dedicated archive tables for <strong>six months and then destroyed</strong>. These tables are not used to operate the service, to identify former users, to restrict re-registration, or for advertising or statistics. You may request access to, or destruction of, this record.</li>
 <li>Location usage records — retained for <strong>six months</strong> under Article 16(2) of the Act on the Protection and Use of Location Information.</li>
 </ul>`,
   },
