@@ -6,6 +6,17 @@ import { useRegistrationFlow } from '@/hooks/use-registration-flow';
 import { useSendFirebaseVerificationEmail } from '@/hooks/use-firebase-email-verification';
 import { auth } from '@/lib/firebase';
 import { clearRegisterDraft } from '@/lib/register-draft';
+import {
+  MissingConsentError,
+  clearPendingConsent,
+  loadPendingConsent,
+} from '@/lib/pending-consent';
+import {
+  LEGAL_DOCUMENT_KEYS,
+  buildConsentSnapshot,
+  type ConsentSnapshot,
+  type LegalDocumentKey,
+} from '@/legal';
 import * as authApi from '@/api/auth';
 
 jest.mock('firebase/auth', () => ({
@@ -17,6 +28,14 @@ jest.mock('firebase/auth', () => ({
 jest.mock('@/lib/firebase', () => ({ auth: { currentUser: null } }));
 
 jest.mock('@/lib/register-draft', () => ({ clearRegisterDraft: jest.fn() }));
+
+// 보관/만료 규칙은 lib 테스트가 본다. 여기서 볼 것은 "가입 직전에 읽고, 없으면 어떻게
+// 되는가"라 읽기·지우기만 목으로 세우고 MissingConsentError는 실물을 쓴다.
+jest.mock('@/lib/pending-consent', () => ({
+  ...jest.requireActual('@/lib/pending-consent'),
+  loadPendingConsent: jest.fn(),
+  clearPendingConsent: jest.fn(),
+}));
 
 jest.mock('@/hooks/use-firebase-email-verification', () => ({
   useSendFirebaseVerificationEmail: jest.fn(),
@@ -41,6 +60,15 @@ const mockedSignOut = signOut as jest.Mock;
 const mockedUseSendVerification = useSendFirebaseVerificationEmail as jest.Mock;
 
 const profile = { id: '1', email: 'a@b.com', nickname: 'n', nationality: 'KR', team: 'KR' };
+
+// 문서 목록에서 파생시킨다 — 손으로 적으면 문서가 늘어도 이 테스트만 옛 목록으로 통과한다.
+const consentSnapshot = buildConsentSnapshot(
+  Object.fromEntries(LEGAL_DOCUMENT_KEYS.map((key) => [key, true])) as Record<
+    LegalDocumentKey,
+    boolean
+  >,
+  true,
+) as ConsentSnapshot;
 
 function createUser(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -69,6 +97,7 @@ async function renderFlow(onRegistered = jest.fn()) {
 
 beforeEach(() => {
   mockedAuth.currentUser = null;
+  (loadPendingConsent as jest.Mock).mockResolvedValue(consentSnapshot);
   mockedSignOut.mockResolvedValue(undefined);
   mockedUseSendVerification.mockReturnValue({
     sendVerificationEmail: jest.fn().mockResolvedValue(true),
@@ -171,8 +200,11 @@ describe('이어서 가입 (auth/email-already-in-use)', () => {
     expect((authApi.registerUser as jest.Mock).mock.calls[0][0]).toEqual({
       nickname: 'nick',
       nationality: 'KR',
+      consents: consentSnapshot.consents,
+      ageConfirmed: true,
     });
     expect(clearRegisterDraft).toHaveBeenCalled();
+    expect(clearPendingConsent).toHaveBeenCalled();
     expect(onRegistered).toHaveBeenCalled();
   });
 
@@ -263,18 +295,66 @@ describe('인증 완료 확인', () => {
   });
 });
 
-describe('롤백 불변식', () => {
-  async function submitFreshAccount(result: Awaited<ReturnType<typeof renderFlow>>['result']) {
-    const user = createUser({ emailVerified: false });
-    mockedCreateUser.mockResolvedValue({ user });
+/** 이번 시도로 계정을 만들고 인증까지 끝난 상태(= 롤백 판정의 대상)를 만든다. */
+async function submitFreshAccount(result: Awaited<ReturnType<typeof renderFlow>>['result']) {
+  const user = createUser({ emailVerified: false });
+  mockedCreateUser.mockResolvedValue({ user });
+  await act(async () => {
+    await result.current.submit('a@b.com', 'pw123456', 'nick', 'KR');
+  });
+  // 인증 완료 시점에 auth.currentUser가 그 user를 가리키도록 맞춘다
+  user.emailVerified = true;
+  mockedAuth.currentUser = user;
+  return user;
+}
+
+describe('동의 스냅샷', () => {
+  /**
+   * 이 테스트가 지키는 것은 원장이 아니라 **이용자의 계정**이다. 동의 없이 보내면 서버가
+   * CONSENT_INCOMPLETE로 400을 주는데, 그 400은 롤백 판정(409 아닌 4xx)에 걸려 이메일
+   * 인증까지 마친 Firebase 계정을 지운다. 재시도해도 같은 자리에서 같은 일이 반복된다.
+   */
+  it('보관된 동의가 없으면 register를 부르지 않고 Firebase 계정도 지우지 않는다', async () => {
+    (loadPendingConsent as jest.Mock).mockResolvedValue(null);
+    const { result } = await renderFlow();
+    const user = await submitFreshAccount(result);
+
     await act(async () => {
-      await result.current.submit('a@b.com', 'pw123456', 'nick', 'KR');
+      await expect(result.current.confirmVerification('nick', 'KR')).rejects.toBeInstanceOf(
+        MissingConsentError,
+      );
     });
-    // 인증 완료 시점에 auth.currentUser가 그 user를 가리키도록 맞춘다
-    user.emailVerified = true;
-    mockedAuth.currentUser = user;
-    return user;
-  }
+
+    expect(authApi.registerUser as jest.Mock).not.toHaveBeenCalled();
+    expect(user.delete).not.toHaveBeenCalled();
+  });
+
+  it('보관된 동의를 그대로 실어 보낸다 — 상수에서 다시 만들지 않는다', async () => {
+    // 그 사이 문서가 개정돼도 이용자가 읽고 동의한 것은 이 판본이다.
+    const olderSnapshot: ConsentSnapshot = {
+      consents: consentSnapshot.consents.map((item) => ({ ...item, version: '2026-01-01' })),
+      ageConfirmed: true,
+    };
+    (loadPendingConsent as jest.Mock).mockResolvedValue(olderSnapshot);
+    (authApi.registerUser as jest.Mock).mockResolvedValue(profile);
+
+    const { result } = await renderFlow();
+    await submitFreshAccount(result);
+
+    await act(async () => {
+      await result.current.confirmVerification('nick', 'KR');
+    });
+
+    expect((authApi.registerUser as jest.Mock).mock.calls[0][0]).toEqual({
+      nickname: 'nick',
+      nationality: 'KR',
+      consents: olderSnapshot.consents,
+      ageConfirmed: true,
+    });
+  });
+});
+
+describe('롤백 불변식', () => {
 
   it('이번 시도로 만든 계정 + 4xx(409 제외) 거부 → 롤백한다', async () => {
     const { result } = await renderFlow();

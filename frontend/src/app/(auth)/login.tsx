@@ -23,7 +23,14 @@ import { useSocialLoginConsent } from '@/hooks/use-social-login-consent';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BottomSheet } from '@/components/ui/BottomSheet';
-import { LEGAL_DOCUMENTS, LEGAL_DOCUMENT_KEYS, legalBody, type LegalDocumentKey } from '@/legal';
+import {
+  LEGAL_DOCUMENTS,
+  LEGAL_DOCUMENT_KEYS,
+  buildConsentSnapshot,
+  legalBody,
+  type LegalDocumentKey,
+} from '@/legal';
+import { savePendingConsent } from '@/lib/pending-consent';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 
@@ -165,7 +172,26 @@ export default function LoginScreen() {
   const toggleAgreement = (key: LegalDocumentKey) =>
     setAgreed((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  const handleContinueToRegister = () => {
+  const handleContinueToRegister = async () => {
+    // 동의 사실은 이 화면에서만 알 수 있는데 가입 API를 부르는 곳은 다음 화면이다
+    // (이메일은 register, 소셜은 complete-profile). 넘어가기 전에 **표시한 문서의
+    // version 그대로** 스냅샷을 남긴다 — 다음 화면이 상수에서 다시 만들어내면 시트를
+    // 거치지 않은 진입에서도 동의 기록이 생긴다.
+    //
+    // 버튼은 !allAgreed면 비활성이지만 보낼 값을 만드는 쪽에서 한 번 더 확인한다.
+    const snapshot = buildConsentSnapshot(agreed, agreeAge);
+    if (!snapshot) return;
+
+    try {
+      await savePendingConsent(snapshot);
+    } catch (err) {
+      // 저장이 실패한 채로 넘기면 다음 화면이 동의를 찾지 못해 시트로 되튕긴다.
+      // 사용자에겐 "동의했는데 가입이 안 되는" 상태로만 보이므로 여기서 멈춘다.
+      // (소셜 대기 promise는 아직 resolve하지 않았으므로 시트도 그대로 열려 있다.)
+      handleAuthError(err, 'auth.errors.registerFailed');
+      return;
+    }
+
     const wasAwaitingSocialConsent = isAwaitingConsent();
     if (wasAwaitingSocialConsent) {
       resolveConsent(true);

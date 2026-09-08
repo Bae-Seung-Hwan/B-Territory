@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuth, useRegisterMutation } from '@/hooks/use-auth';
 import { queryKeys } from '@/lib/query-keys';
 import * as authApi from '@/api/auth';
+import { LEGAL_DOCUMENTS, LEGAL_DOCUMENT_KEYS } from '@/legal';
 import { useAuthSession } from '@/providers/AuthProvider';
 
 jest.mock('@/api/auth', () => ({
@@ -18,6 +19,16 @@ jest.mock('@/providers/AuthProvider', () => ({
 const mockedUseAuthSession = useAuthSession as jest.Mock;
 
 const profile = { id: '1', email: 'a@b.com', nickname: 'n', nationality: 'KR', team: 'KR' };
+
+const registerPayload = {
+  nickname: 'n',
+  nationality: 'KR',
+  consents: LEGAL_DOCUMENT_KEYS.map((key) => ({
+    document: key,
+    version: LEGAL_DOCUMENTS[key].version,
+  })),
+  ageConfirmed: true,
+};
 
 function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: React.ReactNode }) {
@@ -45,14 +56,11 @@ describe('useRegisterMutation', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ nickname: 'n', nationality: 'KR' });
+    result.current.mutate(registerPayload);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect((authApi.registerUser as jest.Mock).mock.calls[0][0]).toEqual({
-      nickname: 'n',
-      nationality: 'KR',
-    });
+    expect((authApi.registerUser as jest.Mock).mock.calls[0][0]).toEqual(registerPayload);
     expect(queryClient.getQueryData(queryKeys.auth.me)).toEqual(profile);
   });
 
@@ -76,7 +84,7 @@ describe('useRegisterMutation', () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ nickname: 'n', nationality: 'KR' });
+      await result.current.mutateAsync(registerPayload);
     });
 
     await act(async () => {

@@ -90,6 +90,7 @@ export const en: Translations = {
       sessionExpired: 'Your session has expired. Please log in again',
       alreadyRegistered: 'This account is already registered',
       emailVerificationRequired: 'Email verification required. Please tap the link in the verification email first',
+      consentRequired: 'Your agreement to the terms has expired. Please agree again.',
     },
   },
   tabs: {

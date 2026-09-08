@@ -3,6 +3,7 @@ import { en } from '@/i18n/locales/en';
 import {
   LEGAL_DOCUMENTS,
   LEGAL_DOCUMENT_KEYS,
+  buildConsentSnapshot,
   legalBody,
   type LegalDocumentKey,
 } from '@/legal';
@@ -242,5 +243,49 @@ describe('legal documents', () => {
     for (const locale of locales) {
       expect(typeof catalogs[locale].agreeAll).toBe('string');
     }
+  });
+});
+
+/**
+ * 서버로 보낼 동의 페이로드를 만드는 부분. `LEGAL_DOCUMENT_KEYS`에서 파생시키므로,
+ * 문서를 추가하고 이 함수를 고치지 않아도 새 항목이 자동으로 포함된다 — 손으로 적은
+ * 배열이었다면 화면에서는 동의를 받고 서버에는 그 항목만 빠진 요청이 나갔을 것이다.
+ */
+describe('buildConsentSnapshot', () => {
+  const allAgreed = Object.fromEntries(LEGAL_DOCUMENT_KEYS.map((key) => [key, true])) as Record<
+    LegalDocumentKey,
+    boolean
+  >;
+
+  it('모든 문서와 연령 확인이 채워지면 문서 목록 그대로 만든다', () => {
+    expect(buildConsentSnapshot(allAgreed, true)).toEqual({
+      consents: LEGAL_DOCUMENT_KEYS.map((key) => ({
+        document: key,
+        version: LEGAL_DOCUMENTS[key].version,
+      })),
+      ageConfirmed: true,
+    });
+  });
+
+  it('연령 확인이 빠지면 null이다', () => {
+    expect(buildConsentSnapshot(allAgreed, false)).toBeNull();
+  });
+
+  it.each(LEGAL_DOCUMENT_KEYS)('%s 동의가 빠지면 null이다', (missing) => {
+    expect(buildConsentSnapshot({ ...allAgreed, [missing]: false }, true)).toBeNull();
+  });
+
+  /**
+   * `document`는 append-only 원장(backend `user_consents`)의 varchar라, 백엔드
+   * `ConsentDocument`와 어긋난 채로 쌓이면 되돌릴 수 없다. 두 저장소를 잇는 자동 검증이
+   * 없으므로(backend `src/consents/constants.ts` 주석 참고) 최소한 이쪽 값을 고정해 둔다.
+   */
+  it('document 값이 백엔드 ConsentDocument와 같은 문자열이다', () => {
+    const snapshot = buildConsentSnapshot(allAgreed, true);
+    expect(snapshot?.consents.map((item) => item.document)).toEqual([
+      'service',
+      'privacy',
+      'location',
+    ]);
   });
 });

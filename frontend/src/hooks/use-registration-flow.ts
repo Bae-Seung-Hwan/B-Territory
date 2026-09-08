@@ -8,6 +8,11 @@ import {
 } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { clearRegisterDraft } from '@/lib/register-draft';
+import {
+  MissingConsentError,
+  clearPendingConsent,
+  loadPendingConsent,
+} from '@/lib/pending-consent';
 import { useRegisterMutation } from '@/hooks/use-auth';
 import { useSendFirebaseVerificationEmail } from '@/hooks/use-firebase-email-verification';
 
@@ -51,9 +56,27 @@ export function useRegistrationFlow({ onRegistered }: UseRegistrationFlowOptions
 
   const finishRegistration = useCallback(
     async (user: User, createdThisAttempt: boolean, nickname: string, nationality: string) => {
+      // 동의는 로그인 화면의 약관 시트에서 받아 스냅샷으로 남아 있다. 여기서 만들어내지
+      // 않고 읽기만 한다 — 없으면 동의를 받은 적이 없거나(시트를 거치지 않은 진입) 지금
+      // 앱이 요구하는 문서와 어긋난 것이라, 어느 쪽이든 보낼 값이 없다.
+      //
+      // **register를 부르기 전에** 던지는 것이 중요하다. 동의 없이 보내면 서버가
+      // CONSENT_INCOMPLETE로 400을 주고, 그 400은 아래 롤백 판정(409 아닌 4xx)에 걸려
+      // 이메일 인증까지 마친 Firebase 계정을 지운다. MissingConsentError는 axios 에러가
+      // 아니라 그 판정에 걸리지 않으므로 계정은 그대로 남고, 호출부가 동의 시트로
+      // 되돌리면 이어서 가입을 마칠 수 있다.
+      const consent = await loadPendingConsent();
+      if (!consent) throw new MissingConsentError();
+
       try {
-        await registerMutation.mutateAsync({ nickname, nationality });
+        await registerMutation.mutateAsync({
+          nickname,
+          nationality,
+          consents: consent.consents,
+          ageConfirmed: consent.ageConfirmed,
+        });
         void clearRegisterDraft();
+        void clearPendingConsent();
         onRegistered();
       } catch (backendErr) {
         // 백엔드가 4xx로 명확히 거부한 경우(409 제외)에만 서버에 아무 부작용도
@@ -183,6 +206,8 @@ export function useRegistrationFlow({ onRegistered }: UseRegistrationFlowOptions
         }
       }
       await clearRegisterDraft();
+      // 동의 스냅샷은 지우지 않는다 — 바꾸는 것은 이메일이지 동의한 사람이 아니다.
+      // 여기서 지우면 같은 사람이 약관 시트로 되돌아가 다시 체크해야 한다.
       setCreatedAccount(false);
       setStep('form');
     } finally {

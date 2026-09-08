@@ -18,6 +18,7 @@ import { auth } from '@/lib/firebase';
 import { useHandleAuthError } from '@/hooks/use-auth-error';
 import { useRegistrationFlow } from '@/hooks/use-registration-flow';
 import { useRegisterDraft } from '@/hooks/use-register-draft';
+import { MissingConsentError } from '@/lib/pending-consent';
 import { useTranslation } from '@/i18n';
 import { BrandColors } from '@/constants/theme';
 import { Button } from '@/components/ui/Button';
@@ -111,6 +112,20 @@ export default function RegisterScreen() {
 
   const canConfirm = nickname.trim().length >= 2 && selectedCode !== null && !isBusy;
 
+  /**
+   * 가입 실패 처리. 동의 스냅샷이 없는 경우만 따로 가른다 — 약관 시트는 로그인 화면에
+   * 있어 이 화면에서는 복구할 수 없고, 일반 실패처럼 알럿만 띄우면 사용자가 같은 버튼을
+   * 계속 눌러도 영원히 같은 곳에 머문다.
+   */
+  const handleRegistrationError = (err: unknown) => {
+    if (err instanceof MissingConsentError) {
+      Alert.alert(t('auth.errors.title'), t('auth.errors.consentRequired'));
+      router.replace('/(auth)/login');
+      return;
+    }
+    handleAuthError(err, 'auth.errors.registerFailed');
+  };
+
   const handleSubmit = async () => {
     if (!canSubmit || !selectedCode) return;
     try {
@@ -119,7 +134,7 @@ export default function RegisterScreen() {
         Alert.alert(t('auth.errors.title'), t('auth.emailVerification.sendFailed'));
       }
     } catch (err) {
-      handleAuthError(err, 'auth.errors.registerFailed');
+      handleRegistrationError(err);
     } finally {
       // 계정이 생겼든 실패했든, 방금 시도한 비밀번호를 평문으로 오래 남겨둘 이유가
       // 없다 — 인증 대기 단계로 넘어갔다면 더 이상 필요 없고, 실패했다면 다시
@@ -142,7 +157,7 @@ export default function RegisterScreen() {
         Alert.alert(t('auth.errors.title'), t('auth.errors.sessionExpired'));
       }
     } catch (err) {
-      handleAuthError(err, 'auth.errors.registerFailed');
+      handleRegistrationError(err);
     }
   };
 
