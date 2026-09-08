@@ -34,7 +34,7 @@
 - Apple App Store, Google Play 심사 통과에 필수. 앱 내 링크 + 스토어 등록 정보 URL 둘 다 필요.
 - 포함해야 할 항목: 수집 항목(위 표 기준), 수집 목적, 제3자 제공·위탁(Google/Firebase Authentication, Amazon Web Services, 앱에 내장한 Google Maps SDK), 보관 기간, 해외 이전 고지(전세계 확장 시), 이용자 권리(삭제 요청 등), 아동 개인정보 처리 여부.
 - 백그라운드 위치를 실제로 켜는 시점에 Apple은 별도의 정확한 목적 문구(`NSLocationAlwaysAndWhenInUseUsageDescription`)를, Google Play는 "민감한 권한(백그라운드 위치)" 심사 양식 제출을 요구함 — 현재는 포그라운드 권한만 쓰므로 아직 해당 없음.
-- **조항 초안 작성 완료**: `frontend/src/legal/privacy-policy.ts`. 본문은 i18n locale이 아니라 `src/legal/`에 두고 `version`(개정일)을 같은 파일에 둔다 — 조항만 고치고 버전을 안 올리는 실수를 막기 위함이다. 법률 검토는 아직 남아 있다(6장).
+- **조항 초안 작성 완료**: `frontend/src/legal/privacy-policy.ts`. 본문은 i18n locale이 아니라 `src/legal/`에 두고 `version`(개정일)을 같은 파일에 둔다 — 조항만 고치고 버전을 안 올리는 실수를 막기 위함이다.
 
 ### 2.2 이용약관 (Terms of Service) — 사실상 표준
 - 스토어 필수 항목은 아니지만 사용자 행위 규칙(GPS 스푸핑, 어뷰징 금지 등 게임 특성상 중요), 계정 정지/해지 사유, 콘텐츠 소유권, 면책조항, 서비스 중단 관련 조항 포함.
@@ -89,6 +89,21 @@
 > ⚠️ **iOS 출시 전 반드시 해결할 것 (가이드라인 4.8).** 로그인 화면에 Google 로그인은 살아 있는데 Apple 로그인은 `login.tsx`에서 임시 비활성화돼 있다(`app.config.js`의 ios 블록 `usesAppleSignIn` 관련). 이 상태로 iOS에 제출하면 4.8로 리젝된다. Android 단독 출시에는 해당하지 않는다.
 >
 > Apple 로그인을 켜는 시점에 **개인정보처리방침 제1조 1호(수집 경로)와 제6조(위탁)에 Apple을 함께 추가**해야 한다. 지금 두 조항에 Apple이 없는 것은 누락이 아니라 "미구현 기능은 넣지 않는다"는 규칙을 따른 것이다.
+
+### 3.1 스토어에 등록할 공개 URL
+
+스토어는 개인정보처리방침과 계정 삭제 안내를 **앱 내 텍스트와 별개로** 웹페이지로 요구한다. 손으로 다시 쓰면 동의를 받은 문서와 공개된 문서가 갈라지므로, `scripts/build-legal-pages.mjs`가 `frontend/src/legal/`에서 **생성**한다(개정일도 같은 값이 실린다). 배포는 `.github/workflows/legal-pages.yml`이 develop 푸시 시 GitHub Pages로 한다.
+
+| 용도 | URL |
+|---|---|
+| 개인정보처리방침 | `https://bae-seung-hwan.github.io/B-Territory/privacy.html` |
+| 계정 삭제 요청 | `https://bae-seung-hwan.github.io/B-Territory/account-deletion.html` |
+| 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/terms.html` |
+| 위치기반서비스 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/location-terms.html` |
+
+영문판은 같은 이름에 `.en.html`이다.
+
+> ⚠️ **리포지터리 Settings → Pages → Source를 "GitHub Actions"** 로 한 번 설정해야 워크플로가 실제로 배포한다. **그 전까지 위 URL은 전부 404**이므로 스토어에 등록하기 전에 직접 열어 확인할 것.
 
 ## 4. 위치정보 이용·제공사실 확인자료 (법 제16조 2항)
 
@@ -240,7 +255,6 @@ Apple(가이드라인 5.1.1(v))·Google Play 모두 **계정을 생성하는 앱
 ### 남은 것 — 법률·행정
 
 - [ ] 위치기반서비스사업자 신고 실제 필요 여부 및 절차 확인 (진행 중). 첨부서류 초안은 `docs/lbs-service-description.md`
-- [ ] 세 문서의 **변호사 검토** — 조항은 코드가 실제로 하는 일에 맞췄으나 검토를 거쳐야 최종본이다. 각 파일 상단 주석에 명시해 두었다
-- [ ] 개인정보처리방침 **공개 URL 호스팅** — 스토어 심사에 앱 내 텍스트와 별개로 웹페이지가 필요하다(3장)
+- [ ] 개인정보처리방침·계정 삭제 안내 **공개 URL 호스팅** — 생성기와 배포 워크플로는 준비됐다(3.1). **리포지터리 Settings → Pages → Source를 "GitHub Actions"로 바꾸기 전까지 URL은 404**이므로, 실제로 200이 확인되면 닫을 것
 - [ ] Google Maps SDK 이용약관상 고지 의무 확인 (예전 항목은 카카오맵 기준이었다 — 지도는 `PROVIDER_GOOGLE`로 바뀌었고 카카오 SDK 의존성은 없다)
 - [ ] 해외 이전 고지 필요 여부 — Firebase·AWS 리전 기준
