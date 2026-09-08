@@ -72,7 +72,7 @@ export const termsOfService: LegalDocument = {
 
 제11조 (계정 삭제)
 1. 이용자는 언제든지 앱 내에서 계정을 삭제할 수 있습니다.
-2. 계정 삭제 시 개인정보는 개인정보처리방침이 정한 바에 따라 처리되며, 법령상 보존 의무가 있는 기록은 해당 기간 동안 보존됩니다.
+2. 계정 삭제 시 개인정보는 개인정보처리방침이 정한 바에 따라 처리되며, 법령상 보존 의무가 있는 기록과 이 약관에 대한 동의 사실을 증명하기 위해 별도로 보관하는 기록은 해당 기간 동안 보존됩니다. 동의 이력은 서비스 운영 데이터베이스에서 분리한 별도 보관소에 6개월간 보관한 뒤 파기하며, 자세한 내용은 개인정보처리방침 제3조 3항에 따릅니다.
 3. 점수 원장·결투 기록 등 다른 이용자의 기록과 결합된 자료는 이용자를 식별할 수 없는 형태로 남습니다(신고 기록의 신고 당시 닉네임·메시지 내용 등 예외는 개인정보처리방침 제3조를 따릅니다).
 
 제12조 (책임의 제한)
@@ -141,7 +141,7 @@ Article 10 (Suspension and Modification of the Service)
 
 Article 11 (Account Deletion)
 1. A user may delete their account at any time from within the app.
-2. Personal data is handled on deletion as set out in the Privacy Policy; records subject to a statutory retention obligation are kept for the required period.
+2. Personal data is handled on deletion as set out in the Privacy Policy; records subject to a statutory retention obligation, and records kept separately to prove that these Terms were agreed to, are retained for the applicable period. The record of consent is held in an archive separate from the operational database for six months and then destroyed, as set out in Article 3(3) of the Privacy Policy.
 3. Records combined with those of other users, such as the point ledger and duel history, remain in a form that does not identify the user (exceptions such as the reported-nickname and message-content fields of a report record are governed by Article 3 of the Privacy Policy).
 
 Article 12 (Limitation of Liability)

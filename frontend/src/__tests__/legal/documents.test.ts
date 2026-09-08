@@ -135,6 +135,44 @@ describe('legal documents', () => {
     }
   });
 
+  /**
+   * 미션 방문 확인은 좌표에서 파생됐지만 좌표와 **수명이 다르다** —
+   * `mission:visit:*`는 VISIT_WINDOW_SECONDS(24시간) TTL이라 접속을 끊어도 남는 반면,
+   * 좌표는 handleDisconnect에서 즉시 사라진다. 두 문서가 좌표의 "최신 1건·15분"만
+   * 서술하던 동안 이 기록은 어디에도 고지되지 않았다.
+   */
+  it('위치 조항이 24시간 방문 확인 기록을 밝힌다', () => {
+    for (const locale of locales) {
+      expect(LEGAL_DOCUMENTS.location.body[locale]).toMatch(/24시간|24 hours/);
+      expect(LEGAL_DOCUMENTS.privacy.body[locale]).toMatch(/24시간|24 hours/);
+    }
+  });
+
+  /**
+   * 탈퇴 시 동의 이력을 별도 보관소로 옮겨 6개월 보관한다는 조항. 보유기간이 빠지면
+   * 개인정보처리방침으로 성립하지 않으므로 기간까지 함께 확인한다. 이용약관 제11조도
+   * 같은 사실을 서술하므로 한쪽만 남으면 두 문서가 어긋난다.
+   */
+  it('탈퇴 시 동의 이력 백업과 그 보유기간이 두 문서에 있다', () => {
+    for (const locale of locales) {
+      expect(LEGAL_DOCUMENTS.privacy.body[locale]).toMatch(/6개월|six months/);
+      expect(LEGAL_DOCUMENTS.privacy.body[locale]).toMatch(/동의 이력|consent|terms agreed to/i);
+      expect(LEGAL_DOCUMENTS.service.body[locale]).toMatch(/6개월|six months/);
+    }
+  });
+
+  /**
+   * 본문은 login.tsx가 `<Text>`에 그대로 넣어 렌더링한다 — 마크다운 렌더러가 없다.
+   * 예전 제6조의 `| 수탁자 | 위탁 업무 |` 표기는 이용자에게 파이프 문자 그대로 보였다.
+   */
+  it.each(LEGAL_DOCUMENT_KEYS)('%s 본문에 마크다운 표 문법이 없다', (key) => {
+    for (const locale of locales) {
+      for (const line of LEGAL_DOCUMENTS[key].body[locale].split('\n')) {
+        expect(line.trim().startsWith('|')).toBe(false);
+      }
+    }
+  });
+
   it('위치기반서비스 이용약관이 동의 항목에 포함된다', () => {
     expect(LEGAL_DOCUMENT_KEYS).toContain<LegalDocumentKey>('location');
   });
