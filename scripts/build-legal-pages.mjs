@@ -40,6 +40,42 @@ const TITLES = {
 
 const APP_NAME = 'B-territory';
 
+/** 생성하는 언어. TITLES의 키와 같아야 한다. */
+const LANGS = ['ko', 'en'];
+
+/**
+ * 문서 키 → 파일 이름(확장자 앞까지). 스토어에 등록한 URL이 여기서 나오므로 한 번 정한
+ * 이름은 바꾸지 않는다 — 바꾸면 이미 등록된 주소가 404가 된다.
+ */
+const FILE_FOR = {
+  service: 'terms',
+  privacy: 'privacy',
+  location: 'location-terms',
+};
+
+/**
+ * 조항 본문은 `frontend/src/legal/`에서 오지만, 파일 이름과 제목은 이 파일이 들고 있다.
+ * 네 번째 문서가 LEGAL_DOCUMENTS에 추가되고 이 두 표에 반영되지 않으면 `TITLES[lang][key]`가
+ * undefined인 채로 escapeHtml까지 내려가 정체를 알 수 없는 TypeError로 죽는다. 무엇을 어디에
+ * 추가해야 하는지 말하고 멈춘다.
+ */
+function assertDocumentsCovered() {
+  for (const key of Object.keys(LEGAL_DOCUMENTS)) {
+    if (!FILE_FOR[key]) {
+      throw new Error(
+        `문서 '${key}'의 파일 이름이 없다 — 이 파일의 FILE_FOR에 추가할 것.`,
+      );
+    }
+    for (const lang of LANGS) {
+      if (!TITLES[lang]?.[key]) {
+        throw new Error(
+          `문서 '${key}'의 ${lang} 제목이 없다 — 이 파일의 TITLES에 추가할 것.`,
+        );
+      }
+    }
+  }
+}
+
 function loadSources() {
   rmSync(BUILD_DIR, { recursive: true, force: true });
   // 프론트엔드의 로컬 typescript를 node로 직접 실행한다 — npx는 셸 래퍼(.cmd)라
@@ -157,24 +193,69 @@ ${content}
  * 필요하다 — 목차로 고정하면 영문 방침을 읽던 사람이 한국어를 눌렀을 때 읽던 위치를 잃는다.
  */
 const navFor = (lang, current) => {
-  const t = TITLES[lang];
   const suffix = lang === 'en' ? '.en.html' : '.html';
   const other = lang === 'en' ? '한국어' : 'English';
   const otherHref = (name) => `${name}${lang === 'en' ? '.html' : '.en.html'}`;
   return [
     `<a href="index${suffix}">${lang === 'en' ? 'Home' : '홈'}</a>`,
-    `<a href="terms${suffix}">${t.service}</a>`,
-    `<a href="privacy${suffix}">${t.privacy}</a>`,
-    `<a href="location-terms${suffix}">${t.location}</a>`,
+    // 문서 목록을 손으로 적으면 안 된다. FILE_FOR·TITLES와 달리 여기서 빠뜨리는 것은
+    // **에러가 나지 않는다** — 새 문서가 제 URL로 배포는 되면서, 다른 어느 페이지의
+    // nav에서도 index에서도 닿지 않는 상태가 조용히 만들어진다. 파이프라인의 나머지와
+    // 같이 LEGAL_DOCUMENTS에서 파생시킨다.
+    ...Object.keys(LEGAL_DOCUMENTS).map(
+      (key) => `<a href="${FILE_FOR[key]}${suffix}">${TITLES[lang][key]}</a>`,
+    ),
     `<a href="account-deletion${suffix}">${lang === 'en' ? 'Account Deletion' : '계정 삭제'}</a>`,
     `<a href="${otherHref(current)}">${other}</a>`,
   ].join('\n');
 };
 
 /**
+ * 개인정보처리방침에서 조문 하나를 통째로 떼어 온다.
+ *
+ * 제목 줄은 여는 괄호 앞에 공백이 있어("제3조 (보유 기간 및 파기)"), 본문 안의
+ * 상호참조("제3조 2항", "Article 3(3)")와 섞이지 않는다. 조문의 끝은 다음 조문의 제목 줄로
+ * 잡고, 마지막 조문이면 본문 끝까지다.
+ */
+const articleHeading = (lang, number) =>
+  lang === 'en' ? `Article ${number} (` : `제${number}조 (`;
+
+function privacyArticle(lang, number) {
+  const body = legalBody('privacy', lang);
+  const start = body.indexOf(articleHeading(lang, number));
+  if (start === -1) {
+    throw new Error(
+      `개인정보처리방침(${lang})에서 "${articleHeading(lang, number)}…"를 찾지 못했다 — ` +
+        '조문 번호가 바뀌었다면 이 파일의 RETENTION_ARTICLE도 함께 고칠 것.',
+    );
+  }
+  const next = body.indexOf(articleHeading(lang, number + 1), start);
+  return body.slice(start, next === -1 ? body.length : next).trim();
+}
+
+/** 보유 기간 및 파기. 계정 삭제 안내가 이 조문을 그대로 싣는다. */
+const RETENTION_ARTICLE = 3;
+
+/** 조문 제목은 소제목으로, 나머지는 조항 본문과 같은 방식(pre-wrap)으로 렌더한다. */
+const retentionSection = (lang) => {
+  const text = privacyArticle(lang, RETENTION_ARTICLE);
+  const cut = text.indexOf('\n');
+  return `<h2>${escapeHtml(text.slice(0, cut))}</h2>
+${renderBody(text.slice(cut + 1))}`;
+};
+
+/**
  * 계정 삭제 요청 안내 — 스토어가 앱 내 삭제 경로와 **별개로** 요구하는 공개 페이지다.
- * 무엇이 지워지고 무엇이 남는지는 개인정보처리방침 제3조와 같은 사실을 서술한다. 한쪽을
- * 고치면 다른 쪽도 함께 고칠 것.
+ *
+ * 이 파일이 직접 쓰는 것은 **삭제 방법**뿐이다(앱 안의 경로, 로그인이 안 될 때의 접수 주소).
+ * 무엇이 지워지고 무엇이 남는지는 개인정보처리방침 제3조를 **그대로 실어서** 보여준다.
+ *
+ * 예전에는 같은 사실(6개월 동의 보관, 식별자를 제거한 원장, 신고 기록 예외, 위치정보법
+ * 제16조 2항)을 한국어·영어로 각각 다시 적어 두고 "한쪽을 고치면 다른 쪽도 고칠 것"이라는
+ * 주석 하나로 묶어 두었다. 그것이 바로 이 생성기가 없애려던 상태다 — 실제로 제3조 3항은
+ * "운영 데이터베이스와 분리"가 구현과 달라 "전용 보관 표"로 한 번 정정됐고(compliance.md
+ * 6장), 그런 정정이 다시 일어나면 조항은 고쳐지는데 공개된 이 페이지만 옛 설명을 계속
+ * 주장하게 된다. 이제 고칠 곳은 조항 한 곳뿐이다.
  */
 const DELETION = {
   ko: {
@@ -186,20 +267,9 @@ const DELETION = {
 </ul>
 <p>앱에 로그인할 수 없는 등 앱 안에서 삭제할 수 없는 경우, 가입에 사용한 이메일 주소로
 <a href="mailto:${CONTACT}">${CONTACT}</a>에 삭제를 요청해 주세요. 본인 확인 후 처리해 드립니다.</p>
-
-<h2>삭제되는 정보</h2>
-<p>이메일 주소, 닉네임, 국적, 인증 식별자 등 이용자를 직접 식별하는 정보는 서비스 운영
-데이터베이스에서 지체 없이 삭제되며, 로그인에 사용한 인증 계정도 함께 삭제됩니다.</p>
-
-<h2>삭제 후에도 남는 정보</h2>
-<p>아래 항목은 다른 이용자의 기록과 결합되어 있거나 법령·분쟁 대응에 필요하여 남습니다.
-자세한 내용은 개인정보처리방침 제3조를 참고해 주세요.</p>
-<ul>
-<li>점수 원장, 점령 기록, 결투 기록, 미션 사진·후기 — <strong>이용자 식별자를 제거한 형태</strong>로 남습니다.</li>
-<li>신고 기록 — 신고 당시 닉네임과 신고된 메시지 내용이 함께 남습니다. 신고 처리와 재발 방지에 필요한 자료입니다.</li>
-<li>약관 동의 이력 — 동의한 문서의 종류·개정일, 만 14세 이상 확인 여부, 동의 일시, 그리고 그 이력을 특정하기 위한 이메일 주소를 전용 보관 표에서 <strong>6개월간 보관한 뒤 파기</strong>합니다. 이 표는 서비스 운영에 사용하지 않으며, 탈퇴한 이용자를 식별하거나 재가입을 제한하거나 광고·통계에 이용하지 않습니다. 열람·파기를 요구하실 수 있습니다.</li>
-<li>위치정보 이용·제공사실 확인자료 — 위치정보의 보호 및 이용 등에 관한 법률 제16조 제2항에 따라 <strong>6개월간</strong> 보존됩니다.</li>
-</ul>`,
+<p>무엇이 지워지고 무엇이 남는지는 개인정보처리방침 제3조가 정합니다. 아래는 그 조항의
+전문이며, 앱에서 동의하신 개인정보처리방침과 같은 원본에서 생성됩니다.</p>
+${retentionSection('ko')}`,
   },
   en: {
     title: 'Account Deletion',
@@ -211,21 +281,9 @@ const DELETION = {
 <p>If you cannot delete your account in the app (for example, you cannot sign in), send a
 deletion request to <a href="mailto:${CONTACT}">${CONTACT}</a> from the email address you
 signed up with. We will process it after verifying your identity.</p>
-
-<h2>What is deleted</h2>
-<p>Information that directly identifies you — email address, nickname, nationality and
-authentication identifiers — is deleted from the service database without delay, together
-with the authentication account used to sign in.</p>
-
-<h2>What remains after deletion</h2>
-<p>The following remain because they are combined with other users' records or are required
-by law or for dispute handling. See Article 3 of the Privacy Policy for details.</p>
-<ul>
-<li>Score ledger, territory claims, duel records, mission photos and reviews — retained <strong>with user identifiers removed</strong>.</li>
-<li>Report records — the nickname at the time of the report and the reported message content remain, as they are required to handle reports and prevent recurrence.</li>
-<li>Consent records — the documents and revision dates you agreed to, whether you confirmed being 14 or older, the time of consent, and the email address used to identify that record are kept in dedicated archive tables for <strong>six months and then destroyed</strong>. These tables are not used to operate the service, to identify former users, to restrict re-registration, or for advertising or statistics. You may request access to, or destruction of, this record.</li>
-<li>Location usage records — retained for <strong>six months</strong> under Article 16(2) of the Act on the Protection and Use of Location Information.</li>
-</ul>`,
+<p>What is deleted and what remains is governed by Article 3 of the Privacy Policy. Its full
+text follows, generated from the same source as the Privacy Policy shown in the app.</p>
+${retentionSection('en')}`,
   },
 };
 
@@ -268,17 +326,17 @@ function resetOutDir() {
 }
 
 function build() {
+  assertDocumentsCovered();
   resetOutDir();
 
   const write = (name, html) => writeFileSync(join(OUT_DIR, name), html, 'utf8');
-  const fileFor = { service: 'terms', privacy: 'privacy', location: 'location-terms' };
 
-  for (const lang of ['ko', 'en']) {
+  for (const lang of LANGS) {
     const suffix = lang === 'en' ? '.en.html' : '.html';
 
     for (const [key, doc] of Object.entries(LEGAL_DOCUMENTS)) {
       write(
-        `${fileFor[key]}${suffix}`,
+        `${FILE_FOR[key]}${suffix}`,
         page({
           lang,
           title: TITLES[lang][key],
@@ -286,7 +344,7 @@ function build() {
             lang === 'en'
               ? `Revised ${doc.version}`
               : `개정일 ${doc.version}`,
-          nav: navFor(lang, fileFor[key]),
+          nav: navFor(lang, FILE_FOR[key]),
           content: renderBody(legalBody(key, lang)),
         }),
       );
@@ -315,7 +373,7 @@ function build() {
 ${Object.keys(LEGAL_DOCUMENTS)
   .map(
     (key) =>
-      `<li><a href="${fileFor[key]}${suffix}">${TITLES[lang][key]}</a> — ${
+      `<li><a href="${FILE_FOR[key]}${suffix}">${TITLES[lang][key]}</a> — ${
         lang === 'en' ? 'revised' : '개정일'
       } ${LEGAL_DOCUMENTS[key].version}</li>`,
   )

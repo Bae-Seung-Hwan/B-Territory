@@ -13,8 +13,21 @@ describe('apiDocsEnabled', () => {
   it('개발·테스트에서는 열린다 — 프론트가 스펙을 참고한다', () => {
     expect(apiDocsEnabled({ NODE_ENV: 'development' })).toBe(true);
     expect(apiDocsEnabled({ NODE_ENV: 'test' })).toBe(true);
-    // NODE_ENV가 아예 없는 로컬 실행도 개발로 본다.
+  });
+
+  it('NODE_ENV가 비어 있으면 열린다 — 손으로 띄우는 로컬 실행이다', () => {
+    // `nest start`처럼 아무것도 설정하지 않은 실행. 배포 경로는 NODE_ENV를 명시하므로
+    // 여기 해당하지 않는다.
     expect(apiDocsEnabled({})).toBe(true);
+    expect(apiDocsEnabled({ NODE_ENV: '' })).toBe(true);
+  });
+
+  it('알 수 없는 NODE_ENV는 닫힌다 — 판정이 allow-list여야 하는 이유다', () => {
+    // deny-list(`!== 'production'`)였다면 staging이나 오타 난 값이 전부 열린 쪽으로
+    // 떨어져, 새 배포 경로가 생기는 것만으로 문서가 조용히 다시 공개된다.
+    for (const value of ['staging', 'prod', 'Production', 'production ']) {
+      expect(apiDocsEnabled({ NODE_ENV: value })).toBe(false);
+    }
   });
 
   it('ENABLE_API_DOCS=true면 프로덕션에서도 연다 — 의도적인 탈출구다', () => {

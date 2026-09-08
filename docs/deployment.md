@@ -73,5 +73,5 @@ docker compose --env-file backend/.env -f docker-compose.prod.yml --profile seed
 ## 알려진 제약 / 참고
 
 - 이미지가 `node_modules`를 dev 의존성 포함 전체로 담고 있다 (`migration:*`가 ts-node로 `src/migrations/*.ts`를 직접 실행하는데 `typescript`가 devDependencies에만 있기 때문). 이미지 용량보다 동작 확실성을 우선한 선택이며, 향후 마이그레이션을 컴파일된 `dist/data-source.js` 기반으로 돌리면 `--omit=dev`로 이미지를 줄일 수 있다 (PR #20과 함께 후속 처리).
-- `/api/docs`·`/api/docs-json`은 **프로덕션에서 열리지 않는다.** `NODE_ENV=production`이면 앱이 Swagger를 아예 등록하지 않아 두 경로 모두 404다(`apiDocsEnabled`). Caddy에서 경로를 막는 방식은 설정이 갈리거나 컨테이너를 직접 노출하는 순간 다시 열려서, 앱이 스스로 안 붙이는 쪽을 택했다. 운영 중 스펙을 확인해야 하면 `ENABLE_API_DOCS=true`로 한시적으로 켤 수 있다 — **켜 두고 잊지 말 것.**
+- `/api/docs`·`/api/docs-json`은 **개발·테스트로 알려진 환경에서만 열린다.** 앱이 Swagger를 아예 등록하지 않아 그 외에서는 두 경로 모두 404다(`apiDocsEnabled`). 판정은 allow-list라 `NODE_ENV`가 `development`·`test`이거나 아예 비어 있을 때만 열리고, `production`은 물론 `staging`처럼 알 수 없는 값도 닫힌 쪽으로 떨어진다 — 새 배포 경로가 값을 정확히 맞추지 못했다고 문서가 조용히 다시 공개되지는 않는다. Caddy에서 경로를 막는 방식은 설정이 갈리거나 컨테이너를 직접 노출하는 순간 다시 열려서, 앱이 스스로 안 붙이는 쪽을 택했다. 운영 중 스펙을 확인해야 하면 `ENABLE_API_DOCS=true`로 한시적으로 켤 수 있다 — **켜 두고 잊지 말 것.**
 - 로그는 서비스별 `json-file` 10MB×3개로 로테이션되고, redis는 `maxmemory 256mb`/`noeviction`으로 제한된다 (RAM 1GB 환경 보호).

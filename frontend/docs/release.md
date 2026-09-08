@@ -72,7 +72,7 @@
 
 ### 3. 스토어에 넣을 URL
 
-개인정보처리방침 URL과 계정 삭제 요청 URL은 스토어 필수 입력값이다. 생성기(`scripts/build-legal-pages.mjs`)와 배포 워크플로, 그리고 실제 주소는 **PR #57이 들여온다** — 그 PR이 머지되기 전에는 저장소에 해당 파일도, `docs/compliance.md`의 3.1절도 없다. 머지 후 그 절을 볼 것.
+개인정보처리방침 URL과 계정 삭제 요청 URL은 스토어 필수 입력값이다. 주소와 생성·배포 방식은 `docs/compliance.md` 3.1절에 있다 — 페이지는 `scripts/build-legal-pages.mjs`가 `frontend/src/legal/`에서 생성하고 `.github/workflows/legal-pages.yml`이 develop 푸시에서 GitHub Pages로 올린다. 스토어에 넣기 전에 그 절의 URL을 직접 열어 볼 것.
 
 ## 절차
 
