@@ -12,6 +12,14 @@
 
 프로덕션으로 올릴 준비가 되면 `track`을 `production`으로 바꾼다. `releaseStatus`는 그대로 두고 Console에서 배포하는 편이 안전하다.
 
+### `versionCode`는 EAS가 관리한다 (`appVersionSource: "remote"`)
+
+`local`을 쓰지 않는다. `local`은 **소스가 버전의 원본**이라 EAS가 빌드마다 앱 설정 파일에 증가된 값을 되써야 하는데, 이 프로젝트는 정적 `app.json`이 아니라 **동적 `app.config.js`**를 쓴다 — 코드라서 되쓸 수 없다. 게다가 `android.versionCode`가 아예 정의돼 있지도 않다.
+
+그대로 두면 production 빌드가 매번 같은 `versionCode`를 달고 나가, **첫 제출은 통과하고 두 번째 제출이 `Version code 1 has already been used`로 실패한다.** 반복 제출 흐름에서만 드러나는 종류다.
+
+`remote`는 EAS 서버가 `versionCode`를 들고 빌드마다 올려 준다(첫 빌드에서 1로 시작). 이용자에게 보이는 `version`(`1.0.0`)은 그대로 `app.config.js`가 정한다.
+
 ### 사전 조건 (`eas submit` 전에 갖춰야 하는 것)
 
 1. Google Play 개발자 계정
@@ -32,9 +40,18 @@
 
 ### 1. production 환경변수
 
-`api-client.ts`의 기본값이 `http://localhost:3000`이라, **EAS production 환경에 `EXPO_PUBLIC_API_URL`이 없으면 앱이 아무것도 못 한다.** 빌드는 성공하고 실행 시에만 죽는 종류라 놓치기 쉽다.
+아래 값들은 **없어도 빌드가 성공하고 실행 시에만 죽는다.** EAS의 production 환경에 전부 등록돼 있는지 확인할 것 — 하나라도 빠지면 심사는 통과하고 실사용에서 기능만 죽는다.
 
-`app.config.js`가 `GOOGLE_MAPS_ANDROID_API_KEY`는 없으면 빌드를 fail-fast시키므로 그쪽은 조용히 넘어가지 않는다.
+| 변수 | 없으면 | 읽는 곳 |
+|---|---|---|
+| `EXPO_PUBLIC_API_URL` | `http://localhost:3000`으로 떨어져 **아무것도 못 한다** | `lib/api-client.ts` |
+| `EXPO_PUBLIC_FIREBASE_API_KEY` | 인증 전체 실패 | `lib/firebase.ts` |
+| `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` | 〃 | 〃 |
+| `EXPO_PUBLIC_FIREBASE_PROJECT_ID` | 〃 | 〃 |
+| `EXPO_PUBLIC_FIREBASE_APP_ID` | 〃 | 〃 |
+| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | Google 로그인 실패 | `hooks/use-google-login.ts` |
+
+`GOOGLE_MAPS_ANDROID_API_KEY`는 `app.config.js`의 `requireEnv`가 fail-fast시켜 **조용히 넘어가지는 않는다.** 다만 그 값은 지금까지 EAS의 **development 환경**에만 등록해 관리해 왔으므로(`app.config.js` 주석 참고), production 환경에 따로 넣기 전까지는 `eas build --profile production`이 config 평가 단계에서 그대로 실패한다.
 
 ### 2. 릴리스 서명 SHA-1 등록 — 가장 흔한 사고
 
@@ -55,16 +72,17 @@
 
 ### 3. 스토어에 넣을 URL
 
-`scripts/build-legal-pages.mjs`가 생성해 GitHub Pages로 배포한다. 주소와 갱신 방식은 `docs/compliance.md` 3.1절 참고.
+개인정보처리방침 URL과 계정 삭제 요청 URL은 스토어 필수 입력값이다. 생성기(`scripts/build-legal-pages.mjs`)와 배포 워크플로, 그리고 실제 주소는 **PR #57이 들여온다** — 그 PR이 머지되기 전에는 저장소에 해당 파일도, `docs/compliance.md`의 3.1절도 없다. 머지 후 그 절을 볼 것.
 
 ## 절차
 
 ```bash
-# 1. 빌드
+# 1. (최초 1회) Play Console에서 앱을 만들어 둔다 — 빌드 업로드는 아래가 하지만
+#    앱 자체는 미리 존재해야 한다. AAB 수동 업로드는 필요 없다.
+
+# 2. 빌드
 npx eas build -p android --profile production
 
-# 2. (최초 1회) Play Console에서 앱 생성 + 위 AAB 수동 업로드
-
-# 3. 이후 제출
+# 3. 제출
 npx eas submit -p android --profile production
 ```
