@@ -5,11 +5,14 @@
  * 연결이 끊기므로 값 자체는 절대 바꾸지 않는다. 문서를 개정할 때 바뀌는 것은 이 키가 아니라
  * 함께 저장하는 `version`이다.
  *
- * ⚠️ 그 `LegalDocumentKey`는 아직 develop에 없다 — 미병합 브랜치
- * `feature/Ryu/terms-of-service`(PR #55)의 `frontend/src/legal/index.ts`가 들여온다. 대조할
- * 상대가 없으므로 지금은 리뷰도 CI도 불일치를 잡지 못한다. **그 PR을 머지할 때 세 값이
- * 같은지 눈으로 확인할 것** — `document`는 append-only 원장의 varchar라 어긋난 채로 쌓이면
- * 되돌릴 수 없다.
+ * 일치 여부는 `consent-document-contract.spec.ts`가 프론트 선언을 직접 읽어 대조한다. 그
+ * 검사는 백엔드 유닛 테스트지만 `ci.yml`에 paths 필터가 없어 프론트 전용 PR에서도 돌기
+ * 때문에, 어느 쪽을 먼저 바꾸든 짝을 맞추지 않으면 CI가 막는다. `document`는 append-only
+ * 원장의 varchar라 어긋난 채로 쌓이면 되돌릴 수 없어, 사람 눈에 맡기지 않는다.
+ *
+ * ⚠️ 그 `LegalDocumentKey`는 `frontend/src/legal/index.ts`가 들여오는데 아직 develop에 없다 —
+ * 미병합 브랜치 `feature/Ryu/terms-of-service`(PR #55)가 추가한다. 대조할 상대가 없으면 위
+ * 검사는 **통과가 아니라 실패**하므로, 그 PR이 먼저 머지돼야 한다.
  */
 export enum ConsentDocument {
   SERVICE = 'service',
