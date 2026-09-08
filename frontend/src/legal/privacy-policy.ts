@@ -37,17 +37,14 @@ import type { LegalDocument } from './types';
  * (`user_consents`: document·version·agreedAt, append-only)에 근거한다. 만 14세 확인도 같은
  * 원장에 `age14` 행으로 남고, 그 `version`만 서버가 `AGE_POLICY_VERSION`으로 채운다.
  *
- * ⚠️ **제3조 3항(탈퇴 시 동의 이력 백업)은 아직 구현이 없다.** 지금 `user_consents`는 `userId`에
- * `onDelete: 'CASCADE'`를 건 FK라 계정을 지우면 동의 이력이 **함께 사라진다** — 조항이 약속한
- * "별도 보관소로 옮겨 6개월 보관"과 정면으로 반대다. 이 문서가 참이 되려면 다음이 필요하다.
- *   1. `user_consents`의 FK를 떼고 `subjectId`만 남긴다(엔티티 주석이 이미 예고한 전환이다).
- *   2. 탈퇴 트랜잭션에서 동의 이력 + 이메일 주소를 별도 보관소로 옮긴다. `account.service.ts`의
- *      `deleteAccount`가 `manager.delete(User, ...)` 하는 바로 그 트랜잭션 안이어야 한다 —
- *      밖에 두면 "유저는 지워졌는데 백업은 없는" 행이 남고, 그게 증거로 쓸 기록이다.
- *   3. 6개월 만료 삭제 잡. 선례는 `location-logs`의 purge 잡(`RETENTION_INTERVAL`)이며,
- *      보존기간이 6개월로 같으므로 그 주기를 그대로 따라가면 된다.
- * 구현이 들어오기 전까지 제3조 3항·4항, 제7조 4항, 제9조 4항, 이용약관 제11조 2항은 **거짓이다.**
- * 반대로 구현 방식을 바꾸면(기간·항목·보관 위치) 이 조항들부터 고칠 것.
+ * 제3조 3항(탈퇴 시 동의 이력 백업)은 `backend/src/account/withdrawal-archive.service.ts`에
+ * 구현돼 있다. `deleteAccount`가 `manager.delete(User, ...)` 하는 바로 그 트랜잭션 안에서,
+ * 삭제 **직전에** 동의 이력과 이메일 주소를 `withdrawn_accounts`/`consent_archives`로 옮긴다.
+ * 6개월 파기는 `withdrawal-archive` 큐의 purge 잡(매일 04:10 KST)이 맡으며, 보관 건을 지우면
+ * 동의 행은 FK CASCADE로 함께 사라져 3항의 "그 이후에는 서비스도 동의 사실을 확인할 수
+ * 없습니다"가 성립한다. 3항이 금지한 용도(탈퇴자 식별·재가입 제한·광고)로 쓰지 않도록,
+ * 이 표를 읽는 경로는 이의제기 대응용 내부 조회 하나뿐이고 HTTP로 열지 않았다.
+ * 구현 방식을 바꾸면(기간·항목·보관 위치) 이 조항들부터 고칠 것.
  *
  * 제1조 1호 마지막 줄(Google 계정 로그인)은 `use-google-login.ts`·`login.tsx`의 Google 버튼에
  * 근거한다. Apple은 `login.tsx`에 "임시 비활성화"로 주석 처리돼 있어 의도적으로 넣지 않았다 —

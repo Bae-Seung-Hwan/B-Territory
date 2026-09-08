@@ -38,7 +38,9 @@ export enum ReportStatus {
  *
  * 다만 SET NULL은 **누구에 대한 신고였는지**까지 함께 끊는다. 제재에 불복해 탈퇴한 사람이
  * 나중에 이의를 제기하면 그 기록을 찾을 방법이 없었다. 그래서 피신고자가 탈퇴할 때
- * `withdrawnTargetId`에 가명 식별자를 찍어 연결만 되살린다(`WithdrawnAccount`).
+ * `withdrawnTargetId`에 보관 건을 가리키는 참조를 찍어 연결만 되살린다(`WithdrawnAccount`).
+ * 그 보관 건이 보존기간(6개월)이 지나 파기되면 이 컬럼은 SET NULL로 다시 끊긴다 — 신고
+ * 기록 자체는 방침 제3조 4항에 따라 계속 남되, 탈퇴자와의 연결만 사라지는 것이 맞다.
  * **신고자 쪽은 찍지 않는다** — 되살릴 이유가 없고, SET NULL이 일부러 끊어 둔 "누가
  * 신고했는지"를 되살리는 일이 되기 때문이다.
  */
@@ -89,7 +91,7 @@ export class Report {
   detail: string | null;
 
   /**
-   * 피신고자가 탈퇴한 경우의 가명 식별자. 탈퇴 시점에 채워지며 그 전에는 NULL이다
+   * 피신고자가 탈퇴한 경우의 보관 건 참조. 탈퇴 시점에 채워지며 그 전에는 NULL이다
    * (탈퇴하지 않은 유저는 `targetUserId`가 살아 있어 필요 없다).
    */
   @Column({ type: 'int', nullable: true })

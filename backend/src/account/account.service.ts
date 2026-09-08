@@ -41,12 +41,11 @@ export class AccountService {
    * - `location_usage_logs`는 **건드리지 않는다.** 위치정보법 제16조 2항의 법정 보존
    *   자료(6개월)이며, 그래서 애초에 users FK를 걸지 않았다(docs/compliance.md 4장).
    *   개인정보처리방침에 "탈퇴 후에도 이 기록은 보존된다"를 명시해야 한다.
-   * - **약관 동의·신고 제재·계정 식별자** 셋만 가명으로 보관한다(WithdrawalArchiveService).
+   * - **약관 동의·신고 제재·계정 식별자(이메일)** 셋만 별도 표로 보관한다(WithdrawalArchiveService).
    *   `user_consents`는 CASCADE로 사라지고 `reports`는 FK가 SET NULL이라 "누구에 대한
    *   신고였는지"를 잃는데, 분쟁이 탈퇴 이후에 불거지는 가장 흔한 경우(제재 불복 이의제기)에
-   *   정작 양쪽 다 증거로 쓰이지 못했다. 옮기는 것은 문서·버전·동의 시각과 신고 연결뿐이고
-   *   식별정보는 두지 않는다(자세한 이유는 WithdrawnAccount). 개인정보처리방침의 "탈퇴 후에도
-   *   남는 항목"에 이 표들을 함께 적어야 한다.
+   *   정작 양쪽 다 증거로 쓰이지 못했다. 보관 항목·기간(6개월)·목적은 개인정보처리방침
+   *   제3조 3항이 정한 것이고, 만료분은 purge 잡이 파기한다(WithdrawnAccount 참고).
    * - Firebase Auth 계정도 지운다. 남겨두면 같은 이메일로 재가입이 영구 불가해진다.
    *
    * 순서가 중요하다. DB 삭제를 먼저 커밋한 뒤 Firebase를 지운다 — 반대로 하면 Firebase만

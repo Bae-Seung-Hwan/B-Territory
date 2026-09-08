@@ -1,23 +1,18 @@
-import { createHash } from 'crypto';
 import { WithdrawalArchiveService } from './withdrawal-archive.service';
 import { UserConsent } from '../consents/entities/user-consent.entity';
 import { Report } from '../moderation/entities/report.entity';
 import { ConsentArchive } from './entities/consent-archive.entity';
 import { WithdrawnAccount } from './entities/withdrawn-account.entity';
+import { WITHDRAWAL_RETENTION_INTERVAL } from './constants';
 
-const EMAIL = 'Gil.Dong@Example.com ';
+const EMAIL = ' Gil.Dong@Example.com ';
+const NORMALIZED = 'gil.dong@example.com';
 const AGREED_AT = new Date('2026-09-08T01:02:03Z');
-
-/** 저장된 소금으로 이메일을 다시 해싱한 값 — 서비스가 대조에 쓰는 것과 같은 방식. */
-const rehash = (salt: string, email: string) =>
-  createHash('sha256')
-    .update(salt + email.trim().toLowerCase())
-    .digest('hex');
 
 describe('WithdrawalArchiveService', () => {
   /**
-   * 트랜잭션 manager를 엔티티별 저장소로 흉내 낸다. 어느 표에 무엇이 들어갔는지를
-   * 엔티티 단위로 봐야 "식별정보를 옮기지 않는다"를 검사할 수 있다.
+   * 트랜잭션 manager를 엔티티별 저장소로 흉내 낸다. 어느 표에 무엇이 들어갔는지를 엔티티
+   * 단위로 봐야 "보관 항목이 조항 범위를 넘지 않는다"를 검사할 수 있다.
    */
   function makeManager(consents: Partial<UserConsent>[]) {
     const saved: WithdrawnAccount[] = [];
@@ -63,7 +58,13 @@ describe('WithdrawalArchiveService', () => {
     consentArchives: Partial<ConsentArchive>[] = [],
     reports: Partial<Report>[] = [],
   ) {
-    const withdrawalRepo = { find: jest.fn().mockResolvedValue(withdrawals) };
+    const execute = jest.fn().mockResolvedValue({ affected: 3 });
+    const where = jest.fn(() => ({ execute }));
+    const del = jest.fn(() => ({ where }));
+    const withdrawalRepo = {
+      find: jest.fn().mockResolvedValue(withdrawals),
+      createQueryBuilder: jest.fn(() => ({ delete: del })),
+    };
     const consentArchiveRepo = {
       find: jest.fn().mockResolvedValue(consentArchives),
     };
@@ -73,7 +74,7 @@ describe('WithdrawalArchiveService', () => {
       consentArchiveRepo as never,
       reportRepo as never,
     );
-    return { service, withdrawalRepo, consentArchiveRepo, reportRepo };
+    return { service, withdrawalRepo, consentArchiveRepo, reportRepo, where };
   }
 
   describe('archive', () => {
@@ -82,26 +83,33 @@ describe('WithdrawalArchiveService', () => {
       { document: 'age14', version: '2026-09-07', agreedAt: AGREED_AT },
     ] as Partial<UserConsent>[];
 
-    it('식별정보를 옮기지 않는다 — 남는 것은 소금과 해시뿐이다', async () => {
+    it('보관 항목은 이메일뿐이다 — 조항이 정한 범위를 넘지 않는다', async () => {
       const { service } = makeService();
       const { manager, saved, inserted } = makeManager(consentRows);
 
       await service.archive('user-1', EMAIL, manager as never);
 
       const [account] = saved;
-      // 이메일·유저 id·닉네임 어느 것도 그대로 남으면 안 된다. 남으면 "탈퇴 시 지체 없이
-      // 삭제"가 깨진다.
+      // 방침 제3조 3항이 "특정하기 위한 이메일 주소"만 적었다. userId·닉네임까지 옮기면
+      // 그 조항을 넘어선다.
+      expect(account.email).toBe(NORMALIZED);
       expect(JSON.stringify(account)).not.toContain('user-1');
-      expect(JSON.stringify(account).toLowerCase()).not.toContain('gil.dong');
-      expect(account.subjectSalt).toHaveLength(32);
-      expect(account.subjectHash).toBe(rehash(account.subjectSalt, EMAIL));
 
-      // 동의 행에도 식별정보가 없다 — 연결은 가명 식별자 하나로만 이어진다.
+      // 동의 행에도 식별정보가 없다 — 연결은 보관 건 참조 하나로만 이어진다.
       for (const row of inserted[0]) {
         expect(Object.keys(row).sort()).toEqual(
           ['agreedAt', 'document', 'version', 'withdrawalId'].sort(),
         );
       }
+    });
+
+    it('이메일을 정규화해 저장한다 — 나중 대조가 표기 차이로 빗나가지 않도록', async () => {
+      const { service } = makeService();
+      const { manager, saved } = makeManager(consentRows);
+
+      await service.archive('user-1', EMAIL, manager as never);
+
+      expect(saved[0].email).toBe(NORMALIZED);
     });
 
     it('문서·개정일·동의 시각을 그대로 옮긴다', async () => {
@@ -126,7 +134,7 @@ describe('WithdrawalArchiveService', () => {
       ]);
     });
 
-    it('피신고자였던 신고에 가명 식별자를 찍어 연결을 되살린다', async () => {
+    it('피신고자였던 신고에 보관 건을 찍어 연결을 되살린다', async () => {
       const { service } = makeService();
       const { manager, updates } = makeManager(consentRows);
 
@@ -151,45 +159,28 @@ describe('WithdrawalArchiveService', () => {
       expect(inserted).toEqual([]);
       expect(updates).toHaveLength(1);
     });
-
-    it('탈퇴 건마다 소금이 달라 같은 이메일도 다른 해시가 된다', async () => {
-      const { service } = makeService();
-      const first = makeManager(consentRows);
-      const second = makeManager(consentRows);
-
-      await service.archive('user-1', EMAIL, first.manager as never);
-      await service.archive('user-2', EMAIL, second.manager as never);
-
-      // 같으면 이메일 목록을 통째로 대입해 표 전체를 역산할 수 있게 된다.
-      expect(first.saved[0].subjectSalt).not.toBe(second.saved[0].subjectSalt);
-      expect(first.saved[0].subjectHash).not.toBe(second.saved[0].subjectHash);
-    });
   });
 
   describe('findByEmail', () => {
-    const salt = 'a'.repeat(32);
-    const stored = {
-      id: 7,
-      subjectSalt: salt,
-      subjectHash: rehash(salt, EMAIL),
-      withdrawnAt: AGREED_AT,
-    };
-
     it('이메일을 제시하면 동의 사실과 신고 이력을 함께 돌려준다', async () => {
-      const { service, consentArchiveRepo, reportRepo } = makeService(
-        [{ id: 1, subjectSalt: 'b'.repeat(32), subjectHash: 'nope' }, stored],
-        [{ document: 'service', version: '2026-09-08', agreedAt: AGREED_AT }],
-        [{ id: 11, status: 'ACTIONED' } as Partial<Report>],
-      );
+      const { service, withdrawalRepo, consentArchiveRepo, reportRepo } =
+        makeService(
+          [{ id: 7, email: NORMALIZED, withdrawnAt: AGREED_AT }],
+          [{ document: 'service', version: '2026-09-08', agreedAt: AGREED_AT }],
+          [{ id: 11 }],
+        );
 
       const found = await service.findByEmail(EMAIL);
 
-      expect(found).not.toBeNull();
-      expect(found?.consents).toEqual([
+      // 표기가 달라도 같은 사람으로 찾도록 정규화한 값으로 조회한다.
+      expect(withdrawalRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { email: NORMALIZED } }),
+      );
+      expect(found).toHaveLength(1);
+      expect(found[0].consents).toEqual([
         { document: 'service', version: '2026-09-08', agreedAt: AGREED_AT },
       ]);
-      expect(found?.reports).toHaveLength(1);
-      // 두 조회 모두 가명 식별자로만 좁힌다.
+      expect(found[0].reports).toHaveLength(1);
       expect(consentArchiveRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({ where: { withdrawalId: 7 } }),
       );
@@ -198,20 +189,37 @@ describe('WithdrawalArchiveService', () => {
       );
     });
 
-    it('대소문자·공백이 달라도 같은 사람으로 찾는다', async () => {
-      const { service } = makeService([stored]);
+    it('같은 주소로 여러 번 탈퇴했으면 전부 돌려준다', async () => {
+      // 탈퇴 후 재가입해 다시 탈퇴하면 각각이 서로 다른 시점의 동의를 증명하는 별개의
+      // 기록이다. 최근 것만 돌려주면 나머지가 조용히 가려진다.
+      const { service } = makeService([
+        { id: 8, email: NORMALIZED, withdrawnAt: new Date() },
+        { id: 7, email: NORMALIZED, withdrawnAt: AGREED_AT },
+      ]);
 
-      await expect(
-        service.findByEmail('  GIL.DONG@EXAMPLE.COM  '),
-      ).resolves.not.toBeNull();
+      await expect(service.findByEmail(EMAIL)).resolves.toHaveLength(2);
     });
 
-    it('맞는 기록이 없으면 null이다 — 없는 사람을 만들어내지 않는다', async () => {
-      const { service } = makeService([stored]);
+    it('맞는 기록이 없으면 빈 배열이다 — 없는 사람을 만들어내지 않는다', async () => {
+      const { service } = makeService([]);
 
-      await expect(
-        service.findByEmail('other@example.com'),
-      ).resolves.toBeNull();
+      await expect(service.findByEmail('other@example.com')).resolves.toEqual(
+        [],
+      );
+    });
+  });
+
+  describe('purgeExpired', () => {
+    it('보존기간이 지난 보관 건만 지운다', async () => {
+      const { service, where } = makeService();
+
+      await expect(service.purgeExpired()).resolves.toBe(3);
+
+      // 방침 제3조 3항의 "보관 기간이 지나면 자동으로 파기" — 기간 안쪽 기록은 건드리지
+      // 않는다. consent_archives는 FK CASCADE로, reports는 SET NULL로 함께 정리된다.
+      expect(where).toHaveBeenCalledWith(expect.any(String), {
+        interval: WITHDRAWAL_RETENTION_INTERVAL,
+      });
     });
   });
 });

@@ -220,9 +220,9 @@ describe('Account deletion (e2e)', () => {
     expect(await consentRepo.count()).toBe(0);
     const [withdrawal] = await withdrawalRepo.find();
     expect(withdrawal).toBeDefined();
-    // 식별정보는 옮기지 않는다 — 남는 것은 소금과 해시뿐이다.
+    // 보관 항목은 방침 제3조 3항이 정한 이메일뿐 — userId까지 옮기면 조항을 넘어선다.
+    expect(withdrawal.email).toBe('del-a@test.com');
     expect(JSON.stringify(withdrawal)).not.toContain(a.id);
-    expect(JSON.stringify(withdrawal)).not.toContain('del-a@test.com');
 
     const archived = await archiveRepo.find({ order: { id: 'ASC' } });
     expect(archived.map((row) => row.document)).toEqual(['service', 'age14']);
@@ -256,16 +256,53 @@ describe('Account deletion (e2e)', () => {
 
     // 이 표가 존재하는 이유 자체 — 탈퇴 후에도 "동의를 받았고, 어떤 신고가 있었는지"에
     // 답할 수 있어야 한다.
-    const found = await archiveService.findByEmail('DEL-A@TEST.COM');
-    expect(found?.consents).toEqual([
+    const found = await archiveService.findByEmail('  DEL-A@TEST.COM  ');
+    expect(found).toHaveLength(1);
+    expect(found[0].consents).toEqual([
       expect.objectContaining({ document: 'service', version: '2026-09-08' }),
     ]);
-    expect(found?.reports).toHaveLength(1);
+    expect(found[0].reports).toHaveLength(1);
 
     // 다른 사람의 이메일로는 아무것도 나오지 않는다.
-    await expect(
-      archiveService.findByEmail('del-b@test.com'),
-    ).resolves.toBeNull();
+    await expect(archiveService.findByEmail('del-b@test.com')).resolves.toEqual(
+      [],
+    );
+  });
+
+  it('보존기간이 지난 보관 건은 파기되고 신고 연결도 끊긴다', async () => {
+    const { a, b } = await seed();
+    await consentRepo.insert({
+      userId: a.id,
+      document: 'service',
+      version: '2026-09-08',
+    });
+    await reportRepo.insert({
+      reporterId: b.id,
+      targetUserId: a.id,
+      reason: ReportReason.ABUSE,
+    });
+
+    await request(app.getHttpServer())
+      .delete('/api/users/me')
+      .set('Authorization', `Bearer ${a.firebaseUid}`)
+      .expect(204);
+
+    // withdrawnAt은 @CreateDateColumn이라 save()로 지정할 수 없어 raw update로 되돌린다.
+    await dataSource.query(
+      `UPDATE "withdrawn_accounts" SET "withdrawnAt" = now() - interval '7 months'`,
+    );
+
+    await expect(archiveService.purgeExpired()).resolves.toBe(1);
+
+    // 보관 건이 사라지면 동의 사실도 FK CASCADE로 함께 파기된다 — 방침 제3조 3항의
+    // "그 이후에는 서비스도 동의 사실을 확인할 수 없습니다"가 실제로 성립해야 한다.
+    expect(await withdrawalRepo.count()).toBe(0);
+    expect(await archiveRepo.count()).toBe(0);
+
+    // 신고 기록 자체는 제3조 4항에 따라 남고, 탈퇴자와의 연결만 끊긴다.
+    const [report] = await reportRepo.find();
+    expect(report).toBeDefined();
+    expect(report.withdrawnTargetId).toBeNull();
   });
 
   it('탈퇴 후 같은 토큰으로 조회하면 404 (계정이 실제로 사라짐)', async () => {
