@@ -84,7 +84,7 @@ export const termsOfService: LegalDocument = {
 이 약관은 대한민국 법을 준거법으로 하며, 서비스와 이용자 간 분쟁은 관련 법령이 정한 절차에 따릅니다.
 
 부칙
-이 약관은 2026년 9월 7일부터 시행합니다.`,
+이 약관은 2026년 9월 8일부터 시행합니다.`,
     en: `Article 1 (Purpose)
 These Terms set out the rights, obligations, and responsibilities between B-Territory (the "Service") and its users.
 
@@ -153,6 +153,6 @@ Article 13 (Governing Law and Disputes)
 These Terms are governed by the laws of the Republic of Korea, and disputes between the Service and a user follow the procedures prescribed by applicable law.
 
 Addendum
-These Terms take effect on 7 September 2026.`,
+These Terms take effect on 8 September 2026.`,
   },
 };

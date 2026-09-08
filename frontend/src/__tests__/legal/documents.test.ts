@@ -39,6 +39,26 @@ describe('legal documents', () => {
     expect(LEGAL_DOCUMENTS[key].version).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
+  /**
+   * 부칙의 시행일은 `version`과 같은 날이어야 한다.
+   *
+   * 둘은 같은 사실("이 문서가 언제부터의 것인가")을 두 군데에 적어둔 것인데, `version`은
+   * 상수 한 줄이고 시행일은 본문 맨 끝이라 조항을 고치면서 한쪽만 올리기 쉽다. 실제로
+   * 2차 리뷰 반영에서 `version`만 2026-09-08로 올라가고 부칙은 9월 7일로 남았었다.
+   * 어긋나면 **이용자가 읽는 시행일과 동의 원장(`user_consents.version`)에 남는 값이
+   * 달라져**, 나중에 "어느 문서에 동의했는가"를 원장으로 되짚을 수 없게 된다.
+   */
+  it.each(LEGAL_DOCUMENT_KEYS)('%s의 부칙 시행일이 version과 같은 날이다', (key) => {
+    const [year, month, day] = LEGAL_DOCUMENTS[key].version.split('-').map(Number);
+    const MONTHS_EN = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+
+    expect(LEGAL_DOCUMENTS[key].body.ko).toContain(`${year}년 ${month}월 ${day}일`);
+    expect(LEGAL_DOCUMENTS[key].body.en).toContain(`${day} ${MONTHS_EN[month - 1]} ${year}`);
+  });
+
   describe.each(locales)('%s 본문', (locale) => {
     it.each(LEGAL_DOCUMENT_KEYS)('%s에 실제 조항이 들어 있다', (key) => {
       const body = LEGAL_DOCUMENTS[key].body[locale];

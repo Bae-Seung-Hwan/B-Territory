@@ -91,7 +91,7 @@ export const locationTerms: LegalDocument = {
 위치정보 처리에 관한 문의는 B.territory123@gmail.com으로 접수합니다.
 
 부칙
-이 약관은 2026년 9월 7일부터 시행합니다.`,
+이 약관은 2026년 9월 8일부터 시행합니다.`,
     en: `Article 1 (Purpose)
 These Terms set out the rights, obligations, and responsibilities between B-Territory (the "Service") and the subject of personal location information in relation to the location-based services the Service provides.
 
@@ -142,6 +142,6 @@ Article 10 (Location Information Manager and Contact)
 Enquiries concerning the processing of location information are received at B.territory123@gmail.com.
 
 Addendum
-These Terms take effect on 7 September 2026.`,
+These Terms take effect on 8 September 2026.`,
   },
 };

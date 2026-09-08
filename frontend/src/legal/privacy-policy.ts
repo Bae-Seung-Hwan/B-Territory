@@ -125,7 +125,7 @@ export const privacyPolicy: LegalDocument = {
 개인정보 처리에 관한 문의·불만·피해구제는 B.territory123@gmail.com으로 접수하며, 접수 즉시 답변드리겠습니다.
 
 부칙
-이 방침은 2026년 9월 7일부터 시행합니다. 방침이 변경되는 경우 적용일자와 변경사유를 앱 내에 공지합니다.`,
+이 방침은 2026년 9월 8일부터 시행합니다. 방침이 변경되는 경우 적용일자와 변경사유를 앱 내에 공지합니다.`,
     en: `B-Territory (the "Service") treats personal data with care and complies with the Personal Information Protection Act and the Act on the Protection and Use of Location Information of the Republic of Korea.
 
 Article 1 (Personal Data Collected)
@@ -202,6 +202,6 @@ Article 10 (Contact)
 Enquiries, complaints, and remedy requests concerning the processing of personal data are received at B.territory123@gmail.com and will be answered promptly.
 
 Addendum
-This Policy takes effect on 7 September 2026. Any change will be announced in the app with the effective date and the reason for the change.`,
+This Policy takes effect on 8 September 2026. Any change will be announced in the app with the effective date and the reason for the change.`,
   },
 };
