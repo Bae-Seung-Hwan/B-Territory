@@ -63,6 +63,7 @@ describe('WithdrawalArchiveService', () => {
     const del = jest.fn(() => ({ where }));
     const withdrawalRepo = {
       find: jest.fn().mockResolvedValue(withdrawals),
+      delete: jest.fn().mockResolvedValue({ affected: 2 }),
       createQueryBuilder: jest.fn(() => ({ delete: del })),
     };
     const consentArchiveRepo = {
@@ -206,6 +207,32 @@ describe('WithdrawalArchiveService', () => {
       await expect(service.findByEmail('other@example.com')).resolves.toEqual(
         [],
       );
+    });
+  });
+
+  describe('deleteByEmail', () => {
+    it('파기 요구를 받은 이용자의 보관 건만 지운다', async () => {
+      const { service, withdrawalRepo } = makeService();
+
+      await expect(service.deleteByEmail(EMAIL)).resolves.toBe(2);
+
+      // 저장할 때와 같은 정규화를 거쳐야 본인 기록을 찾는다.
+      expect(withdrawalRepo.delete).toHaveBeenCalledWith({
+        email: NORMALIZED,
+      });
+    });
+
+    it('보존기간이 남아 있어도 지운다', async () => {
+      // 보관의 근거가 증명 필요성이고, 본인이 그 증명을 포기하겠다고 하면 남길 이유가
+      // 없어진다(방침 제7조 4항). 기간 조건을 걸면 요구를 이행하지 못한다.
+      const { service, withdrawalRepo } = makeService();
+
+      await service.deleteByEmail(EMAIL);
+
+      const [where] = withdrawalRepo.delete.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+      expect(Object.keys(where)).toEqual(['email']);
     });
   });
 

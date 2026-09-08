@@ -124,6 +124,25 @@ export class WithdrawalArchiveService {
   }
 
   /**
+   * 이용자가 파기를 요구했을 때 그 사람의 보관 건을 지운다(방침 제7조 4항).
+   *
+   * 보존기간이 남아 있어도 지운다 — 보관의 근거가 증명 필요성이고, 본인이 그 증명을
+   * 포기하겠다고 하면 남길 이유가 없어진다. **그래서 이후로는 그 이용자에게 동의를 받았다는
+   * 사실을 증명할 수 없다.** 조항도 그 점을 함께 안내하도록 적혀 있으므로, 요구를 접수할 때
+   * 반드시 알린 뒤 실행할 것.
+   *
+   * `purgeExpired`와 같은 이유로 `withdrawn_accounts`만 지우면 된다 — 동의 행은 FK CASCADE로,
+   * 신고 연결은 SET NULL로 함께 정리된다. 신고 기록 자체는 방침 제3조 4항의 별개 항목이라
+   * 파기 요구 대상이 아니다.
+   */
+  async deleteByEmail(email: string): Promise<number> {
+    const result = await this.withdrawals.delete({
+      email: normalizeEmail(email),
+    });
+    return result.affected ?? 0;
+  }
+
+  /**
    * 보존기간(6개월)이 지난 보관 건을 파기한다. 방침 제3조 3항의 "보관 기간이 지나면 자동으로
    * 파기하며, 그 이후에는 서비스도 동의 사실을 확인할 수 없습니다"를 실제로 성립시키는 잡이다.
    *

@@ -10,9 +10,9 @@
  * 때문에, 어느 쪽을 먼저 바꾸든 짝을 맞추지 않으면 CI가 막는다. `document`는 append-only
  * 원장의 varchar라 어긋난 채로 쌓이면 되돌릴 수 없어, 사람 눈에 맡기지 않는다.
  *
- * ⚠️ 그 `LegalDocumentKey`는 `frontend/src/legal/index.ts`가 들여오는데 아직 develop에 없다 —
- * 미병합 브랜치 `feature/Ryu/terms-of-service`(PR #55)가 추가한다. 대조할 상대가 없으면 위
- * 검사는 **통과가 아니라 실패**하므로, 그 PR이 먼저 머지돼야 한다.
+ * 그 `LegalDocumentKey`는 `frontend/src/legal/index.ts`에 있다. 대조할 상대를 못 찾으면 위
+ * 검사는 **통과가 아니라 실패**한다 — 조용히 건너뛰면 파일이 옮겨지거나 지워지는 순간 검사도
+ * 함께 사라져, 그 검사가 없애려던 구멍이 그대로 되살아나기 때문이다.
  */
 export enum ConsentDocument {
   SERVICE = 'service',

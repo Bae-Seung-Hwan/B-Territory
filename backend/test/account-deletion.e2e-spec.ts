@@ -198,7 +198,7 @@ describe('Account deletion (e2e)', () => {
     expect(nicknames).toContain('Del B');
   });
 
-  it('약관 동의·신고 제재·계정 식별자만 가명으로 남는다', async () => {
+  it('약관 동의·신고 제재·계정 식별자만 남는다', async () => {
     const { a, b } = await seed();
     await consentRepo.insert([
       { userId: a.id, document: 'service', version: '2026-09-08' },
@@ -230,7 +230,7 @@ describe('Account deletion (e2e)', () => {
       true,
     );
 
-    // 신고 기록은 남되(SET NULL) 누구에 대한 것이었는지가 가명으로 되살아난다.
+    // 신고 기록은 남되(SET NULL) 누구에 대한 것이었는지가 보관 건 참조로 되살아난다.
     const [report] = await reportRepo.find();
     expect(report.targetUserId).toBeNull();
     expect(report.withdrawnTargetId).toBe(withdrawal.id);
