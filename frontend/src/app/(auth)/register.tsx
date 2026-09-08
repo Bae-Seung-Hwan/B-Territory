@@ -119,6 +119,14 @@ export default function RegisterScreen() {
    */
   const handleRegistrationError = (err: unknown) => {
     if (err instanceof MissingConsentError) {
+      // complete-profile.tsx의 같은 상황과 달리 여기서는 signOut하지 않는다 — 이 화면에
+      // 도착했다는 것은 이미 이메일 인증까지 마친 계정이라는 뜻이라(finishRegistration은
+      // emailVerified 확인 이후에만 호출된다), 세션을 남겨두면 사용자가 동의만 다시
+      // 하고 돌아왔을 때 이어서-가입(auth.currentUser 기반 lazy initializer)이
+      // 'awaitingVerification' 단계로 곧장 진입시켜 인증 메일을 다시 받을 필요가 없다.
+      // (다만 이 세션 상태로 로그인 폼에 직접 입력하면 finishLogin의 getMe()===null
+      // 분기가 자격증명 오류로 잘못 안내하니, "동의하고 계속하기"로 돌아오는 것을
+      // 전제로 한다.)
       Alert.alert(t('auth.errors.title'), t('auth.errors.consentRequired'));
       router.replace('/(auth)/login');
       return;

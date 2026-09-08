@@ -401,6 +401,33 @@ describe('롤백 불변식', () => {
     expect(user.delete).not.toHaveBeenCalled();
   });
 
+  /**
+   * loadPendingConsent는 문서 목록만 대조하고 version은 대조하지 않으므로(의도적으로),
+   * 서버가 모르는 개정일을 그대로 실어 보내면 CONSENT_VERSION_UNKNOWN으로 400이 온다.
+   * 이 코드를 다른 4xx와 똑같이 취급해 롤백하면, 이 훅이 막으려던 것과 정확히 같은
+   * 결과(이메일 인증까지 마친 계정 삭제)가 재현된다(PR #59 리뷰 지적).
+   */
+  it.each(['CONSENT_INCOMPLETE', 'CONSENT_VERSION_UNKNOWN'])(
+    '이번 시도로 만든 계정 + %s → 롤백하지 않고 동의 시트로 되돌린다',
+    async (code) => {
+      const { result } = await renderFlow();
+      const user = await submitFreshAccount(result);
+      (authApi.registerUser as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        response: { status: 400, data: { code } },
+      });
+
+      await act(async () => {
+        await expect(result.current.confirmVerification('nick', 'KR')).rejects.toBeInstanceOf(
+          MissingConsentError,
+        );
+      });
+
+      expect(user.delete).not.toHaveBeenCalled();
+      expect(clearPendingConsent).toHaveBeenCalled();
+    },
+  );
+
   it('이어서-가입(콜드스타트/signIn) 경로는 4xx여도 롤백하지 않는다', async () => {
     // 이번 컴포넌트 인스턴스가 계정을 만들지 않았다 — 마운트 시점부터 세션이 있던 콜드스타트 케이스.
     const user = createUser({ emailVerified: true });

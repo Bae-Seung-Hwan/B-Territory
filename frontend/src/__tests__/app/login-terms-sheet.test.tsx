@@ -123,6 +123,29 @@ describe('약관 동의 시트', () => {
     });
   });
 
+  /**
+   * 버튼에 busy/disabled 표시가 없어(disabled={!allAgreed}뿐) 연타가 그대로 두 번
+   * 들어온다. 소셜 경로에서 두 번째 호출이 isAwaitingConsent()를 읽을 때는 첫 번째
+   * 호출이 이미 동의 대기 promise를 비운 뒤라 결과가 달라져, Google/Apple 유저가
+   * 이메일 가입 화면(register) 위에 얹히는 사고로 이어졌다(PR #59 리뷰 지적).
+   */
+  it('연속으로 두 번 눌러도 한 번만 처리한다 (연타 방지)', async () => {
+    (savePendingConsent as jest.Mock).mockResolvedValue(undefined);
+    const { getByTestId } = await render(<LoginScreen />);
+    const scroll = within(getByTestId('sheet-scroll'));
+
+    await act(async () => {
+      fireEvent.press(scroll.getByText(`☐ ${label('agreeAll')}`));
+    });
+
+    await act(async () => {
+      fireEvent.press(scroll.getByText(label('continue')));
+      fireEvent.press(scroll.getByText(label('continue')));
+    });
+
+    expect(savePendingConsent).toHaveBeenCalledTimes(1);
+  });
+
   it('동의가 덜 된 상태에서는 아무것도 넘기지 않는다', async () => {
     const { getByTestId } = await render(<LoginScreen />);
     const scroll = within(getByTestId('sheet-scroll'));

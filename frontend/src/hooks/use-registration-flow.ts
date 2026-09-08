@@ -13,6 +13,7 @@ import {
   clearPendingConsent,
   loadPendingConsent,
 } from '@/lib/pending-consent';
+import { getApiErrorCode } from '@/lib/api-errors';
 import { useRegisterMutation } from '@/hooks/use-auth';
 import { useSendFirebaseVerificationEmail } from '@/hooks/use-firebase-email-verification';
 
@@ -79,6 +80,18 @@ export function useRegistrationFlow({ onRegistered }: UseRegistrationFlowOptions
         void clearPendingConsent();
         onRegistered();
       } catch (backendErr) {
+        // 스냅샷의 문서 목록은 loadPendingConsent가 대조하지만 version은(의도적으로)
+        // 대조하지 않으므로, 서버가 모르는 개정일이면 CONSENT_VERSION_UNKNOWN으로,
+        // 필수 문서 정의 자체가 그새 바뀌었으면 CONSENT_INCOMPLETE로 400이 올 수 있다.
+        // 이 둘은 재시도해도 계속 실패하고, 아래 롤백 판정을 그대로 통과시키면 이
+        // 훅이 막으려던 것과 똑같이 이메일 인증까지 마친 계정이 지워진다. 스냅샷을
+        // 지우고 MissingConsentError와 같은 경로(동의 시트로 복귀)로 보낸다.
+        const errorCode = getApiErrorCode(backendErr);
+        if (errorCode === 'CONSENT_INCOMPLETE' || errorCode === 'CONSENT_VERSION_UNKNOWN') {
+          void clearPendingConsent();
+          throw new MissingConsentError();
+        }
+
         // 백엔드가 4xx로 명확히 거부한 경우(409 제외)에만 서버에 아무 부작용도
         // 없었다고 확신할 수 있어 Firebase 계정을 롤백한다. 네트워크/타임아웃/5xx는
         // 백엔드에 유저 row가 실제로 생겼을 수 있으므로 롤백하지 않는다.
