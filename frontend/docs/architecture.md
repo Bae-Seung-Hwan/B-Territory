@@ -75,6 +75,15 @@
 - **`lib/register-draft.ts`** — 가입 초안을 AsyncStorage에 보관(최대 24시간). 이메일 인증 링크를
   누르러 나갔다가 앱이 꺼져도 닉네임/국적을 다시 입력하지 않게 하려는 것이다. 비밀번호는 담지
   않으므로 복원 후 다시 입력해야 한다.
+- **`lib/pending-consent.ts`** — 약관 동의 스냅샷을 AsyncStorage에 보관(최대 24시간). 동의는
+  로그인 화면의 시트에서 받는데 `POST /api/auth/register`를 부르는 곳은 다음 화면이라
+  (이메일은 `register.tsx`, 소셜은 `complete-profile.tsx`) 상태로는 건널 수 없고, 이메일
+  경로는 인증 메일을 확인하러 나갔다 **콜드스타트로 돌아오는** 것이 정상 흐름이다.
+  **제출 시점에 `LEGAL_DOCUMENTS`에서 다시 만들지 않는다** — 그러면 시트를 거치지 않은
+  진입(딥링크 등)에서도 동의 기록이 생겨, 받은 적 없는 동의를 서버 원장에 남기게 된다.
+  읽을 때 지금 앱의 문서 목록과 일치하는지 대조한다: 문서가 늘어난 버전으로 업데이트된 뒤
+  옛 스냅샷을 보내면 서버가 누락으로 400을 주고, 그 400은 아래 롤백 규칙에 걸려 인증까지
+  마친 Firebase 계정을 지운다.
 - **`components/map/BusanMapView.tsx`는 controlled 컴포넌트다.** `useSocket()`이나 스토어를 직접
   구독하지 않고 prop만 받는다. 다만 **자식인 `DistrictPolygons`는 예외적으로 `useGameStore`를 직접
   구독**해 이번 주 수도 강조 링을 그린다 — 부모에 prop을 늘리지 않는다는 규칙을 지키면서 지도
@@ -92,6 +101,11 @@
 - **법적 본문은 `src/legal/`, 화면 라벨은 `src/i18n/`.** 조항이 길어 UI 문구와 섞으면 관리가 안
   되고, 문서의 `version`을 본문과 같은 파일에 둬야 조항만 고치고 버전을 안 올리는 실수를 막을 수
   있다. 동의 항목을 추가할 땐 `legal/index.ts`의 `LEGAL_DOCUMENT_KEYS`도 함께 고쳐야 한다.
+  서버로 보낼 동의 페이로드(`buildConsentSnapshot`)는 그 목록에서 파생되므로 따로 고칠 곳은
+  없다. 다만 `document` 값은 백엔드 `ConsentDocument`와 **문자열이 같아야 한다** —
+  append-only 원장의 varchar라 어긋난 채로 쌓이면 되돌릴 수 없다. 두 저장소를 잇는 자동
+  검증은 백엔드 `consent-document-contract.spec.ts`가 프론트 선언을 직접 읽어 대조하므로,
+  값이 갈라지면 CI가 막는다.
 - **`constants/busan.ts`** — 지도 드래그 제한과 "현재 위치가 부산 범위 밖인지" 판정이 같은 좌표
   기준을 써야 하므로 단일 소스로 둔다.
 - **`constants/theme.ts`는 팔레트를 두 벌 들고 있다.** `Colors`는 Expo 기본 템플릿의 라이트/다크

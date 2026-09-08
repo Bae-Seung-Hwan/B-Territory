@@ -87,6 +87,7 @@ export const ko = {
       sessionExpired: '세션이 만료되었습니다. 다시 로그인해주세요',
       alreadyRegistered: '이미 가입된 사용자입니다',
       emailVerificationRequired: '이메일 인증이 필요합니다. 인증 메일의 링크를 먼저 확인해주세요',
+      consentRequired: '약관 동의가 만료되었습니다. 다시 동의해주세요',
     },
   },
   tabs: {

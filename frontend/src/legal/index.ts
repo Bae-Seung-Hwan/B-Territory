@@ -46,3 +46,53 @@ export function legalBody(key: LegalDocumentKey, locale: string): string {
   const { body } = LEGAL_DOCUMENTS[key];
   return body[locale as keyof typeof body] ?? body.en;
 }
+
+/**
+ * 서버 동의 원장(`user_consents`)에 남길 한 건. `document`는 백엔드 `ConsentDocument`와
+ * **문자열이 같아야 한다** — append-only 원장의 varchar라 어긋난 채로 쌓이면 되돌릴 수 없다.
+ * 그 대조를 사람 눈이 아니라 타입이 하도록, 여기서 `LegalDocumentKey`를 그대로 쓴다.
+ */
+export interface ConsentRecord {
+  document: LegalDocumentKey;
+  version: string;
+}
+
+/**
+ * 동의 시점에 확정되는 값. 가입 API(`POST /api/auth/register`)의 `consents`/`ageConfirmed`가
+ * 그대로 이 모양이다.
+ *
+ * 만 14세 확인만 배열이 아니라 별도 불리언인 이유는 대응하는 조항 전문이 없어 **보낼
+ * `version`이 없기** 때문이다. 원장에는 `age14` 행으로 남되 그 버전은 서버가 채운다.
+ */
+export interface ConsentSnapshot {
+  consents: ConsentRecord[];
+  ageConfirmed: boolean;
+}
+
+/**
+ * 체크박스 상태를 서버로 보낼 동의 기록으로 바꾼다. **하나라도 빠지면 `null`이다** —
+ * 부분 동의로 가입을 시도해봐야 서버가 `CONSENT_INCOMPLETE`로 400을 주고, 그 400은
+ * use-registration-flow.ts의 롤백 판정에 걸려 Firebase 계정 삭제까지 간다.
+ *
+ * 보낼 목록을 손으로 적지 않고 `LEGAL_DOCUMENT_KEYS`에서 파생시킨다 — 문서를 추가하고
+ * 여기 배열에만 빠뜨리면, 화면에서는 동의를 받아놓고 서버에는 그 항목만 조용히 빠진
+ * 요청이 나간다(그리고 서버가 필수 목록을 자기가 정하므로 400이 된다).
+ *
+ * `version`은 상수를 다시 읽는 게 아니라 **화면에 실제로 표시한 문서의 값**이다. 이 값이
+ * 재동의 대상 판단의 기준이라, 표시한 것과 다른 값을 남기면 원장이 거짓이 된다.
+ */
+export function buildConsentSnapshot(
+  agreed: Record<LegalDocumentKey, boolean>,
+  ageConfirmed: boolean,
+): ConsentSnapshot | null {
+  if (!ageConfirmed) return null;
+  if (!LEGAL_DOCUMENT_KEYS.every((key) => agreed[key])) return null;
+
+  return {
+    consents: LEGAL_DOCUMENT_KEYS.map((key) => ({
+      document: key,
+      version: LEGAL_DOCUMENTS[key].version,
+    })),
+    ageConfirmed: true,
+  };
+}

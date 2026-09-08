@@ -1,8 +1,9 @@
 import React from 'react';
-import { render, within } from '@testing-library/react-native';
+import { act, fireEvent, render, within } from '@testing-library/react-native';
 import LoginScreen from '@/app/(auth)/login';
 import { i18n } from '@/i18n';
 import { LEGAL_DOCUMENTS, LEGAL_DOCUMENT_KEYS } from '@/legal';
+import { savePendingConsent } from '@/lib/pending-consent';
 
 /**
  * 약관 동의 시트가 **스크롤 가능한 컨테이너 안에** 그려지는지 본다.
@@ -61,10 +62,16 @@ jest.mock('@/hooks/use-google-login', () => ({
   useGoogleLogin: () => ({ isConfigured: true, promptGoogleLogin: jest.fn() }),
 }));
 
+// 실제 구현은 AsyncStorage 네이티브 모듈을 require한다. 여기서는 "넘어갈 때 무엇을
+// 넘기는가"만 보면 되므로 저장 자체를 목으로 세운다(보관 규칙은 lib 테스트가 본다).
+jest.mock('@/lib/pending-consent', () => ({ savePendingConsent: jest.fn() }));
+
 describe('약관 동의 시트', () => {
   // 로케일을 바꾸지 않고 현재 로케일의 문구를 그대로 조회한다 — 전역 i18n.locale을 건드리면
   // 같은 파일의 다른 테스트에 순서 의존이 생긴다.
   const label = (key: string) => i18n.t(`auth.terms.${key}`);
+
+  beforeEach(() => jest.clearAllMocks());
 
   it('동의 목록이 스크롤 컨테이너 안에 있다 (넘쳐도 잘리지 않는다)', async () => {
     const { queryByTestId, getByTestId } = await render(<LoginScreen />);
@@ -88,5 +95,71 @@ describe('약관 동의 시트', () => {
     }
     expect(scroll.getByText(`☐ ${label('ageConfirm')}`)).toBeTruthy();
     expect(scroll.getByText(`☐ ${label('agreeAll')}`)).toBeTruthy();
+  });
+
+  /**
+   * 동의는 이 화면에서 받는데 가입 API는 다음 화면이 부른다. 넘어가는 순간 **화면에
+   * 표시한 문서의 version 그대로** 넘겨야 원장이 사실이 된다 — 다음 화면이 상수에서
+   * 다시 만들어내면 시트를 거치지 않은 진입에서도 동의 기록이 생긴다.
+   */
+  it('전체 동의 후 계속하면 표시한 문서의 version을 그대로 넘긴다', async () => {
+    (savePendingConsent as jest.Mock).mockResolvedValue(undefined);
+    const { getByTestId } = await render(<LoginScreen />);
+    const scroll = within(getByTestId('sheet-scroll'));
+
+    await act(async () => {
+      fireEvent.press(scroll.getByText(`☐ ${label('agreeAll')}`));
+    });
+    await act(async () => {
+      fireEvent.press(scroll.getByText(label('continue')));
+    });
+
+    expect(savePendingConsent).toHaveBeenCalledWith({
+      consents: LEGAL_DOCUMENT_KEYS.map((key) => ({
+        document: key,
+        version: LEGAL_DOCUMENTS[key].version,
+      })),
+      ageConfirmed: true,
+    });
+  });
+
+  /**
+   * 버튼에 busy/disabled 표시가 없어(disabled={!allAgreed}뿐) 연타가 그대로 두 번
+   * 들어온다. 소셜 경로에서 두 번째 호출이 isAwaitingConsent()를 읽을 때는 첫 번째
+   * 호출이 이미 동의 대기 promise를 비운 뒤라 결과가 달라져, Google/Apple 유저가
+   * 이메일 가입 화면(register) 위에 얹히는 사고로 이어졌다(PR #59 리뷰 지적).
+   */
+  it('연속으로 두 번 눌러도 한 번만 처리한다 (연타 방지)', async () => {
+    (savePendingConsent as jest.Mock).mockResolvedValue(undefined);
+    const { getByTestId } = await render(<LoginScreen />);
+    const scroll = within(getByTestId('sheet-scroll'));
+
+    await act(async () => {
+      fireEvent.press(scroll.getByText(`☐ ${label('agreeAll')}`));
+    });
+
+    await act(async () => {
+      fireEvent.press(scroll.getByText(label('continue')));
+      fireEvent.press(scroll.getByText(label('continue')));
+    });
+
+    expect(savePendingConsent).toHaveBeenCalledTimes(1);
+  });
+
+  it('동의가 덜 된 상태에서는 아무것도 넘기지 않는다', async () => {
+    const { getByTestId } = await render(<LoginScreen />);
+    const scroll = within(getByTestId('sheet-scroll'));
+
+    // 연령 확인만 빼고 문서에는 전부 동의한다 — 버튼이 비활성이라 눌러도 반응이 없어야 한다.
+    for (const key of LEGAL_DOCUMENT_KEYS) {
+      await act(async () => {
+        fireEvent.press(scroll.getByText(`☐ ${label(LEGAL_DOCUMENTS[key].labelKey)}`));
+      });
+    }
+    await act(async () => {
+      fireEvent.press(scroll.getByText(label('continue')));
+    });
+
+    expect(savePendingConsent).not.toHaveBeenCalled();
   });
 });
