@@ -101,7 +101,9 @@
 | 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/terms.html` |
 | 위치기반서비스 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/location-terms.html` |
 
-영문판은 같은 이름에 `.en.html`이다. 리포지터리 **Settings → Pages → Source를 "GitHub Actions"** 로 한 번 설정해야 워크플로가 배포할 수 있다.
+영문판은 같은 이름에 `.en.html`이다.
+
+> ⚠️ **리포지터리 Settings → Pages → Source를 "GitHub Actions"** 로 한 번 설정해야 워크플로가 실제로 배포한다. **그 전까지 위 URL은 전부 404**이므로 스토어에 등록하기 전에 직접 열어 확인할 것.
 
 ## 4. 위치정보 이용·제공사실 확인자료 (법 제16조 2항)
 
@@ -224,6 +226,6 @@ Apple(가이드라인 5.1.1(v))·Google Play 모두 **계정을 생성하는 앱
 
 - [ ] 위치기반서비스사업자 신고 실제 필요 여부 및 절차 확인 (진행 중). 첨부서류 초안은 `docs/lbs-service-description.md`
 - [ ] 세 문서의 **변호사 검토** — 조항은 코드가 실제로 하는 일에 맞췄으나 검토를 거쳐야 최종본이다. 각 파일 상단 주석에 명시해 두었다
-- [x] 개인정보처리방침·계정 삭제 안내 **공개 URL 호스팅** — GitHub Pages(3장). 본문을 `frontend/src/legal/`에서 생성하므로 앱과 웹이 갈라지지 않는다
+- [ ] 개인정보처리방침·계정 삭제 안내 **공개 URL 호스팅** — 생성기와 배포 워크플로는 준비됐다(3.1). **리포지터리 Settings → Pages → Source를 "GitHub Actions"로 바꾸기 전까지 URL은 404**이므로, 실제로 200이 확인되면 닫을 것
 - [ ] Google Maps SDK 이용약관상 고지 의무 확인 (예전 항목은 카카오맵 기준이었다 — 지도는 `PROVIDER_GOOGLE`로 바뀌었고 카카오 SDK 의존성은 없다)
 - [ ] 해외 이전 고지 필요 여부 — Firebase·AWS 리전 기준

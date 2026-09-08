@@ -15,7 +15,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,10 +39,8 @@ const TITLES = {
 };
 
 const APP_NAME = 'B-territory';
-/** 방침 제9조 3항·제10조에 적힌 접수 주소. 바꾸려면 그 조항부터 고칠 것. */
-const CONTACT = 'B.territory123@gmail.com';
 
-function loadDocuments() {
+function loadSources() {
   rmSync(BUILD_DIR, { recursive: true, force: true });
   // 프론트엔드의 로컬 typescript를 node로 직접 실행한다 — npx는 셸 래퍼(.cmd)라
   // 플랫폼마다 spawn 방식이 달라진다.
@@ -52,6 +50,9 @@ function loadDocuments() {
     [
       join(FRONTEND, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/legal/index.ts',
+      // 접수 주소는 이미 앱이 들고 있는 값이다(i18n 사전과 갈라지지 않게 모아 둔 상수).
+      // 여기서 다시 적으면 세 번째 사본이 되고, 주소를 바꿔도 이 페이지만 옛 값으로 남는다.
+      'src/constants/contact.ts',
       '--outDir',
       BUILD_DIR,
       '--rootDir',
@@ -68,8 +69,14 @@ function loadDocuments() {
     { cwd: FRONTEND, stdio: 'inherit' },
   );
   const require = createRequire(import.meta.url);
-  return require(join(BUILD_DIR, 'legal', 'index.js'));
+  return {
+    ...require(join(BUILD_DIR, 'legal', 'index.js')),
+    ...require(join(BUILD_DIR, 'constants', 'contact.js')),
+  };
 }
+
+/** 조항 본문·개정일과 접수 주소. 아래 상수들이 쓰므로 모듈 로드 시점에 한 번 읽는다. */
+const { LEGAL_DOCUMENTS, legalBody, CONTACT_EMAIL: CONTACT } = loadSources();
 
 const escapeHtml = (text) =>
   text.replace(
@@ -138,26 +145,29 @@ function page({ lang, title, meta, nav, content }) {
 <h1>${escapeHtml(title)}</h1>
 ${meta ? `<p class="meta">${escapeHtml(meta)}</p>` : ''}
 ${content}
-<footer>${APP_NAME} · 문의 <a href="mailto:${CONTACT}">${CONTACT}</a></footer>
+<footer>${APP_NAME} · ${lang === 'en' ? 'Contact' : '문의'} <a href="mailto:${CONTACT}">${CONTACT}</a></footer>
 </main>
 </body>
 </html>
 `;
 }
 
-const navFor = (lang) => {
+/**
+ * `current`는 지금 보고 있는 페이지의 이름이다. 언어 전환이 **읽던 문서를 유지**하려면
+ * 필요하다 — 목차로 고정하면 영문 방침을 읽던 사람이 한국어를 눌렀을 때 읽던 위치를 잃는다.
+ */
+const navFor = (lang, current) => {
   const t = TITLES[lang];
   const suffix = lang === 'en' ? '.en.html' : '.html';
   const other = lang === 'en' ? '한국어' : 'English';
-  const otherHref = (name) =>
-    `${name}${lang === 'en' ? '.html' : '.en.html'}`;
+  const otherHref = (name) => `${name}${lang === 'en' ? '.html' : '.en.html'}`;
   return [
     `<a href="index${suffix}">${lang === 'en' ? 'Home' : '홈'}</a>`,
     `<a href="terms${suffix}">${t.service}</a>`,
     `<a href="privacy${suffix}">${t.privacy}</a>`,
     `<a href="location-terms${suffix}">${t.location}</a>`,
     `<a href="account-deletion${suffix}">${lang === 'en' ? 'Account Deletion' : '계정 삭제'}</a>`,
-    `<a href="${otherHref('index')}">${other}</a>`,
+    `<a href="${otherHref(current)}">${other}</a>`,
   ].join('\n');
 };
 
@@ -232,17 +242,39 @@ const INDEX = {
   },
 };
 
-function build() {
-  const { LEGAL_DOCUMENTS, legalBody } = loadDocuments();
-  rmSync(OUT_DIR, { recursive: true, force: true });
+/** 생성기가 만든 디렉터리임을 표시한다. 남의 `web/`을 지우지 않기 위한 표식이다. */
+const MARKER = '.generated-by-build-legal-pages';
+
+/**
+ * 출력 디렉터리를 비우고 새로 만든다.
+ *
+ * 통째로 지우는 이유는 문서 파일 이름이 바뀌었을 때 옛 파일이 남아 함께 배포되는 것을
+ * 막기 위해서다. 다만 **표식이 없는 디렉터리는 지우지 않는다** — 누군가 루트에 진짜
+ * `web/`을 만들어 두었다면 이 스크립트 한 번에 사라지는데, `.gitignore`에 걸려 있어
+ * git으로 되돌릴 수도 없다.
+ */
+function resetOutDir() {
+  if (existsSync(OUT_DIR)) {
+    if (!existsSync(join(OUT_DIR, MARKER))) {
+      throw new Error(
+        `${OUT_DIR}가 이 생성기가 만든 디렉터리가 아니다(표식 ${MARKER} 없음). ` +
+          '내용을 확인하고 직접 옮긴 뒤 다시 실행할 것.',
+      );
+    }
+    rmSync(OUT_DIR, { recursive: true, force: true });
+  }
   mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, MARKER), '', 'utf8');
+}
+
+function build() {
+  resetOutDir();
 
   const write = (name, html) => writeFileSync(join(OUT_DIR, name), html, 'utf8');
   const fileFor = { service: 'terms', privacy: 'privacy', location: 'location-terms' };
 
   for (const lang of ['ko', 'en']) {
     const suffix = lang === 'en' ? '.en.html' : '.html';
-    const nav = navFor(lang);
 
     for (const [key, doc] of Object.entries(LEGAL_DOCUMENTS)) {
       write(
@@ -254,7 +286,7 @@ function build() {
             lang === 'en'
               ? `Revised ${doc.version}`
               : `개정일 ${doc.version}`,
-          nav,
+          nav: navFor(lang, fileFor[key]),
           content: renderBody(legalBody(key, lang)),
         }),
       );
@@ -266,7 +298,7 @@ function build() {
         lang,
         title: DELETION[lang].title,
         meta: '',
-        nav,
+        nav: navFor(lang, 'account-deletion'),
         content: DELETION[lang].body,
       }),
     );
@@ -277,7 +309,7 @@ function build() {
         lang,
         title: INDEX[lang].title,
         meta: '',
-        nav,
+        nav: navFor(lang, 'index'),
         content: `<p>${INDEX[lang].intro}</p>
 <ul>
 ${Object.keys(LEGAL_DOCUMENTS)
