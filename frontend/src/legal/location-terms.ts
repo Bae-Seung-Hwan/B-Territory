@@ -5,6 +5,16 @@ import type { LegalDocument } from './types';
  *
  * ⚠️ **법률 검토 전 초안이다** (docs/compliance.md 6장 미결 항목).
  *
+ * 제10조의 사업자 정보는 위치정보법 제18조 2항이 이 약관에 담도록 요구하는 항목이고,
+ * 신고번호는 방송통신위원회 위치기반서비스사업 신고를 마치고 받은 값이다(compliance.md
+ * 2.3·6장). 신고 전에는 적을 수 없어 비어 있던 조항이다 — 상호·주소·연락처가 바뀌면
+ * 신고사항 변경과 이 조항을 함께 고칠 것.
+ *
+ * **`version`을 올리지 않았다.** 개정일 체계가 하루 단위라 같은 날(2026-09-08) 두 번째
+ * 수정은 같은 값이 되는데, 앱이 아직 출시 전이라 이 문서의 2026-09-08판에 동의한 이용자가
+ * 없어 원장이 두 판본을 구분해야 할 일이 없다. 출시 이후의 개정은 반드시 날짜를 올릴 것 —
+ * 그때는 백엔드 `CONSENT_VERSION_SOURCE`를 먼저 배포해야 한다.
+ *
  * 개인정보처리방침으로 갈음할 수 없는 별개의 문서다 — 위치정보의 보호 및 이용 등에 관한
  * 법률상 위치 데이터를 서비스에 이용하면 전용 약관을 따로 두어야 한다(compliance.md 2.3).
  * 예전에는 이 문서 자체가 없어 동의 항목도 두 개뿐이었다.
@@ -95,8 +105,15 @@ export const locationTerms: LegalDocument = {
 1. 서비스가 위치정보의 보호 및 이용 등에 관한 법률을 위반하여 이용자에게 손해를 입힌 경우 이용자는 손해배상을 청구할 수 있습니다.
 2. 위치정보와 관련한 분쟁은 관련 법령이 정한 절차에 따라 조정을 신청할 수 있습니다.
 
-제10조 (위치정보관리책임자 및 문의처)
-위치정보 처리에 관한 문의는 B.territory123@gmail.com으로 접수합니다.
+제10조 (사업자 정보 및 위치정보관리책임자)
+1. 위치기반서비스사업자의 정보는 다음과 같습니다.
+   - 상호: 비테리토리
+   - 대표자: 배승환
+   - 주소: 부산광역시 사하구 승학로 17번길 70, 301호(하단동, 에이스빌)
+   - 전화번호: 010-3391-5816
+   - 위치기반서비스사업 신고번호: 1431
+2. 위치정보관리책임자는 대표자가 겸임합니다.
+3. 위치정보 처리에 관한 문의는 B.territory123@gmail.com으로 접수합니다.
 
 부칙
 이 약관은 2026년 9월 8일부터 시행합니다.`,
@@ -147,8 +164,15 @@ Article 9 (Damages and Dispute Resolution)
 1. Where the Service causes damage to a user by violating the Act on the Protection and Use of Location Information, the user may claim damages.
 2. Disputes concerning location information may be submitted for mediation under the procedures prescribed by applicable law.
 
-Article 10 (Location Information Manager and Contact)
-Enquiries concerning the processing of location information are received at B.territory123@gmail.com.
+Article 10 (Provider Information and Location Information Manager)
+1. The location-based service provider is as follows.
+   - Business name: 비테리토리 (B-territory)
+   - Representative: 배승환 (Bae Seung-hwan)
+   - Address: 301, 70 Seunghak-ro 17beon-gil, Saha-gu, Busan, Republic of Korea
+   - Telephone: +82 10-3391-5816
+   - Location-based service business filing number: 1431
+2. The representative also serves as the Location Information Manager.
+3. Enquiries concerning the processing of location information are received at B.territory123@gmail.com.
 
 Addendum
 These Terms take effect on 8 September 2026.`,
