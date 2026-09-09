@@ -37,11 +37,16 @@ const SITE_URL = 'https://bae-seung-hwan.github.io/B-Territory/';
 const REPO_URL = 'https://github.com/Bae-Seung-Hwan/B-Territory';
 
 /**
- * 원스토어 앱 상세 페이지 주소. **심사가 끝나 주소가 나오면 여기에 적는다.**
+ * 원스토어 앱 상세 페이지 주소.
+ *
  * 비워 두면 내려받기 버튼이 링크가 아니라 "준비 중" 표시로 렌더된다 — 죽은 링크를 내보내는
  * 것보다 낫고, 주소가 비었다는 사실이 페이지에 그대로 드러난다.
+ *
+ * 경로의 `ko-kr`은 원스토어가 쓰는 로케일 세그먼트다. 영문 페이지에서도 같은 주소를 쓴다 —
+ * 다른 로케일 경로가 실제로 사는지 확인하지 않았고, 확인하지 않은 주소를 내보내느니
+ * 확인된 한 곳으로 보내는 편이 낫다.
  */
-const STORE_URL = '';
+const STORE_URL = 'https://m.onestore.co.kr/v2/ko-kr/app/0001008950';
 
 /** `build-legal-pages.mjs`와 같은 목록이어야 언어 전환이 서로 닿는다. */
 const LANGS = ['ko', 'en'];
