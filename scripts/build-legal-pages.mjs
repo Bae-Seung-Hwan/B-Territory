@@ -7,7 +7,12 @@
  * 그래서 본문을 `frontend/src/legal/`에서 **읽어서** 생성한다 — 조항을 고치면 웹도 함께
  * 바뀌고, 개정일(`version`)도 같은 값이 실린다.
  *
- * 실행: `node scripts/build-legal-pages.mjs` (출력: `web/`)
+ * 실행: **`npm run build:site`** (출력: `web/`)
+ *
+ * 이 생성기는 사이트의 절반이다 — 나머지 절반인 소개 페이지(`index.html`)는
+ * `build-landing-page.mjs`가 만들고, 문서 페이지의 `홈` 링크가 그것을 가리킨다.
+ * 그리고 이 생성기는 `web/`을 **통째로 지우고** 다시 만들므로, 단독으로 실행하면 소개
+ * 페이지가 사라진 채 남는다. 아래 warnIfPartialBuild()가 그 상태를 알린다.
  *
  * 법적 문서 모듈은 React Native에 의존하지 않는 순수 데이터라, 프론트엔드의 로컬 typescript로
  * 그 디렉터리만 따로 컴파일해 읽을 수 있다. 이 전제가 깨지면(legal/에 RN import가 생기면)
@@ -396,6 +401,27 @@ ${Object.keys(LEGAL_DOCUMENTS)
 
   rmSync(BUILD_DIR, { recursive: true, force: true });
   console.log(`생성 완료: ${OUT_DIR}`);
+  warnIfPartialBuild();
+}
+
+/**
+ * 단독 실행이면 알린다.
+ *
+ * `build-landing-page.mjs` 쪽에도 순서 가드가 있지만, 그것은 **소개 페이지를 만들 때**만
+ * 걸린다 — 한 번 build:site를 돌린 뒤 이 생성기만 다시 돌리면 표식이 이미 있어 아무 데서도
+ * 걸리지 않고, `web/`에서 소개 페이지만 조용히 사라진다(문서 페이지의 `홈` 링크가 404가
+ * 된다). 그 한쪽 구멍을 여기서 막는다.
+ *
+ * 에러가 아니라 경고인 것은, 조항만 확인하려고 이 생성기를 돌리는 것 자체는 정상이기
+ * 때문이다. 배포되는 경로(워크플로)는 언제나 build:site를 거친다.
+ */
+function warnIfPartialBuild() {
+  if (process.env.npm_lifecycle_event === 'build:site') return;
+  console.warn(
+    `경고: ${OUT_DIR}에 소개 페이지(index.html)가 없다. 이 생성기는 사이트의 절반만 만들고 ` +
+      '나머지는 build-landing-page.mjs가 만든다 — 지금 상태로는 문서 페이지의 `홈` 링크가 ' +
+      '404다. 사이트 전체가 필요하면 `npm run build:site`로 실행할 것.',
+  );
 }
 
 build();

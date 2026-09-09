@@ -25,7 +25,21 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = join(ROOT, 'web');
-const ICON_SRC = join(ROOT, 'frontend', 'assets', 'images', 'icon.png');
+
+/**
+ * 히어로·파비콘에 쓰는 아이콘.
+ *
+ * 앱 아이콘 원본은 스토어 제출용 1024px PNG라 800KB에 가깝다. 96px로 줄여 보여줄 뿐인데
+ * 그것이 페이지에서 제일 무거운 것이 되고, 첫인상을 위해 존재하는 페이지의 첫 페인트를
+ * 모바일에서 막는다. 그래서 웹용으로 줄여 둔 사본(`site-assets/icon.png`, 256px)을 쓰고,
+ * 그것이 없으면 앱 아이콘으로 되돌아간다 — 사본은 어디까지나 같은 그림의 축소본이므로,
+ * 아이콘을 새로 그리면 사본도 다시 만들어야 한다(`site-assets/README.md`).
+ */
+const ICON_CANDIDATES = [
+  join(ROOT, 'site-assets', 'icon.png'),
+  join(ROOT, 'frontend', 'assets', 'images', 'icon.png'),
+];
+
 /** 손으로 넣는 스크린샷 자리. 비어 있으면 스크린샷 섹션 자체를 만들지 않는다. */
 const SHOTS_SRC = join(ROOT, 'site-assets', 'screenshots');
 
@@ -130,6 +144,12 @@ const COPY = {
       },
     ],
     shotsTitle: '화면',
+    shotAlt: {
+      '01-map-busan.jpg': '부산 전역 지도. 구 경계가 그려져 있고 동구가 강조돼 있다.',
+      '02-map-spots.jpg': '관광지 핀이 찍힌 지도와 카테고리 목록, 선택한 관광지의 점령 현황.',
+      '03-claim.jpg': '관광지 상세 화면 — 사진과 주소, 점령 시도 버튼.',
+      '04-district.jpg': '구 상세 화면 — 점령 여부와 점수 가중치.',
+    },
     notesTitle: '알아두실 것',
     notes: [
       '관광지 정보는 한국관광공사가 제공하는 공공데이터(TourAPI)를 기반으로 구성했습니다.',
@@ -179,6 +199,16 @@ const COPY = {
       },
     ],
     shotsTitle: 'Screens',
+    shotAlt: {
+      '01-map-busan.jpg':
+        'A map of Busan with district borders drawn, one district highlighted.',
+      '02-map-spots.jpg':
+        'A map of tourist spot pins with a category list, and the claim status of the selected spot.',
+      '03-claim.jpg':
+        'A tourist spot detail screen with a photo, an address, and a claim button.',
+      '04-district.jpg':
+        'A district detail screen showing whether it is claimed and its score weight.',
+    },
     notesTitle: 'Good to know',
     notes: [
       'Tourist spot data is built on TourAPI open data from the Korea Tourism Organization.',
@@ -277,6 +307,9 @@ function render(lang, shots) {
   const other = lang === 'en' ? 'ko' : 'en';
   const otherSuffix = other === 'en' ? '.en.html' : '.html';
   const title = `${APP_NAME} — ${copy.tagline}`;
+  // 한국어판은 디렉터리 인덱스라 `/`와 `/index.html` 두 주소로 같은 내용이 나온다. 공유
+  // 미리보기와 검색이 한쪽으로 모이도록, 지원서·문서에 적은 주소인 `/`를 정본으로 삼는다.
+  const canonical = lang === 'ko' ? SITE_URL : `${SITE_URL}index${suffix}`;
 
   const shotsSection = shots.length
     ? `<h2>${escapeHtml(copy.shotsTitle)}</h2>
@@ -284,7 +317,9 @@ function render(lang, shots) {
 ${shots
   .map(
     (name) =>
-      `<img src="screenshots/${encodeURIComponent(name)}" alt="${escapeHtml(APP_NAME)}" loading="lazy" />`,
+      // 스크린샷 목록은 디렉터리에서 오고 설명은 COPY에 있다. 설명이 없는 파일을 넣어도
+      // 페이지는 그대로 나오되, 그 한 장만 앱 이름으로 읽힌다.
+      `<img src="screenshots/${encodeURIComponent(name)}" alt="${escapeHtml(copy.shotAlt[name] ?? APP_NAME)}" loading="lazy" />`,
   )
   .join('\n')}
 </div>`
@@ -298,10 +333,11 @@ ${shots
 <title>${escapeHtml(title)}</title>
 <meta name="description" content="${escapeHtml(copy.lead)}" />
 <link rel="icon" href="icon.png" />
+<link rel="canonical" href="${canonical}" />
 <meta property="og:title" content="${escapeHtml(title)}" />
 <meta property="og:description" content="${escapeHtml(copy.lead)}" />
 <meta property="og:image" content="${SITE_URL}icon.png" />
-<meta property="og:url" content="${SITE_URL}index${suffix}" />
+<meta property="og:url" content="${canonical}" />
 <meta property="og:type" content="website" />
 <style>${STYLE}</style>
 </head>
@@ -339,7 +375,7 @@ ${copy.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join('\n')}
 <li><a href="account-deletion${suffix}">${escapeHtml(copy.deletionLink)}</a></li>
 <li><a href="${REPO_URL}">${escapeHtml(copy.repoLink)}</a></li>
 </ul>
-<footer>${escapeHtml(APP_NAME)} · ${escapeHtml(copy.contactLabel)} <a href="mailto:${CONTACT}">${CONTACT}</a></footer>
+<footer>${escapeHtml(APP_NAME)} · ${escapeHtml(copy.contactLabel)} <a href="mailto:${escapeHtml(CONTACT)}">${escapeHtml(CONTACT)}</a></footer>
 </main>
 </body>
 </html>
@@ -347,8 +383,12 @@ ${copy.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join('\n')}
 }
 
 /**
- * 법적 문서 생성기가 먼저 돌았는지 확인한다. `web/`이 없거나 표식이 없다는 것은 순서가
- * 뒤집혔거나(=이 다음에 legal이 돌아 소개 페이지를 지운다) 남의 디렉터리라는 뜻이다.
+ * 법적 문서 생성기가 먼저 돌았는지 확인한다. `web/`이 없거나 표식이 없다는 것은 이 생성기가
+ * 먼저 돌았다는(=다음에 legal이 돌며 소개 페이지를 지운다) 뜻이다.
+ *
+ * 표식은 남으므로 이 확인이 잡는 것은 **첫 실행의 순서**뿐이다. 한 번 build:site를 돌린 뒤
+ * legal만 다시 돌리는 경우는 여기서 걸리지 않는다 — 그쪽은 `build-legal-pages.mjs`의
+ * warnIfPartialBuild()가 맡는다. 두 구멍을 각자의 생성기가 하나씩 막는 구조다.
  */
 function requireLegalBuild() {
   if (!existsSync(join(OUT_DIR, LEGAL_MARKER))) {
@@ -360,10 +400,25 @@ function requireLegalBuild() {
   }
 }
 
+/**
+ * 아이콘이 하나도 없으면 여기서 멈춘다. 그냥 두면 `web/`을 이미 비운 뒤에 맨 ENOENT로
+ * 죽어, CI 로그에는 경로만 남고 무엇이 잘못됐는지는 남지 않는다.
+ */
+function iconSource() {
+  const found = ICON_CANDIDATES.find((path) => existsSync(path));
+  if (!found) {
+    throw new Error(
+      `아이콘을 찾지 못했다 (${ICON_CANDIDATES.join(', ')}). ` +
+        '앱 아이콘 경로가 바뀌었다면 이 파일의 ICON_CANDIDATES도 함께 고칠 것.',
+    );
+  }
+  return found;
+}
+
 function build() {
   requireLegalBuild();
 
-  copyFileSync(ICON_SRC, join(OUT_DIR, 'icon.png'));
+  copyFileSync(iconSource(), join(OUT_DIR, 'icon.png'));
 
   const shots = screenshots();
   if (shots.length) {

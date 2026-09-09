@@ -75,6 +75,9 @@ jobs:
           missing=0
           for file in *.html; do
             for target in $(grep -o 'href="[^"]*\.html"' "$file" | sed 's/^href="//; s/"$//'); do
+              # 절대 URL은 이 리포지터리의 파일이 아니다. rel=canonical과 og:url이 자기
+              # 주소를 절대 경로로 적으므로, 거르지 않으면 자기 자신을 "없는 파일"로 신고한다.
+              case "$target" in http://*|https://*|//*) continue ;; esac
               if [ ! -f "$target" ]; then
                 echo "::error file=web/$file::링크 대상 $target 이(가) 생성되지 않았다"
                 missing=1
