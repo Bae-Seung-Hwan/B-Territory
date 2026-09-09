@@ -93,7 +93,7 @@
 
 ### 3.1 스토어에 등록할 공개 URL
 
-스토어는 개인정보처리방침과 계정 삭제 안내를 **앱 내 텍스트와 별개로** 웹페이지로 요구한다. 손으로 다시 쓰면 동의를 받은 문서와 공개된 문서가 갈라지므로, `scripts/build-legal-pages.mjs`가 `frontend/src/legal/`에서 **생성**한다(개정일도 같은 값이 실린다). 배포는 `.github/workflows/legal-pages.yml`이 develop 푸시 시 GitHub Pages로 한다.
+스토어는 개인정보처리방침과 계정 삭제 안내를 **앱 내 텍스트와 별개로** 웹페이지로 요구한다. 손으로 다시 쓰면 동의를 받은 문서와 공개된 문서가 갈라지므로, `scripts/build-legal-pages.mjs`가 `frontend/src/legal/`에서 **생성**한다(개정일도 같은 값이 실린다). 손으로 확인할 때도 **`npm run build:site`**로 돌린다 — 생성기를 단독으로 돌리면 소개 페이지가 빠진 `web/`이 나오고 문서 페이지의 `홈` 링크가 404다(3.2절). 배포는 `.github/workflows/legal-pages.yml`이 develop 푸시 시 GitHub Pages로 한다.
 
 | 용도 | URL |
 |---|---|
@@ -101,12 +101,29 @@
 | 계정 삭제 요청 | `https://bae-seung-hwan.github.io/B-Territory/account-deletion.html` |
 | 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/terms.html` |
 | 위치기반서비스 이용약관 | `https://bae-seung-hwan.github.io/B-Territory/location-terms.html` |
+| 서비스 소개 (사이트 첫 화면) | `https://bae-seung-hwan.github.io/B-Territory/` |
+| 이용자 문서 목차 | `https://bae-seung-hwan.github.io/B-Territory/legal.html` |
 
 영문판은 같은 이름에 `.en.html`이다.
 
-> Pages 설정(Settings → Pages → Source = "GitHub Actions")은 마쳤고, 위 4개와 영문판·목차까지 생성되는 10개 페이지 전부 200인 것을 확인했다(2026-09-08).
+위 네 개는 스토어에 등록한 주소이므로 **파일 이름을 바꾸지 않는다.** 목차는 원래 `index.html`이었으나 첫 화면을 소개 페이지에 내주고 `legal.html`로 옮겼다(스토어 등록 주소에는 없던 페이지라 이동해도 깨지는 곳이 없다).
+
+> Pages 설정(Settings → Pages → Source = "GitHub Actions")은 마쳤고, 위 4개와 영문판·목차까지 생성되는 10개 페이지 전부 200인 것을 확인했다(2026-09-08). 이후 소개 페이지 2개가 더해져 12개다.
 >
 > 조항을 고친 뒤에는 **배포 워크플로가 끝났는지 확인할 것.** 배포가 실패하면 앱은 새 조항, 공개 URL은 옛 조항인 채로 갈라진다 — 생성기를 둔 이유가 그 상태를 막기 위해서다. PR 단계에서는 `legal-pages.yml`의 `verify` 잡이 생성기를 미리 돌려본다.
+
+### 3.2 서비스 소개 페이지
+
+공모전 지원서·스토어·사업자 서류가 요구하는 "서비스 URL"에 넣을 곳이다. 백엔드 도메인(`b-territory.duckdns.org`)은 API만 응답하므로 그 자리에 쓸 수 없고, 그렇다고 스토어 주소를 서비스 URL로 두면 앱을 받기 전에는 무엇을 하는 서비스인지 알 수 없다. 그래서 같은 Pages의 루트를 소개 페이지로 쓴다.
+
+- 생성: `scripts/build-landing-page.mjs` → `index.html` / `index.en.html`
+- 실행: **`npm run build:site`** (`build-legal-pages.mjs`가 `web/`을 비우고 다시 만들기 때문에 반드시 그 뒤에 돌아야 한다. 순서가 뒤집히면 생성기가 에러로 멈춘다)
+- 스크린샷: `site-assets/screenshots/`에 넣으면 이름 순으로 실린다. 한 장도 없으면 그 섹션을 만들지 않는다.
+- 히어로·파비콘 이미지는 `site-assets/icon.png`(앱 아이콘을 256px로 줄인 웹용 사본, 70KB)를 쓴다. 그 파일이 없으면 앱 아이콘 원본(`frontend/assets/images/icon.png`, 800KB)으로 되돌아간다 — 아이콘을 새로 그리면 사본도 다시 만들 것(`site-assets/README.md`).
+
+**소개 페이지에 적는 기능은 실제로 앱에 있는 것만이어야 한다.** 스토어 심사와 공모전 심사가 같은 페이지를 보므로, 없는 기능이 적혀 있으면 그대로 허위 기재가 된다. 기능 설명의 출처는 `docs/lbs-service-description.md` 3장이고, 그쪽을 고칠 때 이 페이지도 같이 본다.
+
+내려받기 버튼은 `build-landing-page.mjs`의 `STORE_URL`(원스토어 앱 상세 페이지 `https://m.onestore.co.kr/v2/ko-kr/app/0001008950`)로 간다. 이 값이 비면 버튼 자리에 "스토어 등록 준비 중"이 표시되고 링크는 만들어지지 않는다 — 죽은 링크를 내보내지 않기 위한 동작이다. 구글 플레이에 함께 올리게 되면 그때 버튼을 둘로 나눈다.
 
 ## 4. 위치정보 이용·제공사실 확인자료 (법 제16조 2항)
 

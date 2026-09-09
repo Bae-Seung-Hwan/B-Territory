@@ -1,6 +1,9 @@
 # B-Territory
 부산 외국인 관광객 국적 팀 점령 경쟁 관광 게임 플랫폼
 
+## 서비스 소개
+https://bae-seung-hwan.github.io/B-Territory/ — 공개 소개 페이지(`npm run build:site`가 생성, develop 푸시 시 배포)
+
 ## 문서
 - [필요 법적 문서 / 약관 정리](./docs/compliance.md)
 - [프론트엔드 문서](./frontend/docs/README.md)
