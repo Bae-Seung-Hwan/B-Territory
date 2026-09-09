@@ -72,7 +72,9 @@
 
 ### 3. 스토어에 넣을 URL
 
-개인정보처리방침 URL과 계정 삭제 요청 URL은 스토어 필수 입력값이다. 주소와 생성·배포 방식은 `docs/compliance.md` 3.1절에 있다 — 페이지는 `scripts/build-legal-pages.mjs`가 `frontend/src/legal/`에서 생성하고 `.github/workflows/legal-pages.yml`이 develop 푸시에서 GitHub Pages로 올린다. 스토어에 넣기 전에 그 절의 URL을 직접 열어 볼 것.
+개인정보처리방침 URL과 계정 삭제 요청 URL은 스토어 필수 입력값이다. 주소와 생성·배포 방식은 `docs/compliance.md` 3.1절에 있다 — 페이지는 `npm run build:site`가 생성하고(`scripts/build-legal-pages.mjs`가 `frontend/src/legal/`에서 조항을, `scripts/build-landing-page.mjs`가 소개 페이지를 만든다) `.github/workflows/legal-pages.yml`이 develop 푸시에서 GitHub Pages로 올린다. 스토어에 넣기 전에 그 절의 URL을 직접 열어 볼 것.
+
+스토어 등록이 끝나면 **앱 상세 페이지 주소를 `scripts/build-landing-page.mjs`의 `STORE_URL`에 적는다**(compliance.md 3.2절). 그래야 소개 페이지의 내려받기 버튼이 실제 링크가 된다.
 
 ## 절차
 

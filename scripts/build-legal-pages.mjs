@@ -197,10 +197,13 @@ const navFor = (lang, current) => {
   const other = lang === 'en' ? '한국어' : 'English';
   const otherHref = (name) => `${name}${lang === 'en' ? '.html' : '.en.html'}`;
   return [
+    // 홈은 이 생성기가 아니라 `build-landing-page.mjs`가 만드는 서비스 소개 페이지다.
+    // 그쪽이 함께 돌지 않으면 이 링크가 404가 되는데, 워크플로의 "Check internal links"가
+    // 잡는다.
     `<a href="index${suffix}">${lang === 'en' ? 'Home' : '홈'}</a>`,
     // 문서 목록을 손으로 적으면 안 된다. FILE_FOR·TITLES와 달리 여기서 빠뜨리는 것은
     // **에러가 나지 않는다** — 새 문서가 제 URL로 배포는 되면서, 다른 어느 페이지의
-    // nav에서도 index에서도 닿지 않는 상태가 조용히 만들어진다. 파이프라인의 나머지와
+    // nav에서도 목차에서도 닿지 않는 상태가 조용히 만들어진다. 파이프라인의 나머지와
     // 같이 LEGAL_DOCUMENTS에서 파생시킨다.
     ...Object.keys(LEGAL_DOCUMENTS).map(
       (key) => `<a href="${FILE_FOR[key]}${suffix}">${TITLES[lang][key]}</a>`,
@@ -287,6 +290,13 @@ ${retentionSection('en')}`,
   },
 };
 
+/**
+ * 문서 목차(`legal.html`).
+ *
+ * 예전에는 이것이 `index.html`이었다. 사이트의 첫 화면이 서비스 소개 페이지로 바뀌면서
+ * 이름을 옮겼다 — 스토어에 등록한 URL 네 개(privacy·terms·location-terms·account-deletion)는
+ * 그대로이므로 이 이동으로 깨지는 등록 주소는 없다.
+ */
 const INDEX = {
   ko: {
     title: `${APP_NAME} 이용자 문서`,
@@ -362,12 +372,12 @@ function build() {
     );
 
     write(
-      `index${suffix}`,
+      `legal${suffix}`,
       page({
         lang,
         title: INDEX[lang].title,
         meta: '',
-        nav: navFor(lang, 'index'),
+        nav: navFor(lang, 'legal'),
         content: `<p>${INDEX[lang].intro}</p>
 <ul>
 ${Object.keys(LEGAL_DOCUMENTS)

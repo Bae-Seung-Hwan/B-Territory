@@ -1,7 +1,8 @@
 {
   "scripts": {
     "prepare": "husky",
-    "validate:data": "node scripts/validate-data.js"
+    "validate:data": "node scripts/validate-data.js",
+    "build:site": "node scripts/build-legal-pages.mjs && node scripts/build-landing-page.mjs"
   },
   "devDependencies": {
     "husky": "^9.0.0"

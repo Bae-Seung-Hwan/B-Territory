@@ -1,7 +1,10 @@
 name: Legal Pages
 
-# 스토어 심사에 필요한 공개 URL(개인정보처리방침·계정 삭제 안내)을 GitHub Pages로 낸다.
-# 본문은 frontend/src/legal/에서 생성하므로, 조항을 고치면 배포된 페이지도 함께 바뀐다.
+# 공개 사이트를 GitHub Pages로 낸다 — 스토어 심사에 필요한 URL(개인정보처리방침·계정 삭제
+# 안내)과, 그 앞에 놓이는 서비스 소개 페이지(index.html)다.
+# 법적 문서 본문은 frontend/src/legal/에서 생성하므로, 조항을 고치면 배포된 페이지도 함께
+# 바뀐다. 워크플로 이름이 "Legal Pages"로 남아 있는 것은 이 이름이 필수 체크로 걸려 있을 수
+# 있어서다 — 하는 일은 사이트 전체다.
 on:
   push:
     branches: [develop]
@@ -9,14 +12,24 @@ on:
       - 'frontend/src/legal/**'
       # 접수 주소도 페이지에 실린다.
       - 'frontend/src/constants/contact.ts'
+      # 소개 페이지가 앱 아이콘을 히어로 이미지로 복사해 간다.
+      - 'frontend/assets/images/icon.png'
+      - 'site-assets/**'
       - 'scripts/build-legal-pages.mjs'
+      - 'scripts/build-landing-page.mjs'
+      # build:site가 두 생성기의 실행 순서를 정한다.
+      - 'package.json'
       - '.github/workflows/legal-pages.yml'
   # 같은 경로를 건드리는 PR에서는 생성기를 돌려만 본다(배포 없음). 아래 verify 잡 참고.
   pull_request:
     paths:
       - 'frontend/src/legal/**'
       - 'frontend/src/constants/contact.ts'
+      - 'frontend/assets/images/icon.png'
+      - 'site-assets/**'
       - 'scripts/build-legal-pages.mjs'
+      - 'scripts/build-landing-page.mjs'
+      - 'package.json'
       - '.github/workflows/legal-pages.yml'
   # 조항을 안 고쳤는데 페이지만 다시 올리고 싶을 때(호스팅 설정 변경 등) 손으로 돌린다.
   # 아래 deploy 잡의 첫 스텝에 브랜치 가드가 있다 — dispatch는 임의 ref를 고를 수 있어서,
@@ -51,8 +64,8 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Build legal pages (dry run)
-        run: node scripts/build-legal-pages.mjs
+      - name: Build site (dry run)
+        run: npm run build:site
 
       # 생성 자체는 성공해도 페이지끼리 끊어질 수 있다 — nav·목차가 가리키는 파일이 실제로
       # 있는지 본다. 문서를 추가하며 파일 이름만 바꾼 경우가 여기서 걸린다.
@@ -112,8 +125,8 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Build legal pages
-        run: node scripts/build-legal-pages.mjs
+      - name: Build site
+        run: npm run build:site
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
