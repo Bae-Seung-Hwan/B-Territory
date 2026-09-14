@@ -50,3 +50,6 @@ example
 
 # only developer read file
 docs/temp_docs/
+
+# 서명 keystore 등 민감한 자격증명 백업 (절대 커밋 금지)
+/temp/
