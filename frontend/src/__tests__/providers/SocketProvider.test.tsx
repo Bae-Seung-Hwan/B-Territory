@@ -9,7 +9,7 @@ import { useBattleStore } from '@/store/useBattleStore';
 
 jest.mock('socket.io-client', () => ({ io: jest.fn() }));
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
-jest.mock('@/lib/firebase', () => ({ auth: { currentUser: { getIdToken: jest.fn() } } }));
+jest.mock('@/lib/firebase', () => ({ auth: { currentUser: null } }));
 
 const mockedIo = io as unknown as jest.Mock;
 const mockedUseAuth = useAuth as jest.Mock;
@@ -27,6 +27,7 @@ function createFakeSocket() {
 
 const initialOverlayState = useOverlayStore.getState();
 const initialBattleState = useBattleStore.getState();
+const firebaseUser = { getIdToken: jest.fn().mockResolvedValue('token') };
 
 describe('SocketProvider', () => {
   let fakeSocket: ReturnType<typeof createFakeSocket>;
@@ -38,7 +39,7 @@ describe('SocketProvider', () => {
     useBattleStore.setState(initialBattleState, true);
     fakeSocket = createFakeSocket();
     mockedIo.mockReturnValue(fakeSocket);
-    mockedUseAuth.mockReturnValue({ isAuthenticated: true, profile: { id: 'me' } });
+    mockedUseAuth.mockReturnValue({ isAuthenticated: true, profile: { id: 'me' }, firebaseUser });
     alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     await render(
       <SocketProvider>
@@ -49,6 +50,20 @@ describe('SocketProvider', () => {
 
   afterEach(() => {
     alertSpy.mockRestore();
+  });
+
+  it('AuthProvider가 확정한 firebaseUser의 ID 토큰을 핸드셰이크에 넣는다', async () => {
+    const callback = jest.fn();
+    expect(mockedIo.mock.calls[0][0]).not.toContain('//realtime');
+    const options = mockedIo.mock.calls[0][1];
+
+    await act(async () => {
+      options.auth(callback);
+      await Promise.resolve();
+    });
+
+    expect(firebaseUser.getIdToken).toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith({ token: 'token' });
   });
 
   function exceptionHandler(): (payload: { code: string; message: string }) => void {

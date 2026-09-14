@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { Alert } from 'react-native';
 import { io, Socket } from 'socket.io-client';
-import { API_BASE_URL } from '@/lib/api-client';
-import { auth } from '@/lib/firebase';
+import type { User } from 'firebase/auth';
+import { SOCKET_BASE_URL } from '@/lib/api-client';
 import { useAuth } from '@/hooks/use-auth';
 import { useOverlayStore, isDuelBusy, type MiniGameType, type LocalizedText } from '@/store/useOverlayStore';
 import { useBattleStore } from '@/store/useBattleStore';
@@ -95,40 +95,52 @@ interface GameRoundResultPayload {
 
 const SocketContext = createContext<Socket | null>(null);
 
+function createRealtimeConnection() {
+  let currentUser: User | null = null;
+  const socket = io(`${SOCKET_BASE_URL}/realtime`, {
+    autoConnect: false,
+    transports: ['websocket'],
+    auth: (cb: (data: { token: string | null }) => void) => {
+      void (async () => {
+        try {
+          cb({ token: (await currentUser?.getIdToken()) ?? null });
+        } catch (error) {
+          console.warn('[realtime] Firebase ID token acquisition failed', error);
+          cb({ token: null });
+        }
+      })();
+    },
+  });
+
+  return {
+    socket,
+    setFirebaseUser(user: User | null) {
+      currentUser = user;
+    },
+  };
+}
+
 /**
- * socket.io는 매 연결·재연결 시도 직전에 이 함수를 호출하므로, 여기서 토큰을 읽으면
+ * socket.io는 매 연결·재연결 시도 직전에 auth 콜백을 호출하므로, 여기서 토큰을 읽으면
  * 재연결 때마다 자동으로 최신 토큰이 실린다. `getIdToken()`은 만료된 경우에만 내부적으로
  * 갱신하고 그 외에는 캐시를 돌려주므로, 별도의 강제 갱신(getIdToken(true)) 재시도 로직이
  * 필요 없다 — 예전엔 connect_error마다 강제 갱신 후 직접 connect()를 다시 불렀는데,
  * 그러면 socket.io 자체의 지수 백오프를 건너뛰고 Firebase 토큰 갱신을 무한 반복했다.
  */
-function realtimeAuth(cb: (data: { token: string | null }) => void) {
-  void (async () => {
-    try {
-      cb({ token: (await auth.currentUser?.getIdToken()) ?? null });
-    } catch {
-      // 토큰을 못 얻으면 서버가 핸드셰이크에서 거부하고, socket.io가 백오프를 두고 재시도한다.
-      cb({ token: null });
-    }
-  })();
-}
-
 export function SocketProvider({ children }: { children: ReactNode }) {
+  const { firebaseUser, isAuthenticated, profile } = useAuth();
   // 백엔드 RealtimeGateway가 '/realtime' 네임스페이스로 선언돼 있다(realtime.gateway.ts) —
   // 기본 네임스페이스('/')로 붙으면 어떤 게이트웨이도 요청을 받지 않아 전부 조용히 무시된다.
-  const [socket] = useState(() =>
-    io(`${API_BASE_URL}/realtime`, {
-      autoConnect: false,
-      transports: ['websocket'],
-      auth: realtimeAuth,
-    }),
-  );
-  const { isAuthenticated, profile } = useAuth();
+  const [connection] = useState(createRealtimeConnection);
+  const socket = connection.socket;
 
   // 로그인 상태를 따라 연결을 시작/종료한다. 실패 시 재시도는 socket.io의 내장
-  // 재연결(지수 백오프)에 맡기고, 토큰은 realtimeAuth가 시도마다 새로 읽는다.
+  // 재연결(지수 백오프)에 맡기고, 토큰은 AuthProvider가 확정한 firebaseUser에서
+  // 시도마다 새로 읽는다. 전역 auth.currentUser를 다시 조회하면 provider 상태와 어긋나
+  // 로그인된 화면에서도 null 토큰으로 연결을 시도할 수 있다.
   useEffect(() => {
-    if (!isAuthenticated) {
+    connection.setFirebaseUser(firebaseUser);
+    if (!isAuthenticated || !firebaseUser) {
       socket.disconnect();
       return;
     }
@@ -136,7 +148,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     return () => {
       socket.disconnect();
     };
-  }, [isAuthenticated, socket]);
+  }, [connection, firebaseUser, isAuthenticated, socket]);
 
   // encounter:detected는 Provider 레벨에서 한 번만 배선한다 — 어느 탭에 있든 배틀 탭의
   // 근처 상대 리스트가 갱신돼야 하기 때문(PR #17 리뷰 권고, docs/integrations.md 참고).
