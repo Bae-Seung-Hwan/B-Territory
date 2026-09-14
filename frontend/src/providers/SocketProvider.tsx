@@ -209,7 +209,26 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     const handleDuelAccepted = (payload: DuelIdPayload) => {
       const store = useOverlayStore.getState();
-      if (store.duelId !== payload.duelId) return;
+      if (store.duelId !== payload.duelId) {
+        // duel:request ack보다 빠른 상대 수락을 정상 처리한다. 서버는 초대를 상대에게
+        // 전달한 뒤 ack를 반환하므로, 이 순간 신청자의 duelId는 아직 null일 수 있다.
+        const battle = useBattleStore.getState();
+        const targetId = battle.pendingChallengeTargetId;
+        if (store.duelId != null || targetId == null) return;
+        const enemy = battle.enemiesById[targetId];
+        if (!enemy) return;
+
+        store.setEnemyInfo({
+          userId: enemy.userId,
+          nickname: enemy.nickname,
+          nationality: enemy.team,
+          distance: ENCOUNTER_RADIUS_M,
+        });
+        store.setDuelId(payload.duelId);
+        store.setDuelRole('challenger');
+        battle.setPendingChallengeTargetId(null);
+        battle.removeEnemy(targetId);
+      }
       store.setShowDuelPending(false);
       store.setShowDuelRequest(false);
       store.setShowMiniGame(true);

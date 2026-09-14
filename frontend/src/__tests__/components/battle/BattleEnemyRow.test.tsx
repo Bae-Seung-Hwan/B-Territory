@@ -97,6 +97,29 @@ describe('BattleEnemyRow', () => {
     expect(useBattleStore.getState().pendingChallengeTargetId).toBeNull();
   });
 
+  it('빠른 수락으로 이미 열린 미니게임을 늦은 request ack가 대기 화면으로 덮지 않는다', async () => {
+    const { getByText } = await renderRow();
+
+    await act(async () => {
+      fireEvent.press(getByText('Challenge'));
+    });
+
+    useOverlayStore.getState().setDuelId(42);
+    useOverlayStore.getState().setDuelRole('challenger');
+    useOverlayStore.getState().setShowMiniGame(true);
+
+    const ackCallback = fakeSocket.__emitWithAck.mock.calls[0][2] as (
+      err: Error | null,
+      ack: { status: string; duelId: number },
+    ) => void;
+    await act(async () => {
+      ackCallback(null, { status: 'ok', duelId: 42 });
+    });
+
+    expect(useOverlayStore.getState().showMiniGame).toBe(true);
+    expect(useOverlayStore.getState().showDuelPending).toBe(false);
+  });
+
   it('한 행이 결투 신청 중이면 다른 행의 Challenge를 눌러도 요청이 나가지 않는다', async () => {
     const { getAllByText } = await render(
       <>

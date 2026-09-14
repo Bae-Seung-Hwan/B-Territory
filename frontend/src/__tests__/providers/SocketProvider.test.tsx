@@ -85,6 +85,10 @@ describe('SocketProvider', () => {
     }) => void;
   }
 
+  function duelAcceptedHandler(): (payload: { duelId: number }) => void {
+    return fakeSocket.__handlers.get('duel:accepted') as (payload: { duelId: number }) => void;
+  }
+
   it(
     'DUEL_ 접두사가 아닌 예외(location:update 검증 오류 등)는 Alert를 띄우지 않는다 ' +
       '(PR #54 리뷰 지적 2번 — 60초 하트비트마다 "결투 실패" 모달이 뜨던 문제)',
@@ -207,6 +211,29 @@ describe('SocketProvider', () => {
 
     expect(useOverlayStore.getState().showDuelRequest).toBe(true);
     expect(useOverlayStore.getState().duelId).toBe(1);
+  });
+
+  it('duel:request ack보다 수락 이벤트가 먼저 와도 신청자의 미니게임을 연다', async () => {
+    useBattleStore.getState().upsertEnemy({
+      userId: 'enemy-1',
+      nickname: '상대',
+      team: 'JP',
+    });
+    useBattleStore.getState().setPendingChallengeTargetId('enemy-1');
+
+    await act(async () => {
+      duelAcceptedHandler()({ duelId: 42 });
+    });
+
+    expect(useOverlayStore.getState()).toMatchObject({
+      duelId: 42,
+      duelRole: 'challenger',
+      showDuelPending: false,
+      showMiniGame: true,
+    });
+    expect(useOverlayStore.getState().enemyInfo).toMatchObject({ userId: 'enemy-1' });
+    expect(useBattleStore.getState().pendingChallengeTargetId).toBeNull();
+    expect(useBattleStore.getState().enemiesById['enemy-1']).toBeUndefined();
   });
 
   it(
