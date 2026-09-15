@@ -7,7 +7,12 @@
  * 그래서 본문을 `frontend/src/legal/`에서 **읽어서** 생성한다 — 조항을 고치면 웹도 함께
  * 바뀌고, 개정일(`version`)도 같은 값이 실린다.
  *
- * 실행: `node scripts/build-legal-pages.mjs` (출력: `web/`)
+ * 실행: **`npm run build:site`** (출력: `web/`)
+ *
+ * 이 생성기는 사이트의 절반이다 — 나머지 절반인 소개 페이지(`index.html`)는
+ * `build-landing-page.mjs`가 만들고, 문서 페이지의 `홈` 링크가 그것을 가리킨다.
+ * 그리고 이 생성기는 `web/`을 **통째로 지우고** 다시 만들므로, 단독으로 실행하면 소개
+ * 페이지가 사라진 채 남는다. 아래 warnIfPartialBuild()가 그 상태를 알린다.
  *
  * 법적 문서 모듈은 React Native에 의존하지 않는 순수 데이터라, 프론트엔드의 로컬 typescript로
  * 그 디렉터리만 따로 컴파일해 읽을 수 있다. 이 전제가 깨지면(legal/에 RN import가 생기면)
@@ -197,10 +202,13 @@ const navFor = (lang, current) => {
   const other = lang === 'en' ? '한국어' : 'English';
   const otherHref = (name) => `${name}${lang === 'en' ? '.html' : '.en.html'}`;
   return [
+    // 홈은 이 생성기가 아니라 `build-landing-page.mjs`가 만드는 서비스 소개 페이지다.
+    // 그쪽이 함께 돌지 않으면 이 링크가 404가 되는데, 워크플로의 "Check internal links"가
+    // 잡는다.
     `<a href="index${suffix}">${lang === 'en' ? 'Home' : '홈'}</a>`,
     // 문서 목록을 손으로 적으면 안 된다. FILE_FOR·TITLES와 달리 여기서 빠뜨리는 것은
     // **에러가 나지 않는다** — 새 문서가 제 URL로 배포는 되면서, 다른 어느 페이지의
-    // nav에서도 index에서도 닿지 않는 상태가 조용히 만들어진다. 파이프라인의 나머지와
+    // nav에서도 목차에서도 닿지 않는 상태가 조용히 만들어진다. 파이프라인의 나머지와
     // 같이 LEGAL_DOCUMENTS에서 파생시킨다.
     ...Object.keys(LEGAL_DOCUMENTS).map(
       (key) => `<a href="${FILE_FOR[key]}${suffix}">${TITLES[lang][key]}</a>`,
@@ -287,6 +295,13 @@ ${retentionSection('en')}`,
   },
 };
 
+/**
+ * 문서 목차(`legal.html`).
+ *
+ * 예전에는 이것이 `index.html`이었다. 사이트의 첫 화면이 서비스 소개 페이지로 바뀌면서
+ * 이름을 옮겼다 — 스토어에 등록한 URL 네 개(privacy·terms·location-terms·account-deletion)는
+ * 그대로이므로 이 이동으로 깨지는 등록 주소는 없다.
+ */
 const INDEX = {
   ko: {
     title: `${APP_NAME} 이용자 문서`,
@@ -362,12 +377,12 @@ function build() {
     );
 
     write(
-      `index${suffix}`,
+      `legal${suffix}`,
       page({
         lang,
         title: INDEX[lang].title,
         meta: '',
-        nav: navFor(lang, 'index'),
+        nav: navFor(lang, 'legal'),
         content: `<p>${INDEX[lang].intro}</p>
 <ul>
 ${Object.keys(LEGAL_DOCUMENTS)
@@ -386,6 +401,27 @@ ${Object.keys(LEGAL_DOCUMENTS)
 
   rmSync(BUILD_DIR, { recursive: true, force: true });
   console.log(`생성 완료: ${OUT_DIR}`);
+  warnIfPartialBuild();
+}
+
+/**
+ * 단독 실행이면 알린다.
+ *
+ * `build-landing-page.mjs` 쪽에도 순서 가드가 있지만, 그것은 **소개 페이지를 만들 때**만
+ * 걸린다 — 한 번 build:site를 돌린 뒤 이 생성기만 다시 돌리면 표식이 이미 있어 아무 데서도
+ * 걸리지 않고, `web/`에서 소개 페이지만 조용히 사라진다(문서 페이지의 `홈` 링크가 404가
+ * 된다). 그 한쪽 구멍을 여기서 막는다.
+ *
+ * 에러가 아니라 경고인 것은, 조항만 확인하려고 이 생성기를 돌리는 것 자체는 정상이기
+ * 때문이다. 배포되는 경로(워크플로)는 언제나 build:site를 거친다.
+ */
+function warnIfPartialBuild() {
+  if (process.env.npm_lifecycle_event === 'build:site') return;
+  console.warn(
+    `경고: ${OUT_DIR}에 소개 페이지(index.html)가 없다. 이 생성기는 사이트의 절반만 만들고 ` +
+      '나머지는 build-landing-page.mjs가 만든다 — 지금 상태로는 문서 페이지의 `홈` 링크가 ' +
+      '404다. 사이트 전체가 필요하면 `npm run build:site`로 실행할 것.',
+  );
 }
 
 build();
