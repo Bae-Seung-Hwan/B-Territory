@@ -107,6 +107,12 @@ const escapeHtml = (text) =>
  * 심사가 함께 보는 곳이라, 없는 기능이 적혀 있으면 그대로 허위 기재가 된다.
  * 기능 설명의 출처는 `docs/lbs-service-description.md`(위치기반서비스 신고 첨부서류) 3장이며,
  * 그쪽을 고칠 일이 생기면 이 목록도 같이 본다.
+ *
+ * 다만 그 문서는 **서버까지 포함한 서비스**를 기술하므로 이 목록보다 넓다 — 기준은 '백엔드에
+ * 엔드포인트가 있는가'가 아니라 '이 빌드의 화면에서 이용자가 실제로 할 수 있는가'다. 한때
+ * 미션의 '사진'과 '축제 일정'이 여기 적혀 있었는데, 둘 다 백엔드(`missions`·`festivals`)에만
+ * 있고 앱에는 이미지 피커도 축제 화면도 없었다. 기능을 추가할 때는 frontend/src 쪽 화면을
+ * 먼저 확인할 것.
  */
 const COPY = {
   ko: {
@@ -136,11 +142,11 @@ const COPY = {
       },
       {
         title: '관광지 미션',
-        body: '방문을 확인한 뒤 사진과 후기를 남깁니다. 점령과는 별개의 흐름입니다.',
+        body: '현장에서 체크인한 뒤 별점과 후기를 남깁니다. 점령과는 별개의 흐름입니다.',
       },
       {
         title: '순위와 기록',
-        body: '팀 순위와 명예의 전당, 부산의 축제 일정, 같은 팀 이용자 간 실시간 채팅을 제공합니다.',
+        body: '국가별·개인별 시즌 순위와 지난 시즌 기록, 같은 팀 이용자 간 실시간 채팅을 제공합니다.',
       },
     ],
     shotsTitle: '화면',
@@ -154,7 +160,7 @@ const COPY = {
     notes: [
       '관광지 정보는 한국관광공사가 제공하는 공공데이터(TourAPI)를 기반으로 구성했습니다.',
       '위치정보는 앱이 화면에 떠 있는 동안에만 이용하며, 백그라운드 위치 권한은 요청하지 않습니다.',
-      '지도 표시는 단말 안에서 이루어지며, 이용자의 좌표를 지도 사업자에게 전송하지 않습니다.',
+      '지도는 Google Maps SDK를 앱에 내장해 표시하며, 이용자의 좌표를 Google에 전송하지 않습니다. 다만 지도를 그리는 과정에서 SDK가 Google과 통신합니다.',
     ],
     docsTitle: '이용자 문서',
     docsLead:
@@ -191,11 +197,11 @@ const COPY = {
       },
       {
         title: 'Spot missions',
-        body: 'Once your visit is confirmed, leave a photo and a review. This is separate from claiming.',
+        body: 'Check in at the spot, then leave a star rating and a review. This is separate from claiming.',
       },
       {
         title: 'Rankings and records',
-        body: 'Team rankings, a hall of fame, festivals happening in Busan, and live chat with your own team.',
+        body: 'Season rankings by country and by player, the records of past seasons, and live chat with your own team.',
       },
     ],
     shotsTitle: 'Screens',
@@ -213,7 +219,7 @@ const COPY = {
     notes: [
       'Tourist spot data is built on TourAPI open data from the Korea Tourism Organization.',
       'Location is used only while the app is on screen. Background location permission is never requested.',
-      'The map is drawn on your device; your coordinates are not sent to the map provider.',
+      'The map is a Google Maps SDK embedded in the app, and your coordinates are never sent to Google — though the SDK itself talks to Google to draw the map.',
     ],
     docsTitle: 'User documents',
     docsLead:

@@ -5,6 +5,9 @@ import { useLocation } from '@/hooks/use-location';
 jest.mock('expo-location', () => ({
   Accuracy: { High: 4 },
   requestForegroundPermissionsAsync: jest.fn(),
+  // 거부 이후의 재확인은 대화상자를 띄우지 않는 이쪽으로만 한다 — 두 목을 따로 두는 것이
+  // "팝업이 다시 떴는지"를 테스트가 구분할 수 있는 유일한 방법이다.
+  getForegroundPermissionsAsync: jest.fn(),
   watchPositionAsync: jest.fn(),
 }));
 
@@ -40,6 +43,7 @@ jest.mock('@/lib/permission-notice', () => ({
 }));
 
 const mockedRequestPermission = Location.requestForegroundPermissionsAsync as jest.Mock;
+const mockedGetPermission = Location.getForegroundPermissionsAsync as jest.Mock;
 const mockedWatchPosition = Location.watchPositionAsync as jest.Mock;
 
 // use-location.ts는 모듈 스코프 상태(permissionDenied·subscription·state)를 공유한다 —
@@ -97,6 +101,7 @@ describe('useLocation', () => {
       '위해서는 아무도 다시 불러주지 않아 권한을 나중에 허용해도 세션 내내 복구되지 않았다)',
     async () => {
       mockedRequestPermission.mockResolvedValue({ status: 'denied' });
+      mockedGetPermission.mockResolvedValue({ status: 'denied' });
 
       const first = await renderHook(() => useLocation());
       await waitFor(() => expect(first.result.current.error).toBe('위치 권한이 필요합니다'));
@@ -113,8 +118,9 @@ describe('useLocation', () => {
       expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
 
       // 설정 화면에서 권한을 허용하고 앱으로 돌아왔다고 가정한다(백그라운드→포그라운드가
-      // 유일한 복구 신호다).
-      mockedRequestPermission.mockResolvedValue({ status: 'granted' });
+      // 유일한 복구 신호다). 복구는 대화상자를 띄우지 않는 getForegroundPermissionsAsync로만
+      // 확인해야 한다 — request 쪽을 쓰면 복귀할 때마다 OS 팝업이 다시 뜬다.
+      mockedGetPermission.mockResolvedValue({ status: 'granted' });
       let onLocation:
         | ((loc: { coords: { latitude: number; longitude: number } }) => void)
         | null = null;
@@ -132,7 +138,9 @@ describe('useLocation', () => {
 
       // second는 언마운트된 적이 없다 — 그런데도 권한을 다시 확인해야 한다. 새 구독자의
       // subscribe()에 기대지 않고, 리스너 자신이 재시도해야만 가능하다.
-      await waitFor(() => expect(mockedRequestPermission).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalledTimes(1));
+      // 그 재확인이 팝업이어서는 안 된다 — request는 맨 처음 한 번에서 늘어나지 않는다.
+      expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
       await act(async () => onLocation?.({ coords: { latitude: 10, longitude: 20 } }));
       await waitFor(() =>
         expect(second.result.current.coords).toEqual({ latitude: 10, longitude: 20 }),
@@ -190,6 +198,100 @@ describe('useLocation', () => {
     expect(staleRemove).toHaveBeenCalledTimes(1);
     await hook.unmount();
   });
+
+  it(
+    "iOS의 'inactive'는 백그라운드로 취급하지 않는다 — 제어센터·알림 배너·앱 스위처·전화 " +
+      '수신·시스템 대화상자처럼 잠깐 가려질 때마다 쏘는 상태라, 여기서 watcher를 해제하면 ' +
+      '그때마다 현재위치 마커가 사라지고(coords: null) 복귀할 때 권한 확인부터 다시 돈다',
+    async () => {
+      mockedRequestPermission.mockResolvedValue({ status: 'granted' });
+      const remove = jest.fn();
+      let onLocation: ((loc: { coords: { latitude: number; longitude: number } }) => void) | null =
+        null;
+      mockedWatchPosition.mockImplementation((_opts, cb) => {
+        onLocation = cb;
+        return Promise.resolve({ remove });
+      });
+
+      const hook = await renderHook(() => useLocation());
+      await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalledTimes(1));
+      await act(async () => onLocation?.({ coords: { latitude: 7, longitude: 8 } }));
+      await waitFor(() => expect(hook.result.current.coords).toEqual({ latitude: 7, longitude: 8 }));
+
+      await act(async () => {
+        mockAppState.currentState = 'inactive';
+        mockAppState.listener?.('inactive');
+      });
+      expect(remove).not.toHaveBeenCalled();
+      expect(hook.result.current.coords).toEqual({ latitude: 7, longitude: 8 });
+
+      await act(async () => {
+        mockAppState.currentState = 'active';
+        mockAppState.listener?.('active');
+      });
+      // 구독이 살아있으니 다시 시작할 것도, 다시 물어볼 것도 없다.
+      expect(mockedWatchPosition).toHaveBeenCalledTimes(1);
+      expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
+      await hook.unmount();
+    },
+  );
+
+  it(
+    '권한 팝업이 만드는 백그라운드 전환 때문에 거부가 유실되지 않는다 — 안드로이드에서 OS ' +
+      '권한 대화상자는 별도 액티비티라 띄우는 순간 AppState가 background를 쏜다. 거부 결과를 ' +
+      'staleness 체크 뒤에 기록하면 그 결과가 stale로 버려지고, finally의 재시작이 이용자가 ' +
+      '거부를 누른 직후 팝업을 한 번 더 띄운다(원스토어 반려 사유 1번)',
+    async () => {
+      let resolvePermission!: (value: { status: string }) => void;
+      mockedRequestPermission.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvePermission = resolve;
+          }),
+      );
+      mockedGetPermission.mockResolvedValue({ status: 'denied' });
+
+      const hook = await renderHook(() => useLocation());
+      await waitFor(() => expect(mockedRequestPermission).toHaveBeenCalledTimes(1));
+
+      // 팝업이 떠 있는 동안의 background다 — 이용자가 앱을 떠난 게 아니므로 구독을 접거나
+      // generation을 밀어선 안 된다. 그 뒤 '거부'가 도착하고, 팝업이 닫히며 active로 돌아온다.
+      await act(async () => {
+        mockAppState.currentState = 'background';
+        mockAppState.listener?.('background');
+        resolvePermission({ status: 'denied' });
+      });
+      await act(async () => {
+        mockAppState.currentState = 'active';
+        mockAppState.listener?.('active');
+      });
+
+      await waitFor(() => expect(hook.result.current.error).toBe('위치 권한이 필요합니다'));
+      expect(hook.result.current.loading).toBe(false);
+      // 핵심: 거부를 기억하므로 팝업이 다시 뜨지 않는다. 복귀 확인은 대화상자 없는 쪽으로만.
+      expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
+      expect(mockedGetPermission).toHaveBeenCalled();
+
+      // 백그라운드로 내려가도 이미 떠 있는 에러를 로딩으로 덮지 않는다(복귀마다 깜빡임 방지).
+      await act(async () => {
+        mockAppState.currentState = 'background';
+        mockAppState.listener?.('background');
+      });
+      expect(hook.result.current.error).toBe('위치 권한이 필요합니다');
+
+      // 설정에서 허용하고 돌아오면 팝업 없이 복구된다. 이 경로로 모듈 스코프의
+      // permissionDenied까지 되돌려 놓는다 — 아래 테스트가 이어서 쓰는 상태다(파일 맨 위 주석).
+      mockedGetPermission.mockResolvedValue({ status: 'granted' });
+      mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
+      await act(async () => {
+        mockAppState.currentState = 'active';
+        mockAppState.listener?.('active');
+      });
+      await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalledTimes(1));
+      expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
+      await hook.unmount();
+    },
+  );
 
   it(
     '마지막 구독자가 사라지면 좌표 상태도 초기화한다 — 그러지 않으면 다음 구독자(재로그인한 ' +

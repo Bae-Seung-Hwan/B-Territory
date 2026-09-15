@@ -37,9 +37,16 @@ let starting = false;
 let locationGeneration = 0;
 // 한 번 거부되면 소비자가 새로 마운트될 때마다(화면 이동 등) requestForegroundPermissionsAsync를
 // 다시 호출하지 않는다(PR #54 리뷰 지적 13번) — subscription/starting 가드만으로는 거부 경로에서
-// 둘 다 원상태로 돌아가 다음 subscribe()가 처음부터 다시 묻는다. 앱이 포그라운드로 돌아올 때는
-// 풀어준다 — OS 설정 화면에서 권한을 바꾸고 돌아오는 유일한 신호이기 때문이다.
+// 둘 다 원상태로 돌아가 다음 subscribe()가 처음부터 다시 묻는다. 이 플래그는 포그라운드 복귀로
+// 풀지 않는다 — 대신 대화상자를 띄우지 않는 getForegroundPermissionsAsync로 현재 상태만 조용히
+// 다시 확인한다(resolvePermissionStatus 참고). 예전엔 'active' 전환마다 false로 되돌렸는데,
+// 안드로이드에서는 OS 권한 팝업 자체가 'background'→'active'를 만들기 때문에 이용자가 거부를
+// 누른 직후 팝업이 한 번 더 뜨는 경로가 됐다 — 원스토어 반려 사유 1번을 그대로 되살린다.
 let permissionDenied = false;
+// 안드로이드에서 OS 권한 대화상자는 별도 액티비티라, 띄우는 동안 우리 액티비티가 onPause 되고
+// AppState가 'background'를 쏜다 — 이용자가 앱을 떠난 것이 아니므로 그 사이에는 구독을 접지도,
+// generation을 밀지도 않는다. 밀면 await가 풀린 뒤의 권한 결과가 전부 stale로 버려진다.
+let requestingPermission = false;
 // 모듈이 처음 로드될 때가 아니라 첫 구독자가 생길 때 딱 한 번만 등록한다(subscribe() 참고) —
 // GPS watcher를 지연 시작하는 이 파일의 기존 철학과 같은 이유일 뿐 아니라, 모듈 로드 시점에
 // 곧바로 네이티브 이벤트 이미터를 건드리면 테스트에서 이 모듈을 import하는 순간 앱스테이트
@@ -62,14 +69,20 @@ function ensurePermissionNoticeListener(): void {
 function ensureAppStateListener(): void {
   if (appStateSubscription) return;
   appStateSubscription = AppState.addEventListener('change', (next) => {
-    if (next !== 'active') {
+    if (next === 'background') {
+      if (requestingPermission) return;
       locationGeneration += 1;
       subscription?.remove();
       subscription = null;
-      setState({ coords: null, error: null, loading: true });
+      // error는 남겨둔다 — 권한을 거부한 이용자가 포그라운드로 돌아올 때마다 이미 떠 있던
+      // "위치 권한이 필요합니다"가 로딩으로 덮여 깜빡이지 않도록.
+      setState({ coords: null, error: state.error, loading: true });
       return;
     }
-    permissionDenied = false;
+    // 'inactive'에는 아무것도 하지 않는다 — iOS가 제어센터·알림 배너·앱 스위처·전화 수신·
+    // 시스템 대화상자처럼 잠깐 가려질 때마다 쏘는 상태다. 여기서 watcher를 해제하면 그때마다
+    // 현재위치 마커가 사라지고(coords: null) 복귀할 때 권한 확인부터 다시 돈다.
+    if (next !== 'active') return;
     if (listeners.size > 0) void start();
   });
 }
@@ -77,6 +90,25 @@ function ensureAppStateListener(): void {
 function setState(next: LocationState): void {
   state = next;
   listeners.forEach((notify) => notify());
+}
+
+/**
+ * 아직 묻지 않았다면 묻고, 이미 거부된 뒤라면 대화상자 없이 현재 상태만 읽는다.
+ * 후자가 이용자가 OS 설정에서 권한을 바꾸고 돌아오는 복구 경로를 살려두면서도 포그라운드
+ * 복귀마다 시스템 팝업을 다시 띄우지 않는 유일한 방법이다(원스토어 반려 사유 1번).
+ */
+async function resolvePermissionStatus(): Promise<Location.PermissionStatus> {
+  if (permissionDenied) {
+    const { status } = await Location.getForegroundPermissionsAsync();
+    return status;
+  }
+  requestingPermission = true;
+  try {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    return status;
+  } finally {
+    requestingPermission = false;
+  }
 }
 
 async function start(): Promise<void> {
@@ -93,20 +125,18 @@ async function start(): Promise<void> {
       return;
     }
     if (!isCurrent()) return;
+    const status = await resolvePermissionStatus();
+    // 권한 결과는 generation이 아니라 앱 전역의 사실이므로 staleness 체크보다 **먼저** 기록한다.
+    // 순서를 뒤집으면, 권한 팝업 때문에 generation이 밀린 경우 거부 사실이 유실되고 아래
+    // finally의 재시작이 거부 직후 팝업을 한 번 더 띄운다(원스토어 반려 사유 1번).
+    permissionDenied = status !== 'granted';
     if (permissionDenied) {
-      // API를 다시 부르진 않지만(리뷰 지적 13번), 마지막 구독자가 나갔다 들어오는 사이
-      // state가 초기화됐을 수 있다(리뷰 지적 12번) — 이미 아는 결과를 다시 반영해줘야
-      // 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
-      setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
+      // 마지막 구독자가 나갔다 들어오는 사이 state가 초기화됐을 수 있다(리뷰 지적 12번) —
+      // 이미 아는 결과를 다시 반영해줘야 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
+      if (isCurrent()) setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
       return;
     }
-    const { status } = await Location.requestForegroundPermissionsAsync();
     if (!isCurrent()) return;
-    if (status !== 'granted') {
-      permissionDenied = true;
-      setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
-      return;
-    }
     const sub = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
       (loc) => {
