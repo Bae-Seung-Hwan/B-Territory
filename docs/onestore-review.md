@@ -39,9 +39,12 @@
 | 필수 | 위치 | `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION` | 현재 있는 구역 판정, 관광지 미션 방문 확인, 근처 이용자와의 결투 매칭 |
 | 선택 | 없음 | — | — |
 
-백그라운드 위치·포그라운드 서비스·카메라는 선언하지 않는다. **저장소는 한 번 들어왔다가 제거한 경우다** — 앱이 요청한 적은 없지만 `expo-image`(Glide)와 전이 의존성 `expo-file-system`이 각자의 AndroidManifest에 `READ/WRITE_EXTERNAL_STORAGE`(`maxSdkVersion="32"`)를 선언해, 병합되면 **Android 12 이하 APK에 고지하지 않은 접근권한이 실린다.** 둘 다 실제로 쓰지 않으므로(앱 전용 디렉터리는 권한 없이 접근한다) `app.config.js`의 `blockedPermissions`로 최종 매니페스트에서 제거했다.
+백그라운드 위치·카메라는 선언하지 않는다. 일반권한인 `FOREGROUND_SERVICE` 선언은 남지만 위치 포그라운드 서비스는 사용하지 않는다. **저장소는 한 번 들어왔다가 제거한 경우다** — 앱이 요청한 적은 없지만 `expo-image`(Glide)와 전이 의존성 `expo-file-system`이 각자의 AndroidManifest에 `READ/WRITE_EXTERNAL_STORAGE`(`maxSdkVersion="32"`)를 선언해, 병합되면 **Android 12 이하 APK에 고지하지 않은 접근권한이 실린다.** 둘 다 실제로 쓰지 않으므로(앱 전용 디렉터리는 권한 없이 접근한다) `app.config.js`의 `blockedPermissions`로 최종 매니페스트에서 제거했다.
 
-> 이것이 손으로 관리할 수 없는 종류의 문제라는 점이 중요하다 — 권한은 우리가 적어서가 아니라 **자동링크된 라이브러리가 끌고 와서** 들어온다. 그래서 `frontend/src/__tests__/constants/app-permissions-manifest.test.ts`가 node_modules의 매니페스트를 훑어, 고지됐거나·차단됐거나·일반권한(INTERNET 등)이 아닌 항목이 하나라도 있으면 실패한다. 의존성을 추가하다 이 테스트가 깨지면 **고지 목록에 추가할지 차단할지**를 그 자리에서 정하면 된다.
+
+`SYSTEM_ALERT_WINDOW`도 `blockedPermissions`로 제거한다. 검증 APK에서 앱의 기본 매니페스트 선언이 배포 빌드에 남아 있는 것을 확인했다. 개발용 성능 모니터 등에 쓰이는 권한으로, 앱 내부 고지 화면·결투 모달에는 필요하지 않다.
+
+> 이것이 손으로 관리할 수 없는 종류의 문제라는 점이 중요하다 — 권한은 우리가 적어서가 아니라 **자동링크된 라이브러리가 끌고 와서** 들어온다. 그래서 `frontend/src/__tests__/constants/app-permissions-manifest.test.ts`가 node_modules 및 생성된 앱의 main 매니페스트(존재할 때)를 훑어, 고지됐거나·차단됐거나·일반권한(INTERNET 등)이 아닌 항목이 하나라도 있으면 실패한다. 의존성을 추가하다 이 테스트가 깨지면 **고지 목록에 추가할지 차단할지**를 그 자리에서 정하면 된다.
 
 ### ONEconsole 상품정보에 등록할 권한 설명
 
@@ -100,7 +103,7 @@
 1. [ ] 새 바이너리에서 **첫 실행 시** 접근권한 안내가 뜨고, **확인을 누르기 전에는 OS 위치 권한 팝업이 뜨지 않는지** 실기기로 확인
 2. [ ] 이미 로그인된 상태로 앱을 업데이트했을 때도 1번이 동일한지 확인(이 경로가 겹침이 나던 자리다)
 3. [ ] 채팅 탭 진입 시 안내문구가 보이고, 대화를 여러 건 주고받아도 계속 보이는지 확인
-4. [ ] 빌드된 APK의 실제 매니페스트 확인 — `aapt dump permissions <apk>` 또는 EAS 빌드 상세의 권한 목록에 **위치 두 개 외의 접근권한이 없는지**(특히 `READ/WRITE_EXTERNAL_STORAGE`가 제거됐는지). `blockedPermissions`는 Gradle 매니페스트 병합 단계에서 적용되므로 바이너리로만 최종 확인된다
+4. [ ] 빌드된 APK의 실제 매니페스트 확인 — `aapt dump permissions <apk>` 또는 EAS 빌드 상세의 권한 목록에 **위치 두 개 외의 접근권한이 없는지**(특히 `READ/WRITE_EXTERNAL_STORAGE`와 `SYSTEM_ALERT_WINDOW`가 제거됐는지). `blockedPermissions`는 Gradle 매니페스트 병합 단계에서 적용되므로 바이너리로만 최종 확인된다
 5. [ ] ONEconsole 상품정보의 **권한 설명** 필드를 1장의 문구로 갱신
 6. [ ] ONEconsole 연령등급 설문 재진행 후 저장(2장)
 7. [ ] 기존 바이너리 삭제 → 새 바이너리 업로드 → 재검증 요청

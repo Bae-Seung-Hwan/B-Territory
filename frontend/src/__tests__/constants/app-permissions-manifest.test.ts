@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join, relative, sep } from 'path';
+import { addBlockedPermissions } from '@expo/config-plugins/build/android/Permissions';
+import type { AndroidManifest } from '@expo/config-plugins/build/android/Manifest';
 import { APP_PERMISSIONS } from '@/constants/app-permissions';
 
 /**
@@ -54,13 +56,19 @@ function collectLibraryPermissions(): Map<string, string[]> {
     packageDirs.push(join(root, entry));
   }
 
-  for (const dir of packageDirs) {
-    const manifest = join(dir, 'android', 'src', 'main', 'AndroidManifest.xml');
+  const manifests = packageDirs.map((dir) =>
+    join(dir, 'android', 'src', 'main', 'AndroidManifest.xml'),
+  );
+  // prebuild가 생성한 앱 선언도 확인한다. 라이브러리만 보면 SYSTEM_ALERT_WINDOW를 놓친다.
+  // android/가 없는 CI에서는 라이브러리 검사만 수행하므로 최종 APK 검사는 별도로 필요하다.
+  manifests.push(join(root, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'));
+
+  for (const manifest of manifests) {
     if (!existsSync(manifest)) continue;
     const xml = readFileSync(manifest, 'utf8');
     for (const match of xml.matchAll(/<uses-permission[^>]*android:name="([^"]+)"/g)) {
       const owners = byPermission.get(match[1]) ?? [];
-      owners.push(relative(root, dir).split(sep).join('/'));
+      owners.push(relative(root, manifest).split(sep).join('/'));
       byPermission.set(match[1], owners);
     }
   }
@@ -88,6 +96,32 @@ describe('선언되는 접근권한과 고지 목록', () => {
     // (constants/app-permissions.ts + i18n + ONEconsole 권한 설명)에 추가하거나,
     // 쓰지 않는 권한이면 app.config.js의 blockedPermissions로 막는다.
     expect(undisclosed).toEqual([]);
+  });
+
+  it('네이티브 폴더 없이도 Expo 생성 과정에서 불필요한 권한에 제거 지시를 넣는다', () => {
+    // 앱 기본 선언과 라이브러리 저장소 선언을 함께 재현한다.
+    // 실제 Expo 변환을 사용하되 Gradle 병합 및 최종 APK 검사는 별도로 수행한다.
+    const unnecessary = [
+      'android.permission.SYSTEM_ALERT_WINDOW',
+      'android.permission.READ_EXTERNAL_STORAGE',
+      'android.permission.WRITE_EXTERNAL_STORAGE',
+    ];
+    const manifest: AndroidManifest = {
+      manifest: {
+        $: { 'xmlns:android': 'http://schemas.android.com/apk/res/android' },
+        'uses-permission': [...unnecessary, ...disclosed].map((name) => ({
+          $: { 'android:name': name },
+        })),
+      },
+    };
+    const generated = addBlockedPermissions(manifest, blocked);
+    const permissions = generated.manifest['uses-permission'] ?? [];
+    for (const name of unnecessary) {
+      expect(permissions.find((p) => p.$['android:name'] === name)?.$['tools:node']).toBe('remove');
+    }
+    for (const name of disclosed) {
+      expect(permissions.find((p) => p.$['android:name'] === name)?.$['tools:node']).not.toBe('remove');
+    }
   });
 
   it('고지한 권한을 차단하지는 않았는지 — 둘 다 걸리면 권한 없이 기능이 죽는다', () => {

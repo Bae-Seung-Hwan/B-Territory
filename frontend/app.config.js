@@ -64,6 +64,8 @@ module.exports = {
       blockedPermissions: [
         'android.permission.READ_EXTERNAL_STORAGE',
         'android.permission.WRITE_EXTERNAL_STORAGE',
+        // 개발용 성능 모니터의 다른 앱 위 표시 권한은 서비스에서 사용하지 않는다.
+        'android.permission.SYSTEM_ALERT_WINDOW',
       ],
     },
     web: {
