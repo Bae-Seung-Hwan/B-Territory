@@ -28,6 +28,17 @@ jest.mock('react-native/Libraries/AppState/AppState', () => ({
   },
 }));
 
+// 접근권한 사전 고지(정보통신망법 제22조의2)는 이 훅의 관심사가 아니라 전제다 — 확인 여부를
+// 테스트가 직접 쥐고, "확인 전에는 OS 권한을 묻지 않는다"만 검증한다.
+const mockNotice = { acknowledged: true, listeners: new Set<() => void>() };
+jest.mock('@/lib/permission-notice', () => ({
+  isPermissionNoticeAcknowledged: jest.fn(async () => mockNotice.acknowledged),
+  subscribeToPermissionNotice: jest.fn((cb: () => void) => {
+    mockNotice.listeners.add(cb);
+    return () => mockNotice.listeners.delete(cb);
+  }),
+}));
+
 const mockedRequestPermission = Location.requestForegroundPermissionsAsync as jest.Mock;
 const mockedWatchPosition = Location.watchPositionAsync as jest.Mock;
 
@@ -42,8 +53,40 @@ describe('useLocation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockAppState.currentState = 'active';
-    mockAppState.listener = null;
+    // mockAppState.listener는 비우지 않는다 — ensureAppStateListener()가 **맨 처음 구독자
+    // 때 딱 한 번만** 등록하므로(모듈 싱글턴), 여기서 null로 되돌리면 그 뒤의 테스트는
+    // 리스너를 부를 방법을 영영 잃는다. 첫 테스트가 채워둔 핸들을 그대로 물려받는다.
   });
+
+  it(
+    '접근권한 사전 고지를 확인하기 전에는 OS 권한 대화상자를 띄우지 않고, 확인되는 순간 ' +
+      '그제서야 시작한다 — 이미 로그인된 채로 앱을 업데이트한 이용자는 고지 화면과 ' +
+      'LocationBroadcaster가 같은 프레임에 함께 마운트되므로, 화면만으로 막으면 고지문 위로 ' +
+      'OS 팝업이 겹쳐 뜬다(원스토어 반려 사유 1번)',
+    async () => {
+      mockNotice.acknowledged = false;
+      const { result, unmount } = await renderHook(() => useLocation());
+
+      // 아직 아무것도 묻지 않았다. 에러가 아니라 로딩이어야 한다 — 에러로 떨어뜨리면
+      // 지도 화면이 "위치 권한이 필요합니다"를 묻지도 않은 채 먼저 띄운다.
+      await waitFor(() => expect(mockNotice.listeners.size).toBe(1));
+      expect(mockedRequestPermission).not.toHaveBeenCalled();
+      expect(result.current.loading).toBe(true);
+      expect(result.current.error).toBeNull();
+
+      mockedRequestPermission.mockResolvedValue({ status: 'granted' });
+      mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
+
+      await act(async () => {
+        mockNotice.acknowledged = true;
+        mockNotice.listeners.forEach((notify) => notify());
+      });
+
+      await waitFor(() => expect(mockedRequestPermission).toHaveBeenCalledTimes(1));
+      await unmount();
+      mockNotice.acknowledged = true;
+    },
+  );
 
   it(
     '권한이 거부되면: (1) 다시 마운트해도 API를 또 부르지 않되 알려진 결과는 다시 반영하고 ' +

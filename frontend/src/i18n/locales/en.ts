@@ -93,6 +93,25 @@ export const en: Translations = {
       consentRequired: 'Your agreement to the terms has expired. Please agree again.',
     },
   },
+  permissions: {
+    title: 'App Permissions',
+    subtitle: 'B-territory only requests the permissions it needs to provide the service. Please review them below.',
+    requiredSection: 'Required permissions',
+    optionalSection: 'Optional permissions',
+    noOptional: 'No optional permissions are requested at this time.',
+    requiredNote:
+      'Without the required permissions you cannot use location-based features such as claiming districts, site missions, and duels. Optional permissions can be declined and the service remains usable.',
+    withdraw:
+      'You can change or revoke granted permissions at any time in Settings > Apps > B-territory > Permissions on your device.',
+    confirm: 'OK',
+    items: {
+      location: {
+        name: 'Location (precise and approximate)',
+        purpose:
+          'Used to determine which district you are in, verify site mission visits, and match duels with nearby players. Collected only while you are using the app (foreground), never in the background.',
+      },
+    },
+  },
   tabs: {
     battle: 'Battle',
     chat: 'Chat',
@@ -107,6 +126,9 @@ export const en: Translations = {
   },
   chat: {
     title: 'Chat',
+    safetyNotice:
+      'Insults, profanity, obscenity, and advertising are subject to sanctions under our operating policy. Never share your payment or personal information with anyone — doing so may cause you harm.',
+    reportHint: 'Press and hold a message to report or block the sender.',
     emptyState: 'No messages yet',
     inputPlaceholder: 'Type a message',
     send: 'Send',

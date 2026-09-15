@@ -11,6 +11,8 @@ Apple 심사 가이드라인 **1.2 (User-Generated Content)** 는 UGC를 다루�
 | 악성 사용자 차단 | `POST /api/blocks/:userId` — **서버에서 릴레이를 끊는다** |
 | 공개된 연락처 | 아래 문의처 (개인정보처리방침에도 동일 기재) |
 
+> 아래 금지 행위·제재 기준의 요약은 **채팅 화면 상단에 상시 고지**된다(`frontend/src/app/(main)/chat/index.tsx`, i18n `chat.safetyNotice`). 원스토어가 채팅 기능에 요구하는 주의·제재 안내문구가 그것이며, 문구는 윤리와 결제·개인정보 보호를 한 문장에 함께 담아야 한다 — 자세한 배경은 [`docs/onestore-review.md`](./onestore-review.md) 3장.
+
 ## 금지 행위
 
 다음 행위는 신고 대상이며, 확인 시 경고·채팅 제한·계정 정지 등의 조치를 받을 수 있다.

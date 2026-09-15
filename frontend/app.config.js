@@ -48,6 +48,23 @@ module.exports = {
         monochromeImage: './assets/images/android-icon-monochrome.png',
       },
       predictiveBackGestureEnabled: false,
+      // 자동링크된 네이티브 모듈이 **자기 AndroidManifest로** 끌고 들어오는 저장소 권한을
+      // 최종 매니페스트에서 제거한다(`tools:node="remove"`). expo-file-system이 전이
+      // 의존성으로 들어와 READ/WRITE_EXTERNAL_STORAGE를 maxSdkVersion="32"로 선언하는데,
+      // 이 앱은 공용 저장소를 쓰지 않는다 — 앱 전용 디렉터리(캐시·에셋)는 권한 없이 접근
+      // 가능하고, src/ 어디에서도 expo-file-system을 직접 import하지 않는다.
+      //
+      // 지우지 않으면 Android 12 이하에서 **고지하지 않은 접근권한이 선언된 APK**가 나간다.
+      // 정보통신망법 제22조의2가 요구하는 고지 목록(constants/app-permissions.ts)과 실제
+      // 매니페스트가 어긋나는 것이고, 그게 원스토어 반려 사유 1번의 실제 내용이다. 저장소
+      // 기능을 실제로 쓰게 되는 날에는 이 항목을 지우는 게 아니라 고지 목록에 추가한다.
+      //
+      // INTERNET·ACCESS_NETWORK_STATE는 남긴다 — 단말기 정보·기능에 접근하는 권한이 아닌
+      // 일반권한(normal permission)이라 고지 대상이 아니고, 실제로 필요하다.
+      blockedPermissions: [
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE',
+      ],
     },
     web: {
       output: 'static',

@@ -8,6 +8,7 @@ import { DuelRequest } from '@/components/overlay/DuelRequest';
 import { DuelPending } from '@/components/overlay/DuelPending';
 import { MiniGame } from '@/components/overlay/MiniGame';
 import { LocationBroadcaster } from '@/components/LocationBroadcaster';
+import { AppPermissionNotice } from '@/components/permissions/AppPermissionNotice';
 import { useAuth } from '@/hooks/use-auth';
 import { queryClient } from '@/lib/query-client';
 
@@ -23,6 +24,12 @@ export default function RootLayout() {
               <DuelRequest />
               <DuelPending />
               <MiniGame />
+              {/*
+                접근권한 사전 고지(정보통신망법 제22조의2). 다른 오버레이보다 뒤에 둬
+                무엇이 떠 있든 그 위를 덮는다 — OS 권한 대화상자보다 먼저 보여야 하는
+                화면이라, 확인 전까지는 use-location.ts도 권한을 묻지 않고 기다린다.
+              */}
+              <AppPermissionNotice />
             </SocketProvider>
           </BottomSheetModalProvider>
         </AuthProvider>

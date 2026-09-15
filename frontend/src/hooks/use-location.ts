@@ -1,6 +1,10 @@
 import { useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
 import * as Location from 'expo-location';
+import {
+  isPermissionNoticeAcknowledged,
+  subscribeToPermissionNotice,
+} from '@/lib/permission-notice';
 
 interface Coords {
   latitude: number;
@@ -40,6 +44,20 @@ let permissionDenied = false;
 // 곧바로 네이티브 이벤트 이미터를 건드리면 테스트에서 이 모듈을 import하는 순간 앱스테이트
 // 목이 아직 준비되기 전에 실행될 위험도 없앤다.
 let appStateSubscription: { remove: () => void } | null = null;
+// 접근권한 사전 고지를 확인하기 전에는 OS 권한 대화상자를 띄우지 않는다(정보통신망법
+// 제22조의2 / 원스토어 반려 사유 1번). 확인되는 순간을 알아야 그때 GPS를 시작할 수 있는데,
+// 고지 화면은 React 트리에 있고 이 스토어는 모듈 스코프라 렌더로는 이어지지 않는다 —
+// AppState와 같은 이유·같은 방식으로 첫 구독자가 생길 때 한 번만 등록한다.
+let noticeSubscription: (() => void) | null = null;
+function ensurePermissionNoticeListener(): void {
+  if (noticeSubscription) return;
+  noticeSubscription = subscribeToPermissionNotice(() => {
+    // AppState 복구 경로와 같은 판단이다 — 지금 구독자가 없다면 다음 subscribe()가 어차피
+    // 시작하므로, 여기서 미리 권한을 물어 고지 직후 빈 화면에 팝업을 띄우지 않는다.
+    if (listeners.size > 0) void start();
+  });
+}
+
 function ensureAppStateListener(): void {
   if (appStateSubscription) return;
   appStateSubscription = AppState.addEventListener('change', (next) => {
@@ -61,16 +79,22 @@ function setState(next: LocationState): void {
 }
 
 async function start(): Promise<void> {
-  if (permissionDenied) {
-    // API를 다시 부르진 않지만(리뷰 지적 13번), 마지막 구독자가 나갔다 들어오는 사이
-    // state가 초기화됐을 수 있다(리뷰 지적 12번) — 이미 아는 결과를 다시 반영해줘야
-    // 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
-    setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
-    return;
-  }
   if (starting || subscription) return;
   starting = true;
   try {
+    // 고지 확인 전에는 로딩 상태로 멈춰 선다. 여기서 에러로 떨어뜨리면 지도 화면이
+    // "위치 권한이 필요합니다"를 고지문 뒤에 미리 띄우게 된다 — 아직 묻지도 않은 권한이다.
+    if (!(await isPermissionNoticeAcknowledged())) {
+      setState({ coords: null, error: null, loading: true });
+      return;
+    }
+    if (permissionDenied) {
+      // API를 다시 부르진 않지만(리뷰 지적 13번), 마지막 구독자가 나갔다 들어오는 사이
+      // state가 초기화됐을 수 있다(리뷰 지적 12번) — 이미 아는 결과를 다시 반영해줘야
+      // 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
+      setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
+      return;
+    }
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       permissionDenied = true;
@@ -102,6 +126,7 @@ async function start(): Promise<void> {
 }
 
 function subscribe(onStoreChange: () => void): () => void {
+  ensurePermissionNoticeListener();
   ensureAppStateListener();
   listeners.add(onStoreChange);
   void start();

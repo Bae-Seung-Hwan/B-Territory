@@ -119,6 +119,17 @@ export default function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      {/*
+        이용자 보호 주의·제재 안내(원스토어 반려 사유 3번). 닫을 수 없고 채팅 화면에
+        항상 떠 있어야 하는 고지라 목록의 ListHeaderComponent가 아니라 화면 상단에
+        고정한다 — 헤더로 넣으면 대화가 쌓이는 즉시 스크롤 밖으로 밀려 사라진다.
+        문구는 윤리(비방·욕설·음란·광고 제재)와 결제·개인정보 보호를 모두 담아야 한다.
+        신고·차단 조작법을 함께 적는 이유는 그 기능이 롱프레스에만 있어서다.
+      */}
+      <View style={styles.safetyNotice}>
+        <Text style={styles.safetyNoticeText}>{t('chat.safetyNotice')}</Text>
+        <Text style={styles.safetyHintText}>{t('chat.reportHint')}</Text>
+      </View>
       {chatError && (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{t(chatErrorKey(chatError))}</Text>
@@ -179,6 +190,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   bannerText: { color: '#888', fontSize: 12, textAlign: 'center' },
+  safetyNotice: {
+    backgroundColor: BrandColors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: BrandColors.border,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    gap: 2,
+  },
+  safetyNoticeText: { color: '#aaa', fontSize: 11, lineHeight: 16 },
+  // #777은 이 배경(#1A1A2E)에서 약 3.8:1로 WCAG AA(4.5:1)에 못 미친다. 하필 이 줄이
+  // 롱프레스에만 있는 신고·차단을 알리려고 넣은 문구라, 가장 안 읽히면 곤란하다(약 6:1).
+  safetyHintText: { color: '#999', fontSize: 11, lineHeight: 16 },
   list: { padding: 16, gap: 8, flexGrow: 1 },
   emptyState: { color: '#555', fontSize: 14, textAlign: 'center', marginTop: 40 },
   mineRow: { alignItems: 'flex-end', marginBottom: 4 },
