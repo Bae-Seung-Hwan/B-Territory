@@ -94,7 +94,7 @@
 
 구현: `frontend/src/app/(main)/chat/index.tsx` 상단 고정 배너. 함께 표시하는 `chat.reportHint`("메시지를 길게 누르면 신고·차단할 수 있습니다")는 권장사항인 신고·차단이 롱프레스에만 있어 검수자 눈에 띄지 않는 문제를 겸해서 푼다.
 
-목록의 `ListHeaderComponent`가 아니라 화면에 고정한 것은 의도다 — 헤더로 넣으면 대화가 쌓이는 즉시 스크롤 밖으로 밀려 사라진다. `frontend/src/__tests__/app/chat-safety-notice.test.tsx`가 메시지 30건을 쌓은 뒤에도 문구가 남아 있는지 본다.
+공지는 고정 노출이 어려우면 스크롤링도 허용한다. 이 앱에서 목록의 `ListHeaderComponent` 대신 화면 상단 고정을 선택한 것은 안내를 지속적으로 보여주기 위해서다 — 헤더로 넣으면 대화가 쌓이는 즉시 스크롤 밖으로 밀려 사라진다. `frontend/src/__tests__/app/chat-safety-notice.test.tsx`가 메시지 30건을 쌓은 뒤에도 문구가 렌더 트리에 남아 있는지 본다. 실제 스크롤 후 가시성 및 키보드·큰 글꼴 설정의 가독성은 에뮬레이터에서 별도로 확인한다.
 
 ---
 

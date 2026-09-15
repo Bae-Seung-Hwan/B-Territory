@@ -13,8 +13,9 @@ jest.mock('@/components/chat/MessageActionSheet', () => ({ MessageActionSheet: (
 /**
  * 원스토어 검수가 요구하는 채팅 이용자 보호 안내문구(공지 29889, 반려 사유 3번).
  *
- * "표시된다"가 아니라 **"대화가 쌓여도 계속 표시된다"** 가 요건이다 — 한때 후보였던
- * FlatList의 ListHeaderComponent는 메시지가 몇 개만 쌓여도 스크롤 밖으로 밀려 사라진다.
+ * 공지는 스크롤링도 허용하지만, 이 앱은 안내를 지속적으로 보여주기 위해 상단 고정을 선택했다.
+ * 이 테스트는 메시지가 쌓인 뒤에도 렌더 트리에 안내가 유지되는지 검사한다.
+ * 실제 스크롤 후 가시성과 키보드·큰 글꼴 설정의 가독성은 에뮬레이터에서 별도로 확인한다.
  */
 describe('채팅 안내문구', () => {
   beforeEach(() => {
@@ -28,7 +29,7 @@ describe('채팅 안내문구', () => {
     getByText(i18n.t('chat.reportHint'));
   });
 
-  it('메시지가 쌓여도 사라지지 않는다 — 목록 안이 아니라 화면에 고정돼야 한다', async () => {
+  it('메시지가 쌓여도 안내가 렌더 트리에 유지된다', async () => {
     const { getByText } = await render(<ChatScreen />);
 
     await act(async () => {
