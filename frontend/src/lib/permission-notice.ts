@@ -58,7 +58,7 @@ export async function acknowledgePermissionNotice(): Promise<void> {
   try {
     await AsyncStorage.setItem(STORAGE_KEY, PERMISSION_NOTICE_VERSION);
   } catch {
-    // 저장 실패로 진행을 막지 않는다 — 고지는 이미 화면에 표시했고 동의도 받았다. 여기서
+    // 저장 실패로 진행을 막지 않는다 — 이용자가 고지 확인을 마쳤다. 실제 접근권한 동의는 이후 OS 창에서 받는다. 여기서
     // 세우면 저장소가 막힌 기기에서 앱을 아예 쓸 수 없게 된다. 다음 실행에 다시 뜰 뿐이다.
   }
   setState('acknowledged');

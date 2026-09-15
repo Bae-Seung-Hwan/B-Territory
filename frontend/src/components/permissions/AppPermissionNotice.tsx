@@ -69,7 +69,7 @@ export function AppPermissionNotice() {
             ))
           )}
 
-          {/* 가이드가 고지하도록 요구하는 두 가지: 거부 시 제약, 그리고 철회 방법. */}
+          {/* 권한 거부 시 기능 제약과 OS 설정에서 철회하는 방법을 함께 안내한다. */}
           <Text style={styles.note}>{t('permissions.requiredNote')}</Text>
           <Text style={styles.note}>{t('permissions.withdraw')}</Text>
         </ScrollView>
