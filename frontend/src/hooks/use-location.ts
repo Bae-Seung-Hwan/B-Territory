@@ -34,6 +34,7 @@ let state: LocationState = { coords: null, error: null, loading: true };
 const listeners = new Set<() => void>();
 let subscription: Location.LocationSubscription | null = null;
 let starting = false;
+let locationGeneration = 0;
 // 한 번 거부되면 소비자가 새로 마운트될 때마다(화면 이동 등) requestForegroundPermissionsAsync를
 // 다시 호출하지 않는다(PR #54 리뷰 지적 13번) — subscription/starting 가드만으로는 거부 경로에서
 // 둘 다 원상태로 돌아가 다음 subscribe()가 처음부터 다시 묻는다. 앱이 포그라운드로 돌아올 때는
@@ -61,14 +62,14 @@ function ensurePermissionNoticeListener(): void {
 function ensureAppStateListener(): void {
   if (appStateSubscription) return;
   appStateSubscription = AppState.addEventListener('change', (next) => {
-    if (next !== 'active' || !permissionDenied) return;
+    if (next !== 'active') {
+      locationGeneration += 1;
+      subscription?.remove();
+      subscription = null;
+      setState({ coords: null, error: null, loading: true });
+      return;
+    }
     permissionDenied = false;
-    // 플래그만 풀고 끝내면 아무도 다시 시도하지 않는다(PR #54 2차 리뷰 지적 3번) — start()의
-    // 유일한 호출부는 subscribe()인데, LocationBroadcaster처럼 구독자가 세션 내내 상주하면
-    // 구독자 수가 0에서 1로 늘어나는 순간 자체가 다시 오지 않아 subscribe()가 다시 불릴 일이
-    // 없다. "설정에서 권한을 켜고 돌아온다"는 유일한 복구 신호이므로 지금 구독자가 있다면
-    // 여기서 직접 재시도한다 — 지금 아무도 구독하고 있지 않다면 다음 구독자의 subscribe()가
-    // 어차피 새로 시작하므로 여기서 미리 부를 필요가 없다(불필요한 권한 요청 중복 방지).
     if (listeners.size > 0) void start();
   });
 }
@@ -79,8 +80,11 @@ function setState(next: LocationState): void {
 }
 
 async function start(): Promise<void> {
-  if (starting || subscription) return;
+  if (starting || subscription || listeners.size === 0 || AppState.currentState !== 'active') return;
   starting = true;
+  const generation = locationGeneration;
+  const isCurrent = () =>
+    generation === locationGeneration && listeners.size > 0 && AppState.currentState === 'active';
   try {
     // 고지 확인 전에는 로딩 상태로 멈춰 선다. 여기서 에러로 떨어뜨리면 지도 화면이
     // "위치 권한이 필요합니다"를 고지문 뒤에 미리 띄우게 된다 — 아직 묻지도 않은 권한이다.
@@ -88,6 +92,7 @@ async function start(): Promise<void> {
       setState({ coords: null, error: null, loading: true });
       return;
     }
+    if (!isCurrent()) return;
     if (permissionDenied) {
       // API를 다시 부르진 않지만(리뷰 지적 13번), 마지막 구독자가 나갔다 들어오는 사이
       // state가 초기화됐을 수 있다(리뷰 지적 12번) — 이미 아는 결과를 다시 반영해줘야
@@ -96,6 +101,7 @@ async function start(): Promise<void> {
       return;
     }
     const { status } = await Location.requestForegroundPermissionsAsync();
+    if (!isCurrent()) return;
     if (status !== 'granted') {
       permissionDenied = true;
       setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
@@ -104,6 +110,7 @@ async function start(): Promise<void> {
     const sub = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
       (loc) => {
+        if (!isCurrent()) return;
         setState({
           coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
           error: null,
@@ -112,16 +119,19 @@ async function start(): Promise<void> {
       },
     );
     // 권한/구독을 기다리는 사이 마지막 구독자가 떠났으면 즉시 정리한다.
-    if (listeners.size === 0) {
+    if (!isCurrent()) {
       sub.remove();
       return;
     }
     subscription = sub;
   } catch (e) {
+    if (!isCurrent()) return;
     const message = e instanceof Error ? e.message : '위치 정보를 가져올 수 없습니다';
     setState({ coords: null, error: message, loading: false });
   } finally {
     starting = false;
+    // 비동기 시작 중 중지·복귀한 경우 이전 요청을 버리고 새 구독을 시작한다.
+    if (generation !== locationGeneration) void start();
   }
 }
 
@@ -133,6 +143,7 @@ function subscribe(onStoreChange: () => void): () => void {
   return () => {
     listeners.delete(onStoreChange);
     if (listeners.size === 0) {
+      locationGeneration += 1;
       subscription?.remove();
       subscription = null;
       // state는 그대로 두면 안 된다 — subscription만 비우면, 로그아웃 후 재로그인처럼

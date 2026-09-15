@@ -142,6 +142,55 @@ describe('useLocation', () => {
     },
   );
 
+  it('백그라운드에서는 구독과 좌표를 지우고 복귀 후 새 좌표를 사용한다', async () => {
+    mockedRequestPermission.mockResolvedValue({ status: 'granted' });
+    const remove = jest.fn();
+    const callbacks: ((loc: { coords: { latitude: number; longitude: number } }) => void)[] = [];
+    mockedWatchPosition.mockImplementation((_opts, cb) => {
+      callbacks.push(cb);
+      return Promise.resolve({ remove });
+    });
+    const hook = await renderHook(() => useLocation());
+    await waitFor(() => expect(callbacks).toHaveLength(1));
+    await act(async () => callbacks[0]({ coords: { latitude: 1, longitude: 2 } }));
+    await act(async () => {
+      mockAppState.currentState = 'background';
+      mockAppState.listener?.('background');
+      callbacks[0]({ coords: { latitude: 3, longitude: 4 } });
+    });
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.coords).toBeNull();
+    await act(async () => {
+      mockAppState.currentState = 'active';
+      mockAppState.listener?.('active');
+    });
+    await waitFor(() => expect(callbacks).toHaveLength(2));
+    expect(hook.result.current.coords).toBeNull();
+    await act(async () => callbacks[1]({ coords: { latitude: 5, longitude: 6 } }));
+    expect(hook.result.current.coords).toEqual({ latitude: 5, longitude: 6 });
+    await hook.unmount();
+  });
+
+  it('watcher 생성 대기 중 중지·복귀하면 오래된 구독을 버리고 다시 시작한다', async () => {
+    mockedRequestPermission.mockResolvedValue({ status: 'granted' });
+    let resolveWatch!: (value: { remove: jest.Mock }) => void;
+    const staleRemove = jest.fn();
+    mockedWatchPosition.mockImplementationOnce(() => new Promise((resolve) => { resolveWatch = resolve; }));
+    mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
+    const hook = await renderHook(() => useLocation());
+    await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      mockAppState.currentState = 'background';
+      mockAppState.listener?.('background');
+      mockAppState.currentState = 'active';
+      mockAppState.listener?.('active');
+      resolveWatch({ remove: staleRemove });
+    });
+    await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalledTimes(2));
+    expect(staleRemove).toHaveBeenCalledTimes(1);
+    await hook.unmount();
+  });
+
   it(
     '마지막 구독자가 사라지면 좌표 상태도 초기화한다 — 그러지 않으면 다음 구독자(재로그인한 ' +
       '다른 사용자 등)가 새 위치가 잡히기 전까지 이전 좌표를 그대로 본다(PR #54 리뷰 지적 12번)',
