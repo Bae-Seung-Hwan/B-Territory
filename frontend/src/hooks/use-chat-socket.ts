@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { io, Socket } from 'socket.io-client';
-import { API_BASE_URL } from '@/lib/api-client';
-import { auth } from '@/lib/firebase';
+import { SOCKET_BASE_URL } from '@/lib/api-client';
 import { useAuth } from '@/hooks/use-auth';
 import { useChatStore, type ChatFeedItem } from '@/store/useChatStore';
 import type { ChatMessageIncoming, ChatMessageOutgoing } from '@/types/chat-events';
@@ -71,7 +70,7 @@ export function useChatSocket() {
   const attemptRef = useRef<Map<string, number>>(new Map());
   const addMessage = useChatStore((s) => s.addMessage);
   const setMessageStatus = useChatStore((s) => s.setMessageStatus);
-  const { profile, isAuthenticated } = useAuth();
+  const { profile, isAuthenticated, firebaseUser } = useAuth();
   const [chatError, setChatError] = useState<ChatSocketError | null>(null);
   // 'active'만 포그라운드로 인정하면 iOS의 'inactive'(제어센터·알림센터를 내리거나
   // 앱 스위처를 띄우는 등, 화면은 그대로인 짧은 전환)까지 백그라운드로 오판해 매번
@@ -90,7 +89,7 @@ export function useChatSocket() {
   // 않았으면 auth.currentUser가 null이라 토큰을 못 읽는데, 이 값을 안 보면 세션이
   // 도착해도 effect가 다시 돌지 않아 영영 연결되지 않는다.
   useEffect(() => {
-    if (!isAuthenticated || !isForeground) return;
+    if (!isAuthenticated || !firebaseUser || !isForeground) return;
 
     // attemptRef.current(Map)/pendingIdsRef.current(Set)는 이 훅 생애주기 동안
     // 재할당되지 않는 안정된 참조라, cleanup에서 그대로 다시 읽어도 최신 상태를
@@ -100,15 +99,16 @@ export function useChatSocket() {
     const attemptMap = attemptRef.current;
     const pendingIds = pendingIdsRef.current;
 
-    const socket: Socket = io(`${API_BASE_URL}/chat`, {
+    const socket: Socket = io(`${SOCKET_BASE_URL}/chat`, {
       autoConnect: false,
       transports: ['websocket'],
       // SocketProvider와 같은 이유로 함수형 auth를 쓴다 — 재연결마다 최신 토큰이 실린다.
       auth: (cb: (data: { token: string | null }) => void) => {
         void (async () => {
           try {
-            cb({ token: (await auth.currentUser?.getIdToken()) ?? null });
-          } catch {
+            cb({ token: await firebaseUser.getIdToken() });
+          } catch (error) {
+            console.warn('[chat] Firebase ID token acquisition failed', error);
             cb({ token: null });
           }
         })();
@@ -120,7 +120,10 @@ export function useChatSocket() {
     // 아니라 'connect_error'를 받는다 — 이걸 구독하지 않으면 채팅이 이유 없이 계속
     // 재연결만 시도하는 것처럼 보인다(socket.io-client 기본 reconnection이 무한 재시도).
     socket.on('connect', () => setChatError(null));
-    socket.on('connect_error', () => setChatError('connection'));
+    socket.on('connect_error', (error: Error) => {
+      console.warn('[chat] Socket connection failed', error.message);
+      setChatError('connection');
+    });
 
     // @SubscribeMessage 핸들러가 throw로 끝나면(레이트리밋 등) emit의 ack 콜백은 호출되지
     // 않고 서버가 별도로 'exception'을 emit한다(WsExceptionsFilter) — 이걸 구독하지 않으면
@@ -163,7 +166,7 @@ export function useChatSocket() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [addMessage, isAuthenticated, isForeground, setMessageStatus]);
+  }, [addMessage, firebaseUser, isAuthenticated, isForeground, setMessageStatus]);
 
   // 'rateLimit'/'unknown'은 그 순간의 전송 1건이 실패했다는 일시적 신호일 뿐이라(레이트리밋은
   // 몇 초 후 자연히 풀린다), 배너로 영구히 남기지 않고 잠깐 보여준 뒤 스스로 지운다.

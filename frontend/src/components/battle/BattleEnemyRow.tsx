@@ -54,15 +54,19 @@ export function BattleEnemyRow({ enemy, socket }: BattleEnemyRowProps) {
         // 구독하는 SocketProvider가 DUEL_* 코드에 한해 Alert로 담당한다.
         if (err || !ack || ack.status !== 'ok' || ack.duelId == null) return;
 
-        useOverlayStore.getState().setEnemyInfo({
+        const overlay = useOverlayStore.getState();
+        // 빠른 수락으로 SocketProvider가 이미 같은 결투의 게임을 열었다면, 늦게 온
+        // request ack가 대기 Modal을 다시 켜 게임 화면을 덮지 않아야 한다.
+        if (overlay.duelId != null && overlay.duelId !== ack.duelId) return;
+        overlay.setEnemyInfo({
           userId: enemy.userId,
           nickname: enemy.nickname,
           nationality: enemy.team,
           distance: ENCOUNTER_RADIUS_M,
         });
-        useOverlayStore.getState().setDuelId(ack.duelId);
-        useOverlayStore.getState().setDuelRole('challenger');
-        useOverlayStore.getState().setShowDuelPending(true);
+        overlay.setDuelId(ack.duelId);
+        overlay.setDuelRole('challenger');
+        if (!useOverlayStore.getState().showMiniGame) overlay.setShowDuelPending(true);
         useBattleStore.getState().removeEnemy(enemy.userId);
       },
     );

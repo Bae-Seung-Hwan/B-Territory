@@ -4,9 +4,7 @@ import { useChatSocket } from '@/hooks/use-chat-socket';
 import { useChatStore } from '@/store/useChatStore';
 import { useAuth } from '@/hooks/use-auth';
 
-jest.mock('@/lib/firebase', () => ({
-  auth: { currentUser: { getIdToken: jest.fn().mockResolvedValue('token') } },
-}));
+jest.mock('@/lib/firebase', () => ({ auth: { currentUser: null } }));
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
 
 // AppState.currentState는 네이티브 모듈에서 오는 값이라 테스트 환경엔 없다. 훅이
@@ -63,6 +61,7 @@ const mockedUseAuth = useAuth as jest.Mock;
 const mockedIo = io as unknown as jest.Mock;
 
 const profile = { id: 'u1', email: 'a@b.com', nickname: 'nick', nationality: 'KR', team: 'KR' };
+const firebaseUser = { getIdToken: jest.fn().mockResolvedValue('token') };
 
 describe('useChatSocket', () => {
   let fakeSocket: ReturnType<typeof createFakeSocket>;
@@ -71,10 +70,26 @@ describe('useChatSocket', () => {
     jest.clearAllMocks();
     fakeSocket = createFakeSocket();
     mockedIo.mockReturnValue(fakeSocket);
-    mockedUseAuth.mockReturnValue({ profile, isAuthenticated: true });
+    mockedUseAuth.mockReturnValue({ profile, isAuthenticated: true, firebaseUser });
     mockAppState.currentState = 'active';
     mockAppState.listener = null;
     useChatStore.getState().clear();
+  });
+
+  it('AuthProvider가 확정한 firebaseUser의 ID 토큰을 핸드셰이크에 넣는다', async () => {
+    const { unmount } = await renderHook(() => useChatSocket());
+    expect(mockedIo.mock.calls[0][0]).not.toContain('//chat');
+    const options = mockedIo.mock.calls[0][1];
+    const callback = jest.fn();
+
+    await act(async () => {
+      options.auth(callback);
+      await Promise.resolve();
+    });
+
+    expect(firebaseUser.getIdToken).toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith({ token: 'token' });
+    await act(async () => unmount());
   });
 
   it('ack이 성공으로 오면 낙관적으로 추가한 메시지의 status를 지운다', async () => {
@@ -196,7 +211,7 @@ describe('useChatSocket', () => {
   it('profile이 없으면 전송하지 않고 false를 돌려준다 (PR #50 리뷰 지적 1번)', async () => {
     // 세션 갱신·캐시 무효화 순간 profile이 잠깐 undefined가 되는 창을 재현한다.
     // 호출부(ChatScreen)가 이 반환값으로 입력을 지울지 말지 판단한다.
-    mockedUseAuth.mockReturnValue({ profile: undefined, isAuthenticated: true });
+    mockedUseAuth.mockReturnValue({ profile: undefined, isAuthenticated: true, firebaseUser });
     const { result, unmount } = await renderHook(() => useChatSocket());
 
     let sent = true;
