@@ -3,6 +3,7 @@ import { FirebaseService } from '../common/firebase/firebase.service';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../common/redis/redis.service';
 import { DuelsService } from '../duels/duels.service';
+import { DuelStatus } from '../duels/entities/duel.entity';
 import {
   GAME_EXPIRE_MAX_ATTEMPTS,
   GAME_EXPIRE_RETRY_MS,
@@ -177,6 +178,16 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
   it('미니게임 시작이 실패해도 ack를 돌려주고 결투를 무효 처리한다', async () => {
     const { gateway, duelsService, minigameService } = make();
     minigameService.start.mockRejectedValue(new Error('Redis 응답 없음'));
+    duelsService.voidByGame.mockResolvedValue({
+      ...duel,
+      requestId: null,
+      status: DuelStatus.VOID,
+      revision: 2,
+    });
+    const notify = jest.spyOn(
+      gateway as unknown as { notifyUser: (...a: unknown[]) => Promise<void> },
+      'notifyUser',
+    );
     const client = mockSocket();
 
     const ack = await gateway.handleDuelAccept(client as never, {
@@ -189,6 +200,18 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
     });
     // ACCEPTED로 남기면 두 사람 모두 새 결투를 걸지 못한다.
     expect(duelsService.voidByGame).toHaveBeenCalledWith(duel.id);
+    // duel:voided의 revision은 무효 전이가 RETURNING으로 돌려준 값이다 — 수락 때의
+    // duel:accepted(revision 1)보다 커야 클라이언트가 버리지 않는다.
+    expect(notify).toHaveBeenCalledWith(
+      duel.challengerId,
+      'duel:voided',
+      expect.objectContaining({
+        duelId: duel.id,
+        state: DuelStatus.VOID,
+        revision: 2,
+      }),
+      false,
+    );
     // 세션을 남기면 이미 걸린 go 타이머가 VOID된 결투에 game:go를 쏜다.
     expect(minigameService.discardSession).toHaveBeenCalledWith(duel.id);
   });
@@ -386,13 +409,30 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
 describe('duel:requested 전달 기록', () => {
   const duelId = 11;
   const targetUserId = 'user-2';
+  const pendingState = {
+    duelId,
+    requestId: null,
+    state: DuelStatus.PENDING,
+    revision: 0,
+  };
 
   function make(opponentSocket: { connected: boolean } | undefined) {
     const socket = opponentSocket && { ...opponentSocket, emit: jest.fn() };
     const queueNotification = jest.fn().mockResolvedValue(undefined);
     const markInviteDelivered = jest.fn().mockResolvedValue(undefined);
-    const requestDuel = jest.fn().mockResolvedValue({ id: duelId });
-    const isPending = jest.fn().mockResolvedValue(true);
+    const requestDuel = jest.fn().mockResolvedValue({
+      duel: {
+        id: duelId,
+        challengerId: 'user-1',
+        opponentId: targetUserId,
+        requestId: null,
+        status: DuelStatus.PENDING,
+        revision: 0,
+      },
+      created: true,
+    });
+    const findState = jest.fn().mockResolvedValue(pendingState);
+    const syncDuel = jest.fn().mockResolvedValue(null);
     const expireDuel = jest.fn().mockResolvedValue(null);
     const gateway = new RealtimeGateway(
       {} as unknown as FirebaseService,
@@ -407,7 +447,8 @@ describe('duel:requested 전달 기록', () => {
       {
         setNotifier: jest.fn(),
         requestDuel,
-        isPending,
+        findState,
+        syncDuel,
         expireDuel,
         markInviteDelivered,
       } as unknown as DuelsService,
@@ -427,7 +468,9 @@ describe('duel:requested 전달 기록', () => {
       markInviteDelivered,
       queueNotification,
       socket,
-      isPending,
+      requestDuel,
+      findState,
+      syncDuel,
       expireDuel,
     };
   }
@@ -452,10 +495,12 @@ describe('duel:requested 전달 기록', () => {
     await gateway.handleDuelRequest(client, { targetUserId });
     await flushInvite();
 
-    expect(socket!.emit).toHaveBeenCalledWith(
-      'duel:requested',
-      expect.objectContaining({ duelId }),
-    );
+    // 초대에도 ack·이벤트와 같은 상태 필드가 실린다 — emit 직전에 읽은 값이다.
+    expect(socket!.emit).toHaveBeenCalledWith('duel:requested', {
+      ...pendingState,
+      fromUserId: 'user-1',
+      fromNickname: 'me',
+    });
     expect(markInviteDelivered).toHaveBeenCalledWith(duelId);
   });
 
@@ -513,7 +558,7 @@ describe('duel:requested 전달 기록', () => {
     const ack = await gateway.handleDuelRequest(client, { targetUserId });
 
     // 핸들러가 반환하는 순간이 socket.io가 ack 패킷을 쓰는 순간이다.
-    expect(ack).toEqual({ status: 'ok', duelId });
+    expect(ack).toEqual({ status: 'ok', ...pendingState });
     expect(socket!.emit).not.toHaveBeenCalled();
     expect(markInviteDelivered).not.toHaveBeenCalled();
 
@@ -556,17 +601,20 @@ describe('duel:requested 전달 기록', () => {
       gateway,
       client,
       socket,
-      isPending,
+      findState,
       expireDuel,
       markInviteDelivered,
     } = make({ connected: true });
-    let status = 'PENDING';
-    isPending.mockImplementation(() => Promise.resolve(status === 'PENDING'));
+    let state = pendingState;
+    findState.mockImplementation(() => Promise.resolve(state));
     expireDuel.mockImplementation(() => {
-      status = 'EXPIRED';
+      state = { ...pendingState, state: DuelStatus.EXPIRED, revision: 1 };
       return Promise.resolve({
         id: duelId,
         opponentId: targetUserId,
+        requestId: null,
+        status: DuelStatus.EXPIRED,
+        revision: 1,
         scoreDelta: null,
         shieldGranted: false,
       });
@@ -588,7 +636,11 @@ describe('duel:requested 전달 기록', () => {
     await jest.advanceTimersByTimeAsync(DUEL_REQUEST_TTL * 1000);
     expect(socket!.emit).toHaveBeenCalledWith(
       'duel:expired',
-      expect.objectContaining({ duelId }),
+      expect.objectContaining({
+        duelId,
+        state: DuelStatus.EXPIRED,
+        revision: 1,
+      }),
     );
 
     releaseInviteLookup();
@@ -604,15 +656,19 @@ describe('duel:requested 전달 기록', () => {
   /** 스윕·탈퇴 정리 등 타이머 밖에서 끝난 결투도 같은 이유로 초대를 보내지 않는다. */
   it('PENDING이 아닌 결투에는 초대를 보내지 않는다', async () => {
     jest.useFakeTimers();
-    const { gateway, client, socket, isPending, markInviteDelivered } = make({
+    const { gateway, client, socket, findState, markInviteDelivered } = make({
       connected: true,
     });
-    isPending.mockResolvedValue(false);
+    findState.mockResolvedValue({
+      ...pendingState,
+      state: DuelStatus.EXPIRED,
+      revision: 1,
+    });
 
     await gateway.handleDuelRequest(client, { targetUserId });
     await flushInvite();
 
-    expect(isPending).toHaveBeenCalledWith(duelId);
+    expect(findState).toHaveBeenCalledWith(duelId);
     expect(socket!.emit).not.toHaveBeenCalled();
     expect(markInviteDelivered).not.toHaveBeenCalled();
   });
@@ -623,12 +679,12 @@ describe('duel:requested 전달 기록', () => {
    */
   it('상태 조회 중 상대가 끊기면 전달로 기록하지 않는다', async () => {
     jest.useFakeTimers();
-    const { gateway, client, socket, isPending, markInviteDelivered } = make({
+    const { gateway, client, socket, findState, markInviteDelivered } = make({
       connected: true,
     });
-    isPending.mockImplementation(() => {
+    findState.mockImplementation(() => {
       socket!.connected = false;
-      return Promise.resolve(true);
+      return Promise.resolve(pendingState);
     });
 
     await gateway.handleDuelRequest(client, { targetUserId });
@@ -656,10 +712,88 @@ describe('duel:requested 전달 기록', () => {
     const ack = await gateway.handleDuelRequest(client, { targetUserId });
     await flushInvite();
 
-    expect(ack).toEqual({ status: 'ok', duelId });
+    expect(ack).toEqual({ status: 'ok', ...pendingState });
     expect(markInviteDelivered).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  /**
+   * 같은 requestId의 재시도다. 첫 요청이 이미 만료 타이머와 초대를 걸었으므로 다시 걸면
+   * 초대가 두 번 뜨고 만료 처리도 두 번 돈다. ack는 그 사이 바뀐 **현재** 상태를 싣는다.
+   */
+  it('재시도는 타이머·초대를 다시 걸지 않고 기존 결투의 현재 상태를 돌려준다', async () => {
+    jest.useFakeTimers();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const { gateway, client, socket, requestDuel, findState } = make({
+      connected: true,
+    });
+    const requestId = '7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6';
+    requestDuel.mockResolvedValue({
+      duel: {
+        id: duelId,
+        challengerId: 'user-1',
+        opponentId: targetUserId,
+        requestId,
+        status: DuelStatus.ACCEPTED,
+        revision: 1,
+      },
+      created: false,
+    });
+
+    const ack = await gateway.handleDuelRequest(client, {
+      targetUserId,
+      requestId,
+    });
+    await flushInvite();
+
+    expect(requestDuel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      targetUserId,
+      requestId,
+    );
+    expect(ack).toEqual({
+      status: 'ok',
+      duelId,
+      requestId,
+      state: DuelStatus.ACCEPTED,
+      revision: 1,
+    });
+    expect(
+      setTimeoutSpy.mock.calls.some(
+        ([, delay]) => delay === DUEL_REQUEST_TTL * 1000,
+      ),
+    ).toBe(false);
+    expect(findState).not.toHaveBeenCalled();
+    expect(socket!.emit).not.toHaveBeenCalled();
+    setTimeoutSpy.mockRestore();
+  });
+
+  /** 복구 조회는 ack로만 답한다 — 이벤트로 재생하면 이미 반영한 클라이언트에 중복이 된다. */
+  it('duel:sync는 호출자 기준 결투 상태를 ack로 돌려준다', async () => {
+    const { gateway, client, socket, syncDuel } = make({ connected: true });
+    const view = {
+      ...pendingState,
+      role: 'opponent',
+      expiresAt: '2026-09-16T00:00:30.000Z',
+      opponent: { id: 'user-2', nickname: 'you', team: 'JP' },
+    };
+    syncDuel.mockResolvedValue(view);
+
+    const ack = await gateway.handleDuelSync(client, { duelId });
+
+    expect(syncDuel).toHaveBeenCalledWith('user-1', { duelId });
+    expect(ack).toEqual({ status: 'ok', duel: view });
+    expect(socket!.emit).not.toHaveBeenCalled();
+  });
+
+  it('duel:sync는 결투가 없으면 duel: null이다', async () => {
+    const { gateway, client } = make({ connected: true });
+
+    await expect(gateway.handleDuelSync(client, {})).resolves.toEqual({
+      status: 'ok',
+      duel: null,
+    });
   });
 });
 
