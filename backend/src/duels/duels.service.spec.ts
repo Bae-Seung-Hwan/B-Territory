@@ -357,6 +357,26 @@ describe('DuelsService', () => {
    * 이 스탬프가 무응답 청구의 유일한 근거다(duel.entity.ts#inviteDeliveredAt) —
    * 게이트웨이가 duel:requested를 살아 있는 소켓으로 emit한 직후에만 호출한다.
    */
+  /** 게이트웨이가 duel:requested를 emit하기 직전에 끝난 결투를 거르는 데 쓴다. */
+  describe('isPending', () => {
+    it('PENDING인 결투만 true다', async () => {
+      duelRepo.findOne.mockResolvedValueOnce({
+        status: DuelStatus.PENDING,
+      } as Duel);
+      await expect(service.isPending(7)).resolves.toBe(true);
+
+      duelRepo.findOne.mockResolvedValueOnce({
+        status: DuelStatus.EXPIRED,
+      } as Duel);
+      await expect(service.isPending(7)).resolves.toBe(false);
+    });
+
+    it('결투가 없으면 false다', async () => {
+      duelRepo.findOne.mockResolvedValueOnce(null);
+      await expect(service.isPending(7)).resolves.toBe(false);
+    });
+  });
+
   describe('markInviteDelivered', () => {
     it('PENDING인 결투에만 전달 시각을 찍는다', async () => {
       const qb = createQueryBuilderMock(1);

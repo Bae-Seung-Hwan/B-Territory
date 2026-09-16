@@ -559,6 +559,21 @@ export class DuelsService {
    * 던지면 신청자만 에러 ack를 받는다. 기록을 놓친 대가는 "이번 무응답을 청구하지 못한다"로,
    * 반대 방향의 오류(받은 적 없는 초대에 청구)보다 훨씬 가볍다.
    */
+  /**
+   * 결투가 아직 PENDING인지 읽는다 (게이트웨이가 duel:requested를 emit하기 직전에 호출).
+   *
+   * 만료 타이머는 초대 전송보다 먼저 걸려 있어, 전송 경로가 30초 넘게 지연되면 결투가
+   * 이미 EXPIRED로 넘어간 뒤 초대가 나갈 수 있다. 수신 클라이언트는 초대 전에 온
+   * duel:expired를 duelId 불일치로 버리므로, 늦은 초대가 끝난 결투의 수락 화면을 연다.
+   */
+  async isPending(duelId: number): Promise<boolean> {
+    const duel = await this.duelRepo.findOne({
+      select: { status: true },
+      where: { id: duelId },
+    });
+    return duel?.status === DuelStatus.PENDING;
+  }
+
   async markInviteDelivered(duelId: number): Promise<void> {
     try {
       // status 조건을 함께 건다 — emit과 이 UPDATE 사이에 상대가 이미 응답했다면 그 결투는

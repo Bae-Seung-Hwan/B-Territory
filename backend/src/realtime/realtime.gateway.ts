@@ -140,7 +140,8 @@ export class RealtimeGateway
      * - duel:requested — 초대가 30초(DUEL_REQUEST_TTL)라 격차가 가장 크다. 큐잉하면 20분 뒤
      *   접속한 유저가 이미 EXPIRED된 결투의 초대 모달을 받고, 곧이어 재생되는 duel:expired에
      *   그 모달이 사라진다. 큐잉하지 않으면 "전달 안 됨 = 큐잉 안 함 = 무응답으로 청구하지
-     *   않음"이 한 줄로 맞아떨어진다(duel.entity.ts#inviteDeliveredAt).
+     *   않음"이 한 줄로 맞아떨어진다(duel.entity.ts#inviteDeliveredAt). 초대는 emit 직전에
+     *   결투 상태를 확인해야 해서 이 함수 대신 deliverDuelInvite가 같은 규칙으로 직접 보낸다.
      */
     ephemeral = false,
   ): Promise<boolean> {
@@ -156,8 +157,7 @@ export class RealtimeGateway
       payload,
       NOTIFICATION_QUEUE_TTL,
     );
-    // 큐잉은 "지금 화면에 뜨지 않았다"는 뜻이다. 결투 초대처럼 전달 여부가 과금을 가르는
-    // 이벤트가 이 값을 본다(handleDuelRequest).
+    // 큐잉은 "지금 화면에 뜨지 않았다"는 뜻이다.
     return false;
   }
 
@@ -398,6 +398,9 @@ export class RealtimeGateway
    * reject가 새면 ack 에러가 아니라 unhandledRejection이 되어 프로세스가 죽는다.
    * 실패해도 결투는 살아 있고 만료 타이머도 이미 걸려 있어, 전달 기록만 비는 채로
    * 30초 뒤 무응답 청구 없이 만료된다.
+   *
+   * 초대는 큐에 넣지 않으므로(notifyUser의 ephemeral 주석 참고) notifyUser를 거치지 않고
+   * 직접 emit한다 — 소켓 조회와 emit 사이에 결투 상태 확인을 끼워야 하기 때문이다.
    */
   private async deliverDuelInvite(
     duelId: number,
@@ -405,19 +408,30 @@ export class RealtimeGateway
     targetUserId: string,
   ): Promise<void> {
     try {
-      const delivered = await this.notifyUser(
-        targetUserId,
-        'duel:requested',
-        {
-          duelId,
-          fromUserId: challenger.id,
-          fromNickname: challenger.nickname,
-        },
-        // 초대는 30초짜리라 큐에 넣지 않는다 (notifyUser의 ephemeral 주석 참고).
-        true,
-      );
+      const socket = await this.getLiveSocket(targetUserId);
+      if (!socket) return;
 
-      if (delivered) await this.duelsService.markInviteDelivered(duelId);
+      // 만료 타이머가 전송보다 먼저 걸려 있어, 소켓 조회가 30초 넘게 걸리면 결투가 이미
+      // EXPIRED로 넘어가 duel:expired가 나간 뒤일 수 있다. 수신 클라이언트는 초대 전에 온
+      // duel:expired를 duelId 불일치로 버리므로, 여기서 막지 않으면 늦은 초대가 끝난
+      // 결투의 수락 화면을 연다. 스윕·탈퇴 정리로 끝난 결투도 같은 이유로 거른다.
+      //
+      // 확인을 소켓 조회 **뒤**, emit 바로 앞에 둔다 — 이 await가 풀린 뒤 emit까지는
+      // 동기라서, 확인 이후에 만료가 커밋돼도 그 duel:expired는 커밋·소켓 조회를 더 거쳐야
+      // 하므로 이 초대보다 뒤에 나간다. 클라이언트는 초대 → 만료 순서로 받아 모달을 닫는다.
+      // 조회 요청과 커밋이 거의 동시인 극히 좁은 경합은 남으며, 그것은 후속 계약의
+      // expiresAt/revision으로 클라이언트가 오래된 이벤트를 버려 닫는다.
+      if (!(await this.duelsService.isPending(duelId))) return;
+      // 상태 조회를 기다리는 사이 끊겼을 수 있다 — 끊긴 소켓으로의 emit은 조용히 버려지므로
+      // 여기서 다시 보지 않으면 받지 못한 초대를 전달로 기록해 무응답을 청구한다.
+      if (!socket.connected) return;
+
+      socket.emit('duel:requested', {
+        duelId,
+        fromUserId: challenger.id,
+        fromNickname: challenger.nickname,
+      });
+      await this.duelsService.markInviteDelivered(duelId);
     } catch (err) {
       this.logger.error(`결투 초대 전달 실패 duelId=${duelId}`, err);
     }
