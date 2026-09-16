@@ -102,10 +102,9 @@ function setState(next: LocationState): void {
  * 복귀마다 시스템 팝업을 다시 띄우지 않는 유일한 방법이다(원스토어 반려 사유 1번).
  */
 async function resolvePermissionStatus(): Promise<Location.PermissionStatus> {
-  if (permissionDenied) {
-    const { status } = await Location.getForegroundPermissionsAsync();
-    return status;
-  }
+  const permission = await Location.getForegroundPermissionsAsync();
+  if (permission.status !== 'undetermined') return permission.status;
+  if (permissionDenied) return permission.status;
   requestingPermission = true;
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();

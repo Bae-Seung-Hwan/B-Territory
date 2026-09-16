@@ -57,6 +57,7 @@ describe('useLocation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockAppState.currentState = 'active';
+    mockedGetPermission.mockResolvedValue({ status: 'undetermined' });
     // mockAppState.listener는 비우지 않는다 — ensureAppStateListener()가 **맨 처음 구독자
     // 때 딱 한 번만** 등록하므로(모듈 싱글턴), 여기서 null로 되돌리면 그 뒤의 테스트는
     // 리스너를 부를 방법을 영영 잃는다. 첫 테스트가 채워둔 핸들을 그대로 물려받는다.
@@ -92,6 +93,20 @@ describe('useLocation', () => {
     },
   );
 
+  it('OS에 저장된 거부는 자동 재요청하지 않는다', async () => {
+    mockedGetPermission.mockResolvedValue({ status: 'denied', canAskAgain: true });
+    const hook = await renderHook(() => useLocation());
+    await waitFor(() => expect(hook.result.current.error).toBe('위치 권한이 필요합니다'));
+    expect(mockedRequestPermission).not.toHaveBeenCalled();
+    await hook.unmount();
+    // Restore the shared store for the following scenarios.
+    mockedGetPermission.mockResolvedValue({ status: 'granted' });
+    mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
+    const restored = await renderHook(() => useLocation());
+    await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalled());
+    await restored.unmount();
+  });
+
   it(
     '권한이 거부되면: (1) 다시 마운트해도 API를 또 부르지 않되 알려진 결과는 다시 반영하고 ' +
       '(리뷰 지적 13번), (2) 이미 마운트돼 있던 구독자도 앱이 포그라운드로 돌아오면 그제서야 ' +
@@ -101,6 +116,7 @@ describe('useLocation', () => {
       '위해서는 아무도 다시 불러주지 않아 권한을 나중에 허용해도 세션 내내 복구되지 않았다)',
     async () => {
       mockedRequestPermission.mockResolvedValue({ status: 'denied' });
+      mockedGetPermission.mockResolvedValueOnce({ status: 'undetermined' });
       mockedGetPermission.mockResolvedValue({ status: 'denied' });
 
       const first = await renderHook(() => useLocation());
@@ -249,6 +265,7 @@ describe('useLocation', () => {
             resolvePermission = resolve;
           }),
       );
+      mockedGetPermission.mockResolvedValueOnce({ status: 'undetermined' });
       mockedGetPermission.mockResolvedValue({ status: 'denied' });
 
       const hook = await renderHook(() => useLocation());
@@ -299,6 +316,7 @@ describe('useLocation', () => {
       resolvePermission = resolve;
     }));
     mockedRequestPermission.mockResolvedValue({ status });
+    mockedGetPermission.mockResolvedValueOnce({ status: 'undetermined' });
     mockedGetPermission.mockResolvedValue({ status });
     mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
     const hook = await renderHook(() => useLocation());
