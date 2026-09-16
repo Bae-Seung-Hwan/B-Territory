@@ -59,6 +59,40 @@ export type DuelNotifier = (
 ) => Promise<void>;
 
 /**
+ * 모든 결투 이벤트와 ack에 공통으로 싣는 상태 필드.
+ *
+ * 클라이언트는 이벤트 이름이나 도착 순서가 아니라 이 필드로 상태를 판단한다 — duelId별로
+ * 마지막에 반영한 revision을 들고, 그 이하(같은 revision 포함)는 버린다. requestId는 ack보다
+ * 먼저 도착한 이벤트를 자기 요청에 연결하는 데 쓴다(구버전 앱의 결투는 null).
+ */
+export interface DuelStateFields {
+  duelId: number;
+  requestId: string | null;
+  state: DuelStatus;
+  revision: number;
+}
+
+/**
+ * 상태 필드의 원천이 되는 행. 전이 직후 RETURNING으로 받은 값을 넘길 것 — 전이 전에 읽어둔
+ * 엔티티의 revision을 그대로 쓰면 이벤트가 이전 버전 번호로 나가 클라이언트에게 버려진다.
+ */
+type DuelStateRow = {
+  id: number;
+  requestId?: string | null;
+  status: DuelStatus;
+  revision: number;
+};
+
+export function duelStateFields(row: DuelStateRow): DuelStateFields {
+  return {
+    duelId: row.id,
+    requestId: row.requestId ?? null,
+    state: row.status,
+    revision: row.revision,
+  };
+}
+
+/**
  * 결투가 성립하지 못한 채 끝났을 때 양쪽에 보내는 공통 payload (duel:rejected·duel:expired).
  *
  * 수신자별로 다른 payload를 만들지 않는다 — 오프라인 참가자에게는 이 payload가 Redis 큐에
@@ -72,19 +106,19 @@ export type DuelNotifier = (
  *
  * 차감이 없는 종료(탈퇴로 끝난 결투, VOID)는 scoreDelta가 비어 있어 전부 0/null이 된다.
  */
-export function duelPenaltyPayload(row: {
-  id: number;
-  opponentId: string | null;
-  scoreDelta?: number | null;
-  /**
-   * 보호막이 Redis에 **실제로** 걸렸는지(grantShields의 결과). 필수로 둔 이유는
-   * scoreDelta처럼 옵셔널로 두면 새 호출부가 빠뜨렸을 때 조용히 거짓 안내가 나가기
-   * 때문이다 — 여기서는 빠뜨림이 컴파일 에러가 되고, 굳이 false를 넘기면 "보호 없음"
-   * 쪽으로 넘어진다(과안내보다 미안내가 안전하다).
-   */
-  shieldGranted: boolean;
-}): {
-  duelId: number;
+export function duelPenaltyPayload(
+  row: DuelStateRow & {
+    opponentId: string | null;
+    scoreDelta?: number | null;
+    /**
+     * 보호막이 Redis에 **실제로** 걸렸는지(grantShields의 결과). 필수로 둔 이유는
+     * scoreDelta처럼 옵셔널로 두면 새 호출부가 빠뜨렸을 때 조용히 거짓 안내가 나가기
+     * 때문이다 — 여기서는 빠뜨림이 컴파일 에러가 되고, 굳이 false를 넘기면 "보호 없음"
+     * 쪽으로 넘어진다(과안내보다 미안내가 안전하다).
+     */
+    shieldGranted: boolean;
+  },
+): DuelStateFields & {
   scorePenalty: number;
   penalizedUserId: string | null;
   shieldUntil: string | null;
@@ -92,7 +126,7 @@ export function duelPenaltyPayload(row: {
   const scorePenalty = row.scoreDelta ?? 0;
   const penalized = scorePenalty > 0;
   return {
-    duelId: row.id,
+    ...duelStateFields(row),
     scorePenalty,
     // 결투 페널티는 언제나 "신청을 성립시키지 못한 쪽" = opponentId가 진다.
     penalizedUserId: penalized ? row.opponentId : null,
@@ -118,17 +152,56 @@ export function duelPenaltyPayload(row: {
  * 이미 duelPenaltyPayload를 쓰고 있어, 나머지 경로를 여기에 맞춘다.
  */
 export function duelVoidPayload(
-  duelId: number,
+  row: DuelStateRow,
 ): ReturnType<typeof duelPenaltyPayload> {
   // VOID는 차감이 없으니 보호막도 없다.
   return duelPenaltyPayload({
-    id: duelId,
+    ...row,
     opponentId: null,
     shieldGranted: false,
   });
 }
 
+/** duel:sync 응답. 호출자 기준으로 상대와 역할을 채운다. */
+export interface DuelSyncView extends DuelStateFields {
+  /** 호출자가 이 결투를 건 쪽인지 받은 쪽인지 — 받은 쪽의 PENDING이면 초대 화면을 복원한다. */
+  role: 'challenger' | 'opponent';
+  /**
+   * PENDING일 때 응답 기한의 **절대 시각**(ISO), 그 외에는 null. 서버 재시작으로 인메모리
+   * 만료 타이머가 사라져도 클라이언트가 자기 타이머를 복원할 수 있게 한다. 기한이 지나도
+   * 실제 EXPIRED 전이는 서버가 내리며(타이머 또는 스윕), 그때 duel:expired가 따로 간다.
+   */
+  expiresAt: string | null;
+  /** 상대가 탈퇴해 참가자 칸이 비었으면 null. */
+  opponent: { id: string; nickname: string; team: string } | null;
+}
+
+/** requestDuel의 결과. created=false면 같은 requestId의 재시도라 기존 결투를 돌려준 것이다. */
+export type DuelRequestResult = { duel: Duel; created: boolean };
+
 const ACTIVE_STATUSES = [DuelStatus.PENDING, DuelStatus.ACCEPTED];
+
+/** 종료 알림을 만드는 전이(스윕·탈퇴 종료)의 RETURNING — SweptDuelRow의 필드와 맞춘다. */
+const SWEPT_RETURNING =
+  'id, "challengerId", "opponentId", "requestId", status, revision';
+
+/** 무응답 만료 전이의 RETURNING — ExpiredDuelRow의 필드와 맞춘다. */
+const EXPIRED_RETURNING = `${SWEPT_RETURNING}, "inviteDeliveredAt", "requestedAt"`;
+
+/**
+ * 단건 전이 UPDATE의 RETURNING에서 올라간 revision을 꺼낸다.
+ *
+ * affected > 0을 확인한 뒤에만 부를 것. 여기서 값이 없다면 RETURNING이 빠진 것이라
+ * 조용히 0 같은 값으로 넘어가지 않고 던진다 — 이전 버전 번호로 나간 이벤트는 클라이언트가
+ * 버리므로, 알림이 소리 없이 사라지는 것보다 커밋 뒤 경로의 에러 로그가 낫다.
+ */
+function returnedRevision(raw: unknown): number {
+  const revision = (raw as { revision?: number }[] | undefined)?.[0]?.revision;
+  if (typeof revision !== 'number') {
+    throw new Error('결투 전이 UPDATE에 RETURNING revision이 없습니다.');
+  }
+  return revision;
+}
 
 /** 보호막을 걸 일이 없는 경로(수락·VOID·탈퇴 종료)가 공유하는 빈 집합. */
 const EMPTY_SHIELDS: ReadonlySet<string> = new Set<string>();
@@ -152,6 +225,10 @@ type SweptDuelRow = {
   id: number;
   challengerId: string | null;
   opponentId: string | null;
+  // 종료 알림의 상태 필드(duelStateFields). 전부 전이 UPDATE의 RETURNING에서 받는다.
+  requestId: string | null;
+  status: DuelStatus;
+  revision: number;
   // 이 전이로 실제 깎인 점수의 크기. 무응답 만료에서만 채워지고, 탈퇴로 끝난 결투처럼
   // 아무도 책임이 없는 종료에서는 null이다 — 알림 payload가 이 값으로 갈린다.
   scoreDelta?: number | null;
@@ -344,10 +421,32 @@ export class DuelsService {
     }));
   }
 
+  /**
+   * @param requestId 클라이언트가 신청마다 만든 uuid(선택). 같은 신청자가 같은 값으로 다시
+   *   보내면 새 결투를 만들지 않고 기존 결투를 **현재 상태 그대로** 돌려준다(created=false).
+   *   이때 호출자는 만료 타이머·초대 전송을 다시 걸면 안 된다 — 첫 요청이 이미 걸었다.
+   */
   async requestDuel(
     challenger: { id: string; team: string },
     targetUserId: string,
-  ): Promise<Duel> {
+    requestId?: string,
+  ): Promise<DuelRequestResult> {
+    // 재시도 판정을 어떤 검문보다 먼저 한다. 첫 요청이 결투를 만든 뒤 ack만 유실된 경우,
+    // 그 사이 상대가 사거리를 벗어났거나 결투가 이미 진행 중이라는 이유로 재시도가 에러를
+    // 받으면 클라이언트는 살아 있는 결투를 실패로 오인한다. 멱등한 재시도는 "처음 요청의
+    // 결과"를 돌려줘야 하고, 그 결과는 이미 DB에 있다.
+    if (requestId) {
+      const existing = await this.duelRepo.findOne({
+        where: { challengerId: challenger.id, requestId },
+      });
+      if (existing) {
+        return {
+          duel: this.assertSameTarget(existing, targetUserId),
+          created: false,
+        };
+      }
+    }
+
     if (challenger.id === targetUserId) {
       throw new BadRequestException(
         errBody(
@@ -458,7 +557,7 @@ export class DuelsService {
     // advisory lock으로 확인과 저장을 직렬화한다. 부분 유니크 인덱스는 한 유저가
     // challenger와 opponent로 엇갈려 등장하는 동시 신청을 막지 못해 이 방식을 쓴다.
     const participantIds = [challenger.id, targetUserId];
-    const duel = await this.dataSource
+    const outcome = await this.dataSource
       .transaction(async (manager) => {
         // 트랜잭션 종료 시 자동 해제. id 정렬로 락 획득 순서를 고정해 교차 신청 간 데드락 방지.
         for (const id of [...participantIds].sort()) {
@@ -467,6 +566,20 @@ export class DuelsService {
             [`duel:user:${id}`],
           );
         }
+        // 위의 사전 확인과 이 락 사이에 같은 requestId의 요청이 먼저 결투를 만들었을 수
+        // 있다(동시 재시도). 신청자 id의 advisory lock 안에서 다시 보므로 둘 중 하나만
+        // 만든다 — 이 확인을 hasActiveDuel보다 먼저 해야, 방금 만들어진 자기 결투에 막혀
+        // DUEL_ALREADY_ACTIVE를 받지 않는다. 유니크 인덱스(IDX_duels_challenger_request)는
+        // 이 직렬화가 깨졌을 때의 최종 방어선이다.
+        if (requestId) {
+          // requestId는 신청자가 만든 값이라 신청자 범위에서만 유일하다 — 다른 유저가 같은
+          // uuid를 보내도 남의 결투를 돌려주지 않도록 challengerId를 함께 건다.
+          const existing = await manager.findOne(Duel, {
+            where: { challengerId: challenger.id, requestId },
+          });
+          if (existing) return { duel: existing, created: false };
+        }
+
         const hasActiveDuel = await manager.exists(Duel, {
           where: [
             { challengerId: In(participantIds), status: In(ACTIVE_STATUSES) },
@@ -484,13 +597,15 @@ export class DuelsService {
 
         // 락보다 DB row를 먼저 만들어, row의 id를 락의 소유권 토큰으로 사용한다.
         // (락 획득 실패 시 방금 만든 row만 지우면 되므로 롤백이 단순해진다)
-        return manager.save(
+        const created = await manager.save(
           manager.create(Duel, {
             challengerId: challenger.id,
             opponentId: targetUserId,
             status: DuelStatus.PENDING,
+            requestId: requestId ?? null,
           }),
         );
+        return { duel: created, created: true };
       })
       // 위 사전 검문(findById·getUserMeta·verifyProximity)은 전부 트랜잭션 밖이라, 그것들이
       // 끝난 뒤 advisory lock을 기다리는 동안 대상이 탈퇴를 완료할 수 있다. 그러면 INSERT가
@@ -510,6 +625,17 @@ export class DuelsService {
           ),
         );
       });
+
+    // 동시 재시도에 진 쪽이다. 락·보호막은 결투를 만든 요청이 처리하므로 여기서 건드리지
+    // 않는다 — 특히 락을 다시 잡으려 하면 이미 그 결투가 쥔 키라 실패하고, 아래 실패 경로가
+    // 살아 있는 결투를 지워버린다.
+    if (!outcome.created) {
+      return {
+        duel: this.assertSameTarget(outcome.duel, targetUserId),
+        created: false,
+      };
+    }
+    const { duel } = outcome;
 
     const acquired = await this.redis.tryAcquireLock(
       this.lockKey(challenger.id, targetUserId),
@@ -545,7 +671,110 @@ export class DuelsService {
       );
     }
 
+    return { duel, created: true };
+  }
+
+  /**
+   * 재시도라면 상대도 같아야 한다. 다른 상대에게 같은 requestId를 쓴 것은 재시도가 아니라
+   * 클라이언트 버그인데, 그대로 기존 결투를 돌려주면 "B에게 신청했다"는 ack에 A와의 결투가
+   * 실려 나간다.
+   */
+  private assertSameTarget(duel: Duel, targetUserId: string): Duel {
+    if (duel.opponentId !== targetUserId) {
+      throw new ConflictException(
+        errBody(
+          ErrorCode.DUEL_REQUEST_ID_REUSED,
+          '이미 다른 결투 신청에 사용된 요청입니다.',
+        ),
+      );
+    }
     return duel;
+  }
+
+  /**
+   * 결투의 현재 상태 필드를 읽는다 (게이트웨이가 duel:requested를 emit하기 직전에 호출).
+   *
+   * 만료 타이머는 초대 전송보다 먼저 걸려 있어, 전송 경로가 30초 넘게 지연되면 결투가
+   * 이미 EXPIRED로 넘어간 뒤 초대가 나갈 수 있다 — 호출측이 PENDING인지 보고 거른다.
+   * 초대 payload의 revision도 이 값을 쓴다.
+   */
+  async findState(duelId: number): Promise<DuelStateFields | null> {
+    const duel = await this.duelRepo.findOne({
+      select: { id: true, requestId: true, status: true, revision: true },
+      where: { id: duelId },
+    });
+    return duel ? duelStateFields(duel) : null;
+  }
+
+  /**
+   * duel:sync — 재접속·ack 타임아웃 뒤 클라이언트가 서버의 확정 상태로 복구할 때 쓴다.
+   * 응답 유실을 곧바로 "결투 생성 실패"로 간주하지 않도록, 결투가 있으면 그 현재 상태를,
+   * 없으면 null을 돌려준다.
+   *
+   * 조회 조건(DuelSyncDto):
+   * - requestId: **본인이 신청한** 결투만 찾는다(requestId는 신청자 범위에서만 유일하다)
+   * - duelId: 본인이 참가자인 결투만 찾는다 — 남의 결투는 존재 여부도 드러내지 않고 null
+   * - 둘 다 없음: 본인이 참가 중인 진행 중(PENDING/ACCEPTED) 결투. 유저 단위 배타성
+   *   (requestDuel의 hasActiveDuel)으로 많아야 하나지만, 깨졌을 때도 가장 최근 것을 고른다
+   *
+   * 앞의 두 조건은 종료된 결투도 돌려준다 — ack를 기다리는 사이 결투가 만료됐다면 그
+   * 사실(state: EXPIRED)이 곧 복구에 필요한 답이다.
+   */
+  async syncDuel(
+    userId: string,
+    query: { duelId?: number; requestId?: string },
+  ): Promise<DuelSyncView | null> {
+    const { duelId, requestId } = query;
+    const byId = duelId === undefined ? {} : { id: duelId };
+    const where = requestId
+      ? { ...byId, challengerId: userId, requestId }
+      : duelId !== undefined
+        ? [
+            { ...byId, challengerId: userId },
+            { ...byId, opponentId: userId },
+          ]
+        : [
+            { challengerId: userId, status: In(ACTIVE_STATUSES) },
+            { opponentId: userId, status: In(ACTIVE_STATUSES) },
+          ];
+    const duel = await this.duelRepo.findOne({ where, order: { id: 'DESC' } });
+    if (!duel) return null;
+
+    const role = duel.challengerId === userId ? 'challenger' : 'opponent';
+    // 참가자 id는 탈퇴 시 SET NULL이라 엔티티 타입(string)과 달리 비어 있을 수 있다.
+    const otherId: string | null =
+      role === 'challenger' ? duel.opponentId : duel.challengerId;
+    const other = otherId ? await this.usersService.findById(otherId) : null;
+
+    return {
+      ...duelStateFields(duel),
+      role,
+      expiresAt:
+        duel.status === DuelStatus.PENDING
+          ? await this.pendingExpiresAt(duel.id)
+          : null,
+      opponent: other
+        ? { id: other.id, nickname: other.nickname, team: other.team }
+        : null,
+    };
+  }
+
+  /**
+   * PENDING 결투의 응답 기한(requestedAt + DUEL_REQUEST_TTL)을 절대 시각으로 만든다.
+   *
+   * requestedAt은 timestamp **without** time zone이라, 앱에서 Date로 받아 30초를 더하면
+   * 앱과 DB의 타임존이 다를 때 오프셋만큼 어긋난 시각이 나간다(sweepStaleDuels 주석의 같은
+   * 함정). 그래서 남은 시간을 DB 안에서 같은 기준(LOCALTIMESTAMP — requestedAt을 찍은 now()와
+   * 같은 세션 타임존의 벽시계)으로 계산하고, 절대 시각은 앱 시계로 붙인다 — 보호막의
+   * shieldUntil과 같은 방식이다. 이미 지났으면 지금 시각을 돌려준다(음수 기한을 만들지 않는다).
+   */
+  private async pendingExpiresAt(duelId: number): Promise<string | null> {
+    const rows = await this.dataSource.query<{ remainingMs: number }[]>(
+      'SELECT GREATEST(0, EXTRACT(EPOCH FROM ("requestedAt" + make_interval(secs => $2) - LOCALTIMESTAMP)) * 1000)::float8 AS "remainingMs" FROM duels WHERE id = $1',
+      [duelId, DUEL_REQUEST_TTL],
+    );
+    if (rows.length === 0) return null;
+    return new Date(Date.now() + Number(rows[0].remainingMs)).toISOString();
   }
 
   /**
@@ -559,21 +788,6 @@ export class DuelsService {
    * 던지면 신청자만 에러 ack를 받는다. 기록을 놓친 대가는 "이번 무응답을 청구하지 못한다"로,
    * 반대 방향의 오류(받은 적 없는 초대에 청구)보다 훨씬 가볍다.
    */
-  /**
-   * 결투가 아직 PENDING인지 읽는다 (게이트웨이가 duel:requested를 emit하기 직전에 호출).
-   *
-   * 만료 타이머는 초대 전송보다 먼저 걸려 있어, 전송 경로가 30초 넘게 지연되면 결투가
-   * 이미 EXPIRED로 넘어간 뒤 초대가 나갈 수 있다. 수신 클라이언트는 초대 전에 온
-   * duel:expired를 duelId 불일치로 버리므로, 늦은 초대가 끝난 결투의 수락 화면을 연다.
-   */
-  async isPending(duelId: number): Promise<boolean> {
-    const duel = await this.duelRepo.findOne({
-      select: { status: true },
-      where: { id: duelId },
-    });
-    return duel?.status === DuelStatus.PENDING;
-  }
-
   async markInviteDelivered(duelId: number): Promise<void> {
     try {
       // status 조건을 함께 건다 — emit과 이 UPDATE 사이에 상대가 이미 응답했다면 그 결투는
@@ -628,12 +842,14 @@ export class DuelsService {
       // sweepStaleDuels의 컷오프(DB now() 기준)가 같은 시계를 쓰도록 통일 (앱-DB 타임존 차이 방어)
       .set({
         status: DuelStatus.ACCEPTED,
+        revision: () => '"revision" + 1',
         respondedAt: () => 'CURRENT_TIMESTAMP',
       })
       .where('id = :id AND status = :pending', {
         id: duel.id,
         pending: DuelStatus.PENDING,
       })
+      .returning('revision')
       .execute();
     if (updateResult.affected === 0) {
       throw new ConflictException(
@@ -651,6 +867,7 @@ export class DuelsService {
     }
 
     duel.status = DuelStatus.ACCEPTED;
+    duel.revision = returnedRevision(updateResult.raw);
     duel.respondedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
     // 수락은 아무도 깎지 않으므로 보호막도 없다.
     return Object.assign(duel, { shieldGranted: false });
@@ -900,12 +1117,14 @@ export class DuelsService {
         .update(Duel)
         .set({
           status: DuelStatus.REJECTED,
+          revision: () => '"revision" + 1',
           respondedAt: () => 'CURRENT_TIMESTAMP',
         })
         .where('id = :id AND status = :pending', {
           id: duel.id,
           pending: DuelStatus.PENDING,
         })
+        .returning('revision')
         .execute();
       if (updateResult.affected === 0) return null;
 
@@ -913,7 +1132,14 @@ export class DuelsService {
       // 전이까지 되돌린다. 삼키면 거절은 확정됐는데 차감·원장·보호막이 없는 행이 남아
       // 거절한 쪽이 공짜로 빠져나간다. 던지면 결투가 PENDING으로 남아 30초 타이머의
       // expireDuel이 같은 금액을 무응답으로 물리므로, 회피 경로가 되지 않는다.
-      return this.chargeDuelPenalties(manager, charges, isMissingUser);
+      return {
+        charges: await this.chargeDuelPenalties(
+          manager,
+          charges,
+          isMissingUser,
+        ),
+        revision: returnedRevision(updateResult.raw),
+      };
     });
 
     if (applied === null) {
@@ -927,11 +1153,14 @@ export class DuelsService {
     // 여기서 던지면 응답자는 에러 ack만 받고 duel:rejected를 못 받으며, 신청자에게도
     // 알림이 가지 않는다. 재시도는 409고 30초 타이머의 expireDuel도 PENDING이 아니라
     // null을 돌려주므로, 두 사람 다 종료 이벤트를 영영 못 받고 대기 화면에 갇힌다.
-    const shielded = await this.grantShields(applied.map((c) => c.userId));
+    const shielded = await this.grantShields(
+      applied.charges.map((c) => c.userId),
+    );
     await this.releasePairLockQuietly(duel);
 
     duel.status = DuelStatus.REJECTED;
-    duel.scoreDelta = applied[0]?.points ?? null;
+    duel.revision = applied.revision;
+    duel.scoreDelta = applied.charges[0]?.points ?? null;
     duel.respondedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
     // scoreDelta(DB)와 달리 보호막은 실패를 삼키는 Redis 쓰기라, 걸렸다는 사실을 따로 싣는다.
     return Object.assign(duel, {
@@ -968,39 +1197,43 @@ export class DuelsService {
       const updateResult = await manager
         .createQueryBuilder()
         .update(Duel)
-        .set({ status: DuelStatus.EXPIRED })
+        .set({ status: DuelStatus.EXPIRED, revision: () => '"revision" + 1' })
         .where('id = :id AND status = :pending', {
           id: duelId,
           pending: DuelStatus.PENDING,
         })
-        .returning(
-          'id, "challengerId", "opponentId", "inviteDeliveredAt", "requestedAt"',
-        )
+        .returning(EXPIRED_RETURNING)
         .execute();
       if (updateResult.affected === 0) return null;
 
       // rejectDuel과 같은 이유로 단건 정책을 쓴다. 여기서 던지면 결투가 PENDING으로
       // 남고 백스톱(sweepStaleDuels)이 다음 회차에 같은 금액을 물린다.
-      return this.chargeDuelPenalties(
-        manager,
-        await this.buildNoResponseCharges(
+      return {
+        charges: await this.chargeDuelPenalties(
           manager,
-          updateResult.raw as ExpiredDuelRow[],
-          // 이 타이머가 살아 있다는 것 자체가 재시작이 없었다는 증거다.
-          null,
+          await this.buildNoResponseCharges(
+            manager,
+            updateResult.raw as ExpiredDuelRow[],
+            // 이 타이머가 살아 있다는 것 자체가 재시작이 없었다는 증거다.
+            null,
+          ),
+          isMissingUser,
         ),
-        isMissingUser,
-      );
+        revision: returnedRevision(updateResult.raw),
+      };
     });
     if (applied === null) return null;
 
     // 여기부터는 커밋 뒤다 — 락 해제로 예외를 올리면 만료가 이미 확정된 결투의 종료
     // 알림을 아무도 못 보내 두 클라이언트가 대기 화면에 갇힌다(releasePairLockQuietly 주석).
-    const shielded = await this.grantShields(applied.map((c) => c.userId));
+    const shielded = await this.grantShields(
+      applied.charges.map((c) => c.userId),
+    );
     await this.releasePairLockQuietly(duel);
 
     duel.status = DuelStatus.EXPIRED;
-    duel.scoreDelta = applied[0]?.points ?? null;
+    duel.revision = applied.revision;
+    duel.scoreDelta = applied.charges[0]?.points ?? null;
     // rejectDuel과 같은 이유로 보호막의 실제 성패를 함께 반환한다.
     return Object.assign(duel, {
       shieldGranted: shielded.has(duel.opponentId),
@@ -1097,12 +1330,14 @@ export class DuelsService {
       .update(Duel)
       .set({
         status: DuelStatus.VOID,
+        revision: () => '"revision" + 1',
         completedAt: () => 'CURRENT_TIMESTAMP',
       })
       .where('id = :id AND status = :accepted', {
         id: duelId,
         accepted: DuelStatus.ACCEPTED,
       })
+      .returning('revision')
       .execute();
 
     // VOID가 이미 커밋된 뒤다 — finishByGame과 같은 이유로 락 해제는 조용히 처리한다.
@@ -1113,6 +1348,7 @@ export class DuelsService {
     }
 
     duel.status = DuelStatus.VOID;
+    duel.revision = returnedRevision(updated.raw);
     duel.completedAt = new Date(); // 실제 값은 DB CURRENT_TIMESTAMP — 반환 객체용 근사치
     return duel;
   }
@@ -1175,7 +1411,8 @@ export class DuelsService {
 
     const penalty = await this.redis.setPenalty(loserId, PENALTY_TTL);
 
-    let claimed: boolean;
+    // CAS에 이기면 올라간 revision, 지면 null.
+    let claimed: number | null;
     try {
       claimed = await this.dataSource.transaction(async (manager) => {
         const claimResult = await manager
@@ -1183,6 +1420,7 @@ export class DuelsService {
           .update(Duel)
           .set({
             status: DuelStatus.COMPLETED,
+            revision: () => '"revision" + 1',
             winnerId,
             loserId,
             scoreDelta,
@@ -1193,8 +1431,10 @@ export class DuelsService {
             id: duel.id,
             accepted: DuelStatus.ACCEPTED,
           })
+          .returning('revision')
           .execute();
-        if (claimResult.affected === 0) return false;
+        if (claimResult.affected === 0) return null;
+        const revision = returnedRevision(claimResult.raw);
 
         // users 락은 userId 순으로 잡는다. 이 경로만 보면 순환이 생기지 않지만
         // (승자·패자 둘 다 ACCEPTED 결투의 참가자라 스윕이 집는 PENDING과 겹치지 않는다),
@@ -1255,7 +1495,7 @@ export class DuelsService {
             );
           }
         }
-        return true;
+        return revision;
       });
     } catch (err) {
       // 트랜잭션 실패 — 결투는 ACCEPTED로 남아 재시도 가능하므로, 미리 걸어둔 페널티만 되돌린다
@@ -1270,7 +1510,7 @@ export class DuelsService {
       throw err;
     }
 
-    if (!claimed) {
+    if (claimed === null) {
       this.logger.warn(
         `결투 이미 처리됨, 부수효과 재적용 생략 duelId=${duel.id}`,
       );
@@ -1292,6 +1532,7 @@ export class DuelsService {
     }
 
     duel.status = DuelStatus.COMPLETED;
+    duel.revision = claimed;
     duel.winnerId = winnerId;
     duel.loserId = loserId;
     duel.scoreDelta = scoreDelta;
@@ -1335,12 +1576,12 @@ export class DuelsService {
     const expired = await manager
       .createQueryBuilder()
       .update(Duel)
-      .set({ status: DuelStatus.EXPIRED })
+      .set({ status: DuelStatus.EXPIRED, revision: () => '"revision" + 1' })
       .where(`${mine} AND status = :pending`, {
         userId,
         pending: DuelStatus.PENDING,
       })
-      .returning('id, "challengerId", "opponentId"')
+      .returning(SWEPT_RETURNING)
       .execute();
 
     const voided = await manager
@@ -1348,13 +1589,14 @@ export class DuelsService {
       .update(Duel)
       .set({
         status: DuelStatus.VOID,
+        revision: () => '"revision" + 1',
         completedAt: () => 'CURRENT_TIMESTAMP',
       })
       .where(`${mine} AND status = :accepted`, {
         userId,
         accepted: DuelStatus.ACCEPTED,
       })
-      .returning('id, "challengerId", "opponentId"')
+      .returning(SWEPT_RETURNING)
       .execute();
 
     return [
@@ -1479,7 +1721,7 @@ export class DuelsService {
       const result = await manager
         .createQueryBuilder()
         .update(Duel)
-        .set({ status: DuelStatus.EXPIRED })
+        .set({ status: DuelStatus.EXPIRED, revision: () => '"revision" + 1' })
         .where(
           'id IN (SELECT id FROM duels' +
             ' WHERE status = :pending' +
@@ -1491,9 +1733,7 @@ export class DuelsService {
             batch: DUEL_SWEEP_BATCH,
           },
         )
-        .returning(
-          'id, "challengerId", "opponentId", "inviteDeliveredAt", "requestedAt"',
-        )
+        .returning(EXPIRED_RETURNING)
         .execute();
 
       const rows = result.raw as ExpiredDuelRow[];
@@ -1527,6 +1767,7 @@ export class DuelsService {
       .update(Duel)
       .set({
         status: DuelStatus.VOID,
+        revision: () => '"revision" + 1',
         completedAt: () => 'CURRENT_TIMESTAMP',
       })
       .where(
@@ -1538,7 +1779,7 @@ export class DuelsService {
           resultSec: DUEL_RESULT_TTL + DUEL_SWEEP_GRACE,
         },
       )
-      .returning('id, "challengerId", "opponentId"')
+      .returning(SWEPT_RETURNING)
       .execute();
 
     // 참가자에게 결과를 알린다 — 스윕된 결투는 인메모리 타이머·결과 핸들러를 타지 않아

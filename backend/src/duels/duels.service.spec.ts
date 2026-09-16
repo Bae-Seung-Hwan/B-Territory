@@ -21,17 +21,29 @@ import {
   DUEL_NO_RESPONSE_SCORE_PENALTY,
   DUEL_REJECT_SCORE_PENALTY,
   DUEL_SHIELD_TTL,
+  DUEL_REQUEST_TTL,
   DUEL_RESULT_TTL,
   DUEL_SWEEP_BATCH,
   DUEL_SWEEP_GRACE,
 } from './constants';
 
-const createQueryBuilderMock = (affected: number, raw: unknown[] = []) => ({
+/**
+ * 상태 전이 UPDATE는 모두 RETURNING으로 올라간 revision을 받는다(returnedRevision). 실제
+ * Postgres는 영향받은 행마다 RETURNING 행을 주므로, raw를 따로 주지 않으면 affected 수만큼
+ * revision만 담긴 행을 만들고, 준 행에 revision이 없으면 채워 넣는다.
+ */
+const createQueryBuilderMock = (
+  affected: number,
+  raw: Record<string, unknown>[] = Array.from({ length: affected }, () => ({})),
+) => ({
   update: jest.fn().mockReturnThis(),
   set: jest.fn().mockReturnThis(),
   where: jest.fn().mockReturnThis(),
   returning: jest.fn().mockReturnThis(),
-  execute: jest.fn().mockResolvedValue({ affected, raw }),
+  execute: jest.fn().mockResolvedValue({
+    affected,
+    raw: raw.map((row) => ({ revision: 1, ...row })),
+  }),
 });
 
 describe('DuelsService', () => {
@@ -41,6 +53,7 @@ describe('DuelsService', () => {
   let txManager: {
     query: jest.Mock;
     exists: jest.Mock;
+    findOne: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
     update: jest.Mock;
@@ -95,6 +108,8 @@ describe('DuelsService', () => {
           ),
         ),
       exists: jest.fn().mockResolvedValue(false),
+      // 기본값: 같은 requestId로 먼저 만들어진 결투가 없음.
+      findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((_entity: unknown, data: Partial<Duel>) => data as Duel),
       save: jest.fn((duel: Duel) =>
         Promise.resolve({ ...duel, id: duel.id ?? 1 }),
@@ -292,8 +307,12 @@ describe('DuelsService', () => {
     });
 
     it('정상 조건이면 PENDING 결투를 생성하고 결투 id를 락 토큰으로 사용한다', async () => {
-      const duel = await service.requestDuel(challenger, opponentId);
+      const { duel, created } = await service.requestDuel(
+        challenger,
+        opponentId,
+      );
 
+      expect(created).toBe(true);
       expect(duel.status).toBe(DuelStatus.PENDING);
       expect(duel.challengerId).toBe(challenger.id);
       expect(duel.opponentId).toBe(opponentId);
@@ -347,9 +366,250 @@ describe('DuelsService', () => {
     it('보호막 해제가 실패해도 신청 자체는 성공시킨다', async () => {
       redis.clearDuelShield.mockRejectedValue(new Error('redis down'));
 
-      const duel = await service.requestDuel(challenger, opponentId);
+      const { duel } = await service.requestDuel(challenger, opponentId);
 
       expect(duel.status).toBe(DuelStatus.PENDING);
+    });
+
+    describe('requestId 멱등성', () => {
+      const requestId = '7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6';
+      const existingDuel = (overrides: Partial<Duel> = {}): Duel =>
+        ({
+          id: 5,
+          challengerId: challenger.id,
+          opponentId,
+          status: DuelStatus.ACCEPTED,
+          requestId,
+          revision: 1,
+          ...overrides,
+        }) as Duel;
+
+      it('새 결투에 requestId를 남긴다', async () => {
+        await service.requestDuel(challenger, opponentId, requestId);
+
+        expect(txManager.create).toHaveBeenCalledWith(
+          Duel,
+          expect.objectContaining({ requestId }),
+        );
+      });
+
+      /**
+       * 첫 요청이 결투를 만든 뒤 ack만 유실된 재시도다. 그 사이 상대가 사거리를 벗어났어도
+       * 검문에 걸려 에러를 받으면, 클라이언트는 살아 있는 결투를 실패로 오인한다.
+       */
+      it('재시도는 검문 없이 기존 결투의 현재 상태를 돌려준다', async () => {
+        duelRepo.findOne.mockResolvedValue(existingDuel());
+        dataSource.query.mockResolvedValue([{ id: opponentId, within: false }]);
+
+        const result = await service.requestDuel(
+          challenger,
+          opponentId,
+          requestId,
+        );
+
+        expect(result).toEqual({ duel: existingDuel(), created: false });
+        // requestId는 신청자 범위에서만 유일하다 — 남의 결투를 돌려주지 않는다.
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock
+        expect(duelRepo.findOne).toHaveBeenCalledWith({
+          where: { challengerId: challenger.id, requestId },
+        });
+        expect(dataSource.query).not.toHaveBeenCalled();
+        expect(txManager.save).not.toHaveBeenCalled();
+        expect(redis.tryAcquireLock).not.toHaveBeenCalled();
+        expect(redis.clearDuelShield).not.toHaveBeenCalled();
+      });
+
+      it('다른 상대에게 같은 requestId를 쓰면 거부한다', async () => {
+        duelRepo.findOne.mockResolvedValue(
+          existingDuel({ opponentId: 'user-z' }),
+        );
+
+        const err = await service
+          .requestDuel(challenger, opponentId, requestId)
+          .catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ConflictException);
+        expect((err as ConflictException).getResponse()).toMatchObject({
+          code: ErrorCode.DUEL_REQUEST_ID_REUSED,
+        });
+      });
+
+      /**
+       * 같은 requestId의 두 요청이 사전 확인을 동시에 통과한 경우. 진 쪽이 락을 잡으려 하면
+       * 이긴 쪽이 쥔 키라 실패하고, 실패 경로가 살아 있는 결투를 지운다.
+       */
+      it('동시 재시도에 지면 락을 건드리지 않고 기존 결투를 돌려준다', async () => {
+        txManager.findOne.mockResolvedValue(
+          existingDuel({ status: DuelStatus.PENDING, revision: 0 }),
+        );
+
+        const result = await service.requestDuel(
+          challenger,
+          opponentId,
+          requestId,
+        );
+
+        expect(result.created).toBe(false);
+        expect(result.duel.id).toBe(5);
+        // 자기 결투에 막혀 DUEL_ALREADY_ACTIVE를 받지 않도록 활성 결투 확인보다 먼저 본다.
+        expect(txManager.exists).not.toHaveBeenCalled();
+        expect(txManager.save).not.toHaveBeenCalled();
+        expect(redis.tryAcquireLock).not.toHaveBeenCalled();
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock
+        expect(duelRepo.delete).not.toHaveBeenCalled();
+      });
+
+      it('requestId가 없으면 재시도 조회를 하지 않는다 (구버전 앱)', async () => {
+        const { created } = await service.requestDuel(challenger, opponentId);
+
+        expect(created).toBe(true);
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock
+        expect(duelRepo.findOne).not.toHaveBeenCalled();
+        expect(txManager.findOne).not.toHaveBeenCalled();
+        expect(txManager.create).toHaveBeenCalledWith(
+          Duel,
+          expect.objectContaining({ requestId: null }),
+        );
+      });
+    });
+  });
+
+  /** 게이트웨이가 duel:requested를 emit하기 직전에 끝난 결투를 거르고 revision을 싣는 데 쓴다. */
+  describe('findState', () => {
+    it('결투의 상태 필드를 돌려준다', async () => {
+      duelRepo.findOne.mockResolvedValueOnce({
+        id: 7,
+        requestId: null,
+        status: DuelStatus.EXPIRED,
+        revision: 1,
+      } as Duel);
+
+      await expect(service.findState(7)).resolves.toEqual({
+        duelId: 7,
+        requestId: null,
+        state: DuelStatus.EXPIRED,
+        revision: 1,
+      });
+    });
+
+    it('결투가 없으면 null이다', async () => {
+      duelRepo.findOne.mockResolvedValueOnce(null);
+      await expect(service.findState(7)).resolves.toBeNull();
+    });
+  });
+
+  describe('syncDuel', () => {
+    const requestId = '7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6';
+    const pendingDuel = {
+      id: 7,
+      challengerId: challenger.id,
+      opponentId,
+      requestId,
+      status: DuelStatus.PENDING,
+      revision: 0,
+    } as Duel;
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('requestId로는 본인이 신청한 결투만 찾고, PENDING이면 응답 기한을 절대 시각으로 싣는다', async () => {
+      duelRepo.findOne.mockResolvedValue(pendingDuel);
+      usersService.findById.mockResolvedValue({
+        id: opponentId,
+        nickname: '상대',
+        team: 'JP',
+      } as never);
+      dataSource.query.mockResolvedValue([{ remainingMs: 12_000 }]);
+      jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+
+      const view = await service.syncDuel(challenger.id, { requestId });
+
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock
+      expect(duelRepo.findOne).toHaveBeenCalledWith({
+        where: { challengerId: challenger.id, requestId },
+        order: { id: 'DESC' },
+      });
+      expect(view).toEqual({
+        duelId: 7,
+        requestId,
+        state: DuelStatus.PENDING,
+        revision: 0,
+        role: 'challenger',
+        expiresAt: new Date(1_012_000).toISOString(),
+        opponent: { id: opponentId, nickname: '상대', team: 'JP' },
+      });
+      // requestedAt은 timestamp without time zone이라 남은 시간을 DB 시계로 계산해야
+      // 앱·DB 타임존이 달라도 어긋나지 않는다.
+      expect(dataSource.query).toHaveBeenCalledWith(
+        expect.stringContaining('LOCALTIMESTAMP'),
+        [7, DUEL_REQUEST_TTL],
+      );
+    });
+
+    it('duelId로는 참가자인 결투를 찾고, 받은 쪽이면 신청자를 상대로 돌려준다', async () => {
+      duelRepo.findOne.mockResolvedValue({
+        ...pendingDuel,
+        status: DuelStatus.ACCEPTED,
+        revision: 1,
+      });
+      usersService.findById.mockResolvedValue({
+        id: challenger.id,
+        nickname: '신청자',
+        team: challenger.team,
+      } as never);
+
+      const view = await service.syncDuel(opponentId, { duelId: 7 });
+
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock
+      expect(duelRepo.findOne).toHaveBeenCalledWith({
+        where: [
+          { id: 7, challengerId: opponentId },
+          { id: 7, opponentId },
+        ],
+        order: { id: 'DESC' },
+      });
+      expect(view).toMatchObject({
+        role: 'opponent',
+        state: DuelStatus.ACCEPTED,
+        // PENDING이 아니면 응답 기한이 없다.
+        expiresAt: null,
+        opponent: { id: challenger.id, nickname: '신청자' },
+      });
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('조건이 없으면 진행 중인 결투만 찾는다', async () => {
+      duelRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.syncDuel(challenger.id, {})).resolves.toBeNull();
+
+      const [{ where }] = duelRepo.findOne.mock.calls[0] as [
+        { where: Record<string, unknown>[] },
+      ];
+      expect(where).toEqual([
+        expect.objectContaining({
+          challengerId: challenger.id,
+          status: expect.anything() as unknown,
+        }),
+        expect.objectContaining({
+          opponentId: challenger.id,
+          status: expect.anything() as unknown,
+        }),
+      ]);
+    });
+
+    it('상대가 탈퇴해 참가자 칸이 비었으면 opponent는 null이다', async () => {
+      duelRepo.findOne.mockResolvedValue({
+        ...pendingDuel,
+        opponentId: null,
+        status: DuelStatus.EXPIRED,
+      } as unknown as Duel);
+
+      const view = await service.syncDuel(challenger.id, { duelId: 7 });
+
+      expect(view?.opponent).toBeNull();
+      expect(usersService.findById).not.toHaveBeenCalled();
     });
   });
 
@@ -357,26 +617,6 @@ describe('DuelsService', () => {
    * 이 스탬프가 무응답 청구의 유일한 근거다(duel.entity.ts#inviteDeliveredAt) —
    * 게이트웨이가 duel:requested를 살아 있는 소켓으로 emit한 직후에만 호출한다.
    */
-  /** 게이트웨이가 duel:requested를 emit하기 직전에 끝난 결투를 거르는 데 쓴다. */
-  describe('isPending', () => {
-    it('PENDING인 결투만 true다', async () => {
-      duelRepo.findOne.mockResolvedValueOnce({
-        status: DuelStatus.PENDING,
-      } as Duel);
-      await expect(service.isPending(7)).resolves.toBe(true);
-
-      duelRepo.findOne.mockResolvedValueOnce({
-        status: DuelStatus.EXPIRED,
-      } as Duel);
-      await expect(service.isPending(7)).resolves.toBe(false);
-    });
-
-    it('결투가 없으면 false다', async () => {
-      duelRepo.findOne.mockResolvedValueOnce(null);
-      await expect(service.isPending(7)).resolves.toBe(false);
-    });
-  });
-
   describe('markInviteDelivered', () => {
     it('PENDING인 결투에만 전달 시각을 찍는다', async () => {
       const qb = createQueryBuilderMock(1);
@@ -444,6 +684,26 @@ describe('DuelsService', () => {
         '1',
       );
       expect(redis.releaseLock).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 이벤트에 실리는 revision은 전이 **후**의 값이어야 한다. 전이 전에 읽은 엔티티의 값을
+     * 그대로 쓰면 duel:accepted가 PENDING ack와 같은 번호로 나가 클라이언트가 버린다.
+     */
+    it('수락하면 같은 문장에서 올린 revision을 RETURNING으로 받아 싣는다', async () => {
+      duelRepo.findOne.mockResolvedValue({
+        ...buildPendingDuel(),
+        revision: 0,
+      });
+      const qb = createQueryBuilderMock(1, [{ revision: 1 }]);
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(qb);
+
+      const duel = await service.respondDuel(1, opponentId, true);
+
+      expect(duel.revision).toBe(1);
+      const setArg = (qb.set.mock.calls[0] as [{ revision: () => string }])[0];
+      expect(setArg.revision()).toBe('"revision" + 1');
+      expect(qb.returning).toHaveBeenCalledWith('revision');
     });
 
     it('거절 시 락을 해제한다', async () => {
@@ -543,6 +803,10 @@ describe('DuelsService', () => {
       expect(duel.scoreDelta).toBe(DUEL_REJECT_SCORE_PENALTY);
       expect(duelPenaltyPayload(duel)).toEqual({
         duelId: 1,
+        requestId: null,
+        state: DuelStatus.REJECTED,
+        // RETURNING으로 받은 전이 후 revision이다 (mock은 1을 돌려준다).
+        revision: 1,
         scorePenalty: DUEL_REJECT_SCORE_PENALTY,
         penalizedUserId: opponentId,
         shieldUntil: null,
@@ -1248,7 +1512,20 @@ describe('DuelsService', () => {
       // scoreDelta는 전이 UPDATE가 아니라 실제 차감이 일어난 행에만 따로 찍힌다.
       expect(pendingQb.set).toHaveBeenCalledWith({
         status: DuelStatus.EXPIRED,
+        revision: expect.any(Function) as unknown,
       });
+      // 모든 상태 전이는 같은 문장에서 revision을 올리고 RETURNING으로 받는다.
+      expect(
+        (
+          pendingQb.set.mock.calls[0] as [{ revision: () => string }]
+        )[0].revision(),
+      ).toBe('"revision" + 1');
+      expect(pendingQb.returning).toHaveBeenCalledWith(
+        expect.stringContaining('revision'),
+      );
+      expect(acceptedQb.returning).toHaveBeenCalledWith(
+        expect.stringContaining('revision'),
+      );
       expect(pendingQb.where).toHaveBeenCalledWith(
         expect.stringContaining('requestedAt'),
         expect.objectContaining({ pending: DuelStatus.PENDING }),
@@ -1298,13 +1575,23 @@ describe('DuelsService', () => {
         id: 7,
         challengerId: 'user-a',
         opponentId: 'user-b',
+        requestId: '0f8f5c3e-6f9a-4a57-9a51-2d1c3b4a5e6f',
+        status: DuelStatus.EXPIRED,
+        revision: 1,
         inviteDeliveredAt: new Date('2026-01-01T00:00:00Z'),
         requestedAt: new Date('2026-01-01T00:00:00Z'),
       };
       usersService.findByIds.mockResolvedValue([
         { id: 'user-b', team: 'JP' },
       ] as never);
-      const voidedRow = { id: 8, challengerId: 'user-c', opponentId: 'user-d' };
+      const voidedRow = {
+        id: 8,
+        challengerId: 'user-c',
+        opponentId: 'user-d',
+        requestId: null,
+        status: DuelStatus.VOID,
+        revision: 2,
+      };
       txManager.createQueryBuilder.mockReturnValueOnce(
         createQueryBuilderMock(1, [expiredRow]),
       );
@@ -1315,8 +1602,13 @@ describe('DuelsService', () => {
       await service.sweepStaleDuels();
 
       // 무응답 만료 payload는 양쪽에 동일하고, 깎인 쪽만 penalizedUserId로 지목한다.
+      // 상태 필드는 RETURNING 행 그대로다 — 전이 후의 state와 revision이어야 클라이언트가
+      // 이전 이벤트와 구분한다.
       const expiredPayload = {
         duelId: 7,
+        requestId: expiredRow.requestId,
+        state: DuelStatus.EXPIRED,
+        revision: 1,
         scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
         penalizedUserId: 'user-b',
         // 큐잉되어도 낡지 않도록 남은 초가 아니라 절대 시각으로 나간다.
@@ -1338,6 +1630,9 @@ describe('DuelsService', () => {
       // VOID는 차감이 없다 — scoreDelta가 비어 penalizedUserId도 null이다.
       const voidedPayload = {
         duelId: 8,
+        requestId: null,
+        state: DuelStatus.VOID,
+        revision: 2,
         scorePenalty: 0,
         penalizedUserId: null,
         shieldUntil: null,
@@ -1373,6 +1668,9 @@ describe('DuelsService', () => {
             id: 7,
             challengerId: 'user-a',
             opponentId: 'user-b',
+            requestId: null,
+            status: DuelStatus.EXPIRED,
+            revision: 1,
             inviteDeliveredAt: deliveredAt,
             requestedAt: deliveredAt,
           },
@@ -1380,6 +1678,9 @@ describe('DuelsService', () => {
             id: 9,
             challengerId: 'user-e',
             opponentId: 'user-f',
+            requestId: null,
+            status: DuelStatus.EXPIRED,
+            revision: 1,
             inviteDeliveredAt: deliveredAt,
             requestedAt: deliveredAt,
           },
@@ -1407,6 +1708,9 @@ describe('DuelsService', () => {
         'duel:expired',
         {
           duelId: 7,
+          requestId: null,
+          state: DuelStatus.EXPIRED,
+          revision: 1,
           scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
           penalizedUserId: 'user-b',
           shieldUntil: null,
@@ -1415,6 +1719,9 @@ describe('DuelsService', () => {
       );
       const shieldedPayload = {
         duelId: 9,
+        requestId: null,
+        state: DuelStatus.EXPIRED,
+        revision: 1,
         scorePenalty: DUEL_NO_RESPONSE_SCORE_PENALTY,
         penalizedUserId: 'user-f',
         shieldUntil: expect.any(String) as unknown as string,
@@ -1442,6 +1749,9 @@ describe('DuelsService', () => {
             id: 7,
             challengerId: 'user-a',
             opponentId: 'user-b',
+            requestId: null,
+            status: DuelStatus.EXPIRED,
+            revision: 1,
             // 초대가 살아 있는 소켓으로 나가지 못했다.
             inviteDeliveredAt: null,
             requestedAt: new Date('2026-01-01T00:00:00Z'),
@@ -1457,6 +1767,9 @@ describe('DuelsService', () => {
       // 미전달이라 청구도 없다 — payload는 0/null이고, 상대에게만 ephemeral이 붙는다.
       const payload = {
         duelId: 7,
+        requestId: null,
+        state: DuelStatus.EXPIRED,
+        revision: 1,
         scorePenalty: 0,
         penalizedUserId: null,
         shieldUntil: null,
@@ -1741,12 +2054,24 @@ describe('DuelsService', () => {
    */
   describe('terminateActiveDuelsFor / settleTerminatedDuels', () => {
     it('PENDING은 EXPIRED, ACCEPTED는 VOID로 전이하고 advisory lock을 먼저 잡는다', async () => {
-      const pendingQb = createQueryBuilderMock(1, [
-        { id: 7, challengerId: 'user-a', opponentId: 'user-b' },
-      ]);
-      const acceptedQb = createQueryBuilderMock(1, [
-        { id: 8, challengerId: 'user-c', opponentId: 'user-a' },
-      ]);
+      const expiredRow = {
+        id: 7,
+        challengerId: 'user-a',
+        opponentId: 'user-b',
+        requestId: null,
+        status: DuelStatus.EXPIRED,
+        revision: 1,
+      };
+      const voidedRow = {
+        id: 8,
+        challengerId: 'user-c',
+        opponentId: 'user-a',
+        requestId: null,
+        status: DuelStatus.VOID,
+        revision: 3,
+      };
+      const pendingQb = createQueryBuilderMock(1, [expiredRow]);
+      const acceptedQb = createQueryBuilderMock(1, [voidedRow]);
       txManager.createQueryBuilder
         .mockReturnValueOnce(pendingQb)
         .mockReturnValueOnce(acceptedQb);
@@ -1763,23 +2088,18 @@ describe('DuelsService', () => {
       );
       expect(pendingQb.set).toHaveBeenCalledWith({
         status: DuelStatus.EXPIRED,
+        revision: expect.any(Function) as unknown,
       });
       expect(acceptedQb.set).toHaveBeenCalledWith(
         expect.objectContaining({ status: DuelStatus.VOID }),
       );
+      // 알림의 상태 필드가 RETURNING에서 나오므로 거기에 빠짐없이 실려야 한다.
+      expect(pendingQb.returning).toHaveBeenCalledWith(
+        expect.stringContaining('"requestId", status, revision'),
+      );
       expect(rows).toEqual([
-        {
-          id: 7,
-          challengerId: 'user-a',
-          opponentId: 'user-b',
-          event: 'duel:expired',
-        },
-        {
-          id: 8,
-          challengerId: 'user-c',
-          opponentId: 'user-a',
-          event: 'duel:voided',
-        },
+        { ...expiredRow, event: 'duel:expired' },
+        { ...voidedRow, event: 'duel:voided' },
       ]);
     });
 
@@ -1804,12 +2124,18 @@ describe('DuelsService', () => {
             id: 7,
             challengerId: 'user-a',
             opponentId: 'user-b',
+            requestId: null,
+            status: DuelStatus.EXPIRED,
+            revision: 1,
             event: 'duel:expired',
           },
           {
             id: 8,
             challengerId: 'user-c',
             opponentId: 'user-a',
+            requestId: null,
+            status: DuelStatus.VOID,
+            revision: 3,
             event: 'duel:voided',
           },
         ],
@@ -1834,6 +2160,9 @@ describe('DuelsService', () => {
         'duel:expired',
         {
           duelId: 7,
+          requestId: null,
+          state: DuelStatus.EXPIRED,
+          revision: 1,
           scorePenalty: 0,
           penalizedUserId: null,
           shieldUntil: null,
@@ -1845,6 +2174,9 @@ describe('DuelsService', () => {
         'duel:voided',
         {
           duelId: 8,
+          requestId: null,
+          state: DuelStatus.VOID,
+          revision: 3,
           scorePenalty: 0,
           penalizedUserId: null,
           shieldUntil: null,
@@ -1871,6 +2203,9 @@ describe('DuelsService', () => {
               id: 7,
               challengerId: 'user-a',
               opponentId: 'user-b',
+              requestId: null,
+              status: DuelStatus.EXPIRED,
+              revision: 1,
               event: 'duel:expired',
             },
           ],
