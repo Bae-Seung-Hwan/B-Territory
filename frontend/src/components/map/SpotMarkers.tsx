@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Callout, Marker, type MapMarker, type Region } from 'react-native-maps';
+import { Callout, type MapMarker, type Region } from 'react-native-maps';
+import { MapPin } from './MapPin';
 import type { Spot } from '@/api/spots';
 import { categoryKey, getCategoryMeta } from '@/constants/mapCategories';
 import { BrandColors } from '@/constants/theme';
@@ -60,9 +61,6 @@ interface SpotMarkerProps {
   onSelect: SpotHandler;
 }
 
-// Android Google Maps는 Marker 자식으로 둔 SVG를 비트맵으로 캡처하는 과정에서 렌더링을 잃을 수
-// 있다. 그러면 기본 빨간 핀으로 되돌아가거나 Marker가 사라진다. 카테고리 색은 SDK가 직접
-// 그리는 pinColor로 전달해, 자식 뷰 스냅샷에 의존하지 않는다.
 const SpotMarker = memo(function SpotMarker({
   spot,
   coordinate,
@@ -120,19 +118,18 @@ const SpotMarker = memo(function SpotMarker({
   }, [onSelect, spot]);
 
   return (
-    <Marker
+    <MapPin
       ref={markerRef}
       coordinate={coordinate}
       // title/description(네이티브 기본 말풍선)을 쓰지 않는 이유: 기본 말풍선의 snippet은
       // 여러 줄을 제대로 렌더링하지 않아 주소 아래에 점령 현황을 붙일 수 없다. 내용을 직접
       // 그리는 <Callout>으로 대체한다(tooltip=false라 말풍선 테두리는 기본 모양 그대로 나온다).
-      pinColor={meta.color}
+      color={meta.color}
       onPress={handlePress}
-    >
-      {claim && (
+      callout={claim && (
         <SpotCallout spot={spot} claimText={claim.text} color={meta.color} onPress={handleCalloutPress} />
       )}
-    </Marker>
+    />
   );
 });
 
