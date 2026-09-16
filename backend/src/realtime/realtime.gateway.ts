@@ -351,36 +351,76 @@ export class RealtimeGateway
     const user = getSocketUser(client);
     const duel = await this.duelsService.requestDuel(user, dto.targetUserId);
 
-    // 초대가 상대의 살아 있는 소켓으로 실제 나갔는지를 여기서 확정해 기록한다. 무응답
-    // 페널티는 이 기록에만 근거한다 — 만료 시점에 소켓 생존을 다시 확인하는 방식은 끊김이
-    // ping timeout만큼 늦게 드러나 창 후반부의 단절을 놓쳤고(만료가 30초인데 감지는 최대
-    // 20초 지연), 서버 재시작으로 타이머가 유실된 신청은 확인할 방법조차 없었다.
-    //
-    // 이 판단도 socket.connected를 읽으므로 감지 지연 자체가 사라진 것은 아니다 — 창의
-    // 끝(30초 내내)에서 신청 시점 한 순간으로 좁아졌을 뿐이다. 남은 구멍과 그것을 닫는
-    // 방법(클라이언트 렌더 ack)은 socket-options.ts 주석에 정리해 두었다.
-    const delivered = await this.notifyUser(
-      dto.targetUserId,
-      'duel:requested',
-      {
-        duelId: duel.id,
-        fromUserId: user.id,
-        fromNickname: user.nickname,
-      },
-      // 초대는 30초짜리라 큐에 넣지 않는다 (notifyUser의 ephemeral 주석 참고).
-      true,
-    );
-
-    // 타이머를 전달 기록보다 **먼저** 건다. markInviteDelivered는 실패해도 삼키는 부수적
-    // 쓰기인데 그걸 await한 뒤에 타이머를 걸면, DB가 느린 만큼 만료가 30초보다 늦게
-    // 발화한다. startGameRound가 같은 이유로 emit보다 타이머를 먼저 건다.
+    // 타이머를 초대 전송보다 **먼저** 건다. 만료는 결투 생성 시점부터 30초인데, 전송이
+    // 느린 만큼 타이머가 늦게 걸리면 만료도 그만큼 밀린다. startGameRound가 같은 이유로
+    // emit보다 타이머를 먼저 건다.
     setTimeout(() => {
       void this.expireAndNotify(duel.id, user.id, dto.targetUserId);
     }, DUEL_REQUEST_TTL * 1000);
 
-    if (delivered) await this.duelsService.markInviteDelivered(duel.id);
+    // 초대 전송을 이 핸들러의 **반환 뒤로** 미룬다. 예전엔 여기서 초대를 await한 뒤
+    // ack를 돌려줬는데, 그러면 상대가 초대를 받아 곧바로 수락했을 때 신청자에게
+    // duel:accepted가 요청 ack보다 먼저 도착할 수 있었다 — 신청자 클라이언트는 아직
+    // duelId를 모르는 상태로 수락 이벤트를 받고, 뒤늦은 ack가 이미 열린 게임 위에 대기
+    // 화면을 다시 띄웠다.
+    //
+    // setImmediate는 마이크로태스크가 모두 비워진 뒤(check 페이즈) 돌므로, 핸들러가
+    // 돌려준 Promise의 해소 — 즉 socket.io가 ack 패킷을 신청자 소켓에 쓰는 것 — 보다
+    // 반드시 뒤다. 그 뒤에야 초대가 나가고, 상대가 받아 수락해 duel:accepted가 신청자
+    // 소켓으로 오는 것은 다시 그 뒤이므로, 같은 연결의 전송 순서상 역전이 불가능해진다.
+    //
+    // 그래서 ack의 의미는 "결투 요청 생성 완료"다 — 초대가 상대에게 닿았는지는 뜻하지
+    // 않는다. 전달 실패는 예전과 똑같이 inviteDeliveredAt을 남기지 않는 것으로 처리되고,
+    // 만료 시 무응답 청구에서 빠진다(duel.entity.ts#inviteDeliveredAt).
+    //
+    // ack 순서가 보장돼도 클라이언트의 상태 반영이 끝났다는 뜻은 아니므로, 프론트의
+    // 순서 방어(SocketProvider의 duel:accepted 선처리)는 그대로 유지해야 한다.
+    setImmediate(() => {
+      void this.deliverDuelInvite(duel.id, user, dto.targetUserId);
+    });
 
     return { status: 'ok', duelId: duel.id };
+  }
+
+  /**
+   * 결투 초대를 상대에게 보내고, 살아 있는 소켓으로 실제 나갔으면 전달로 기록한다.
+   *
+   * 초대가 상대의 살아 있는 소켓으로 실제 나갔는지를 여기서 확정해 기록한다. 무응답
+   * 페널티는 이 기록에만 근거한다 — 만료 시점에 소켓 생존을 다시 확인하는 방식은 끊김이
+   * ping timeout만큼 늦게 드러나 창 후반부의 단절을 놓쳤고(만료가 30초인데 감지는 최대
+   * 20초 지연), 서버 재시작으로 타이머가 유실된 신청은 확인할 방법조차 없었다.
+   *
+   * 이 판단도 socket.connected를 읽으므로 감지 지연 자체가 사라진 것은 아니다 — 창의
+   * 끝(30초 내내)에서 신청 시점 한 순간으로 좁아졌을 뿐이다. 남은 구멍과 그것을 닫는
+   * 방법(클라이언트 렌더 ack)은 socket-options.ts 주석에 정리해 두었다.
+   *
+   * 반드시 자체적으로 예외를 삼킨다 — 핸들러 밖(setImmediate)에서 도는 몸통이라 여기서
+   * reject가 새면 ack 에러가 아니라 unhandledRejection이 되어 프로세스가 죽는다.
+   * 실패해도 결투는 살아 있고 만료 타이머도 이미 걸려 있어, 전달 기록만 비는 채로
+   * 30초 뒤 무응답 청구 없이 만료된다.
+   */
+  private async deliverDuelInvite(
+    duelId: number,
+    challenger: { id: string; nickname: string },
+    targetUserId: string,
+  ): Promise<void> {
+    try {
+      const delivered = await this.notifyUser(
+        targetUserId,
+        'duel:requested',
+        {
+          duelId,
+          fromUserId: challenger.id,
+          fromNickname: challenger.nickname,
+        },
+        // 초대는 30초짜리라 큐에 넣지 않는다 (notifyUser의 ephemeral 주석 참고).
+        true,
+      );
+
+      if (delivered) await this.duelsService.markInviteDelivered(duelId);
+    } catch (err) {
+      this.logger.error(`결투 초대 전달 실패 duelId=${duelId}`, err);
+    }
   }
 
   // 타이머 발화 시점의 소켓id를 재조회한다 (요청 시점에 캡처해두면 그 사이 재접속한 클라이언트에게

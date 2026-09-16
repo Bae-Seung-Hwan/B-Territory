@@ -7,6 +7,7 @@ import {
   GAME_EXPIRE_MAX_ATTEMPTS,
   GAME_EXPIRE_RETRY_MS,
 } from '../duels/minigame/constants';
+import { DUEL_REQUEST_TTL } from '../duels/constants';
 
 interface MockSocket {
   id: string;
@@ -419,6 +420,13 @@ describe('duel:requested 전달 기록', () => {
     return { gateway, client, markInviteDelivered, queueNotification, socket };
   }
 
+  /**
+   * 초대 전송은 ack 뒤(setImmediate)로 밀려 있다. 가짜 타이머에서는 0ms를 비동기로
+   * 진행시켜야 그 콜백이 돈다 — runOnlyPendingTimers를 쓰면 30초 만료 타이머까지 함께
+   * 터져 이 describe가 검증하려는 것과 다른 경로가 섞인다.
+   */
+  const flushInvite = () => jest.advanceTimersByTimeAsync(0);
+
   afterEach(() => {
     jest.useRealTimers();
   });
@@ -430,6 +438,7 @@ describe('duel:requested 전달 기록', () => {
     });
 
     await gateway.handleDuelRequest(client, { targetUserId });
+    await flushInvite();
 
     expect(socket!.emit).toHaveBeenCalledWith(
       'duel:requested',
@@ -444,6 +453,7 @@ describe('duel:requested 전달 기록', () => {
     const { gateway, client, markInviteDelivered } = make(undefined);
 
     await gateway.handleDuelRequest(client, { targetUserId });
+    await flushInvite();
 
     expect(markInviteDelivered).not.toHaveBeenCalled();
   });
@@ -454,6 +464,7 @@ describe('duel:requested 전달 기록', () => {
     const { gateway, client, markInviteDelivered } = make({ connected: false });
 
     await gateway.handleDuelRequest(client, { targetUserId });
+    await flushInvite();
 
     expect(markInviteDelivered).not.toHaveBeenCalled();
   });
@@ -468,30 +479,81 @@ describe('duel:requested 전달 기록', () => {
     const { gateway, client, queueNotification } = make(undefined);
 
     await gateway.handleDuelRequest(client, { targetUserId });
+    await flushInvite();
 
     expect(queueNotification).not.toHaveBeenCalled();
   });
 
   /**
-   * markInviteDelivered는 실패해도 삼키는 부수적 쓰기다 — 그걸 await한 뒤에 타이머를 걸면
-   * DB가 느린 만큼 만료가 30초보다 늦게 발화한다(startGameRound가 같은 이유로 emit보다
-   * 타이머를 먼저 건다).
+   * 상대가 초대를 받자마자 수락하면, 신청자에게 duel:accepted가 요청 ack보다 먼저 도착할
+   * 수 있었다 — 신청자 클라이언트는 아직 duelId를 모르는 채로 수락을 받고, 뒤늦은 ack가
+   * 이미 열린 게임 위에 대기 화면을 다시 띄웠다.
+   *
+   * ack를 먼저 돌려주고 초대를 그 뒤로 미루면 이 순서가 뒤집힐 수 없다: 초대가 나가는
+   * 것도, 상대의 수락이 신청자 소켓에 닿는 것도 전부 ack 뒤이기 때문이다.
    */
-  it('만료 타이머를 전달 기록보다 먼저 건다', async () => {
+  it('요청 ack를 초대 전송보다 먼저 돌려준다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, socket, markInviteDelivered } = make({
+      connected: true,
+    });
+
+    const ack = await gateway.handleDuelRequest(client, { targetUserId });
+
+    // 핸들러가 반환하는 순간이 socket.io가 ack 패킷을 쓰는 순간이다.
+    expect(ack).toEqual({ status: 'ok', duelId });
+    expect(socket!.emit).not.toHaveBeenCalled();
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+
+    await flushInvite();
+    expect(socket!.emit).toHaveBeenCalledWith(
+      'duel:requested',
+      expect.objectContaining({ duelId }),
+    );
+  });
+
+  /**
+   * 만료는 결투 생성 시점부터 30초다. 초대 전송이 ack 뒤로 밀렸으므로 타이머까지 함께
+   * 밀리면 전송이 느린 만큼 만료가 늦게 발화한다 — 타이머는 핸들러가 반환하기 전에
+   * 걸려 있어야 한다(startGameRound가 같은 이유로 emit보다 타이머를 먼저 건다).
+   */
+  it('만료 타이머를 ack 반환 전에 건다', async () => {
     jest.useFakeTimers();
     const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
-    const { gateway, client, markInviteDelivered } = make({ connected: true });
-    let timerArmedWhenMarked: boolean | null = null;
-    markInviteDelivered.mockImplementation(() => {
-      timerArmedWhenMarked = setTimeoutSpy.mock.calls.length > 0;
-      return Promise.resolve();
-    });
+    const { gateway, client } = make({ connected: true });
 
     await gateway.handleDuelRequest(client, { targetUserId });
 
-    expect(markInviteDelivered).toHaveBeenCalled();
-    expect(timerArmedWhenMarked).toBe(true);
+    expect(
+      setTimeoutSpy.mock.calls.some(
+        ([, delay]) => delay === DUEL_REQUEST_TTL * 1000,
+      ),
+    ).toBe(true);
     setTimeoutSpy.mockRestore();
+  });
+
+  /**
+   * 초대 전송은 이제 핸들러 밖(setImmediate)에서 돈다 — 예외가 새면 ack 에러가 아니라
+   * unhandledRejection이 되어 소켓 하나의 실패가 프로세스 전체를 죽인다. 결투는 이미
+   * 만들어졌고 만료 타이머도 걸려 있으므로, 여기서는 삼키고 로그만 남기는 것이 맞다.
+   */
+  it('초대 전송이 실패해도 ack는 정상이고 예외가 새지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, markInviteDelivered } = make({ connected: true });
+    const errorSpy = jest
+      .spyOn(gateway['logger'], 'error')
+      .mockImplementation(() => undefined);
+    (gateway['redis'].getUserMeta as jest.Mock).mockRejectedValue(
+      new Error('redis down'),
+    );
+
+    const ack = await gateway.handleDuelRequest(client, { targetUserId });
+    await flushInvite();
+
+    expect(ack).toEqual({ status: 'ok', duelId });
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
 
