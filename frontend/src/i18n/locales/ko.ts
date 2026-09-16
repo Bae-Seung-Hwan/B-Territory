@@ -90,6 +90,27 @@ export const ko = {
       consentRequired: '약관 동의가 만료되었습니다. 다시 동의해주세요',
     },
   },
+  // 접근권한 사전 고지(정보통신망법 제22조의2). 항목 목록 자체는
+  // constants/app-permissions.ts가 들고 있고, 여기에는 그 항목의 표시 문구만 둔다.
+  permissions: {
+    title: '접근권한 안내',
+    subtitle: 'B-territory는 서비스 제공에 꼭 필요한 권한만 요청합니다. 아래 내용을 확인해주세요.',
+    requiredSection: '필수적 접근권한',
+    optionalSection: '선택적 접근권한',
+    noOptional: '현재 요청하는 선택적 접근권한이 없습니다.',
+    requiredNote:
+      '필수적 접근권한을 허용하지 않으면 구역 점령·미션·결투 등 위치를 사용하는 기능을 이용할 수 없습니다. 선택적 접근권한은 허용하지 않아도 서비스를 이용할 수 있습니다.',
+    withdraw:
+      '허용한 접근권한은 단말기의 설정 > 애플리케이션 > B-territory > 권한에서 언제든지 다시 변경하거나 철회할 수 있습니다.',
+    confirm: '확인',
+    items: {
+      location: {
+        name: '위치 (정확한 위치·대략적인 위치)',
+        purpose:
+          '현재 있는 구역 판정, 관광지 미션 방문 확인, 근처 이용자와의 결투 매칭에 사용합니다. 앱을 사용하는 중(포그라운드)에만 수집하며 백그라운드에서는 수집하지 않습니다.',
+      },
+    },
+  },
   tabs: {
     battle: '배틀',
     chat: '채팅',
@@ -104,6 +125,12 @@ export const ko = {
   },
   chat: {
     title: '채팅',
+    // 원스토어 검수가 요구하는 이용자 보호 안내문구(공지 29889). 윤리(비방·욕설·음란·광고
+    // 제재)와 결제·개인정보 보호를 **한 문구에 모두** 담아야 해서 길다 — 줄이려면 어느 쪽을
+    // 뺄지가 아니라 표현을 다듬는 방향으로만 고친다.
+    safetyNotice:
+      '비방·욕설·음란·광고 등 불건전 행위는 운영정책에 따라 제재 대상이며, 피해가 발생할 수 있으므로 결제정보·개인정보는 절대 타인에게 공개하지 마세요.',
+    reportHint: '메시지를 길게 누르면 신고·차단할 수 있습니다.',
     emptyState: '아직 메시지가 없습니다',
     inputPlaceholder: '메시지를 입력하세요',
     send: '전송',
@@ -164,6 +191,13 @@ export const ko = {
     },
   },
   map: {
+    locationLoading: '위치를 확인하고 있습니다…',
+    locationPermission: '위치 권한이 꺼져 있습니다.',
+    locationServices: '기기의 위치 서비스를 켜 주세요.',
+    locationUnavailable: '위치를 가져오지 못했습니다.',
+    locationAllow: '권한 허용 / 설정',
+    locationRetry: '다시 시도',
+
     hud: {
       topTeam: '1위 팀',
       capitalDistrict: '이번 주 수도',

@@ -1,6 +1,10 @@
 import { useSyncExternalStore } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Linking } from 'react-native';
 import * as Location from 'expo-location';
+import {
+  isPermissionNoticeAcknowledged,
+  subscribeToPermissionNotice,
+} from '@/lib/permission-notice';
 
 interface Coords {
   latitude: number;
@@ -11,6 +15,7 @@ interface LocationState {
   coords: Coords | null;
   error: string | null;
   loading: boolean;
+  errorKind?: 'permission' | 'services' | 'unavailable';
 }
 
 /**
@@ -30,28 +35,61 @@ let state: LocationState = { coords: null, error: null, loading: true };
 const listeners = new Set<() => void>();
 let subscription: Location.LocationSubscription | null = null;
 let starting = false;
+let resumePending = false;
+let locationGeneration = 0;
 // 한 번 거부되면 소비자가 새로 마운트될 때마다(화면 이동 등) requestForegroundPermissionsAsync를
 // 다시 호출하지 않는다(PR #54 리뷰 지적 13번) — subscription/starting 가드만으로는 거부 경로에서
-// 둘 다 원상태로 돌아가 다음 subscribe()가 처음부터 다시 묻는다. 앱이 포그라운드로 돌아올 때는
-// 풀어준다 — OS 설정 화면에서 권한을 바꾸고 돌아오는 유일한 신호이기 때문이다.
+// 둘 다 원상태로 돌아가 다음 subscribe()가 처음부터 다시 묻는다. 이 플래그는 포그라운드 복귀로
+// 풀지 않는다 — 대신 대화상자를 띄우지 않는 getForegroundPermissionsAsync로 현재 상태만 조용히
+// 다시 확인한다(resolvePermissionStatus 참고). 예전엔 'active' 전환마다 false로 되돌렸는데,
+// 안드로이드에서는 OS 권한 팝업 자체가 'background'→'active'를 만들기 때문에 이용자가 거부를
+// 누른 직후 팝업이 한 번 더 뜨는 경로가 됐다 — 원스토어 반려 사유 1번을 그대로 되살린다.
 let permissionDenied = false;
+// 안드로이드에서 OS 권한 대화상자는 별도 액티비티라, 띄우는 동안 우리 액티비티가 onPause 되고
+// AppState가 'background'를 쏜다 — 이용자가 앱을 떠난 것이 아니므로 그 사이에는 구독을 접지도,
+// generation을 밀지도 않는다. 밀면 await가 풀린 뒤의 권한 결과가 전부 stale로 버려진다.
+let requestingPermission = false;
+let explicitPermissionRequest = false;
 // 모듈이 처음 로드될 때가 아니라 첫 구독자가 생길 때 딱 한 번만 등록한다(subscribe() 참고) —
 // GPS watcher를 지연 시작하는 이 파일의 기존 철학과 같은 이유일 뿐 아니라, 모듈 로드 시점에
 // 곧바로 네이티브 이벤트 이미터를 건드리면 테스트에서 이 모듈을 import하는 순간 앱스테이트
 // 목이 아직 준비되기 전에 실행될 위험도 없앤다.
 let appStateSubscription: { remove: () => void } | null = null;
+// 접근권한 사전 고지를 확인하기 전에는 OS 권한 대화상자를 띄우지 않는다(정보통신망법
+// 제22조의2 / 원스토어 반려 사유 1번). 확인되는 순간을 알아야 그때 GPS를 시작할 수 있는데,
+// 고지 화면은 React 트리에 있고 이 스토어는 모듈 스코프라 렌더로는 이어지지 않는다 —
+// AppState와 같은 이유·같은 방식으로 첫 구독자가 생길 때 한 번만 등록한다.
+let noticeSubscription: (() => void) | null = null;
+function ensurePermissionNoticeListener(): void {
+  if (noticeSubscription) return;
+  noticeSubscription = subscribeToPermissionNotice(() => {
+    // AppState 복구 경로와 같은 판단이다 — 지금 구독자가 없다면 다음 subscribe()가 어차피
+    // 시작하므로, 여기서 미리 권한을 물어 고지 직후 빈 화면에 팝업을 띄우지 않는다.
+    if (listeners.size > 0) void start();
+  });
+}
+
 function ensureAppStateListener(): void {
   if (appStateSubscription) return;
   appStateSubscription = AppState.addEventListener('change', (next) => {
-    if (next !== 'active' || !permissionDenied) return;
-    permissionDenied = false;
-    // 플래그만 풀고 끝내면 아무도 다시 시도하지 않는다(PR #54 2차 리뷰 지적 3번) — start()의
-    // 유일한 호출부는 subscribe()인데, LocationBroadcaster처럼 구독자가 세션 내내 상주하면
-    // 구독자 수가 0에서 1로 늘어나는 순간 자체가 다시 오지 않아 subscribe()가 다시 불릴 일이
-    // 없다. "설정에서 권한을 켜고 돌아온다"는 유일한 복구 신호이므로 지금 구독자가 있다면
-    // 여기서 직접 재시도한다 — 지금 아무도 구독하고 있지 않다면 다음 구독자의 subscribe()가
-    // 어차피 새로 시작하므로 여기서 미리 부를 필요가 없다(불필요한 권한 요청 중복 방지).
-    if (listeners.size > 0) void start();
+    if (next === 'background') {
+      if (requestingPermission) return;
+      locationGeneration += 1;
+      subscription?.remove();
+      subscription = null;
+      // error는 남겨둔다 — 권한을 거부한 이용자가 포그라운드로 돌아올 때마다 이미 떠 있던
+      // "위치 권한이 필요합니다"가 로딩으로 덮여 깜빡이지 않도록.
+      setState({ coords: null, error: state.error, loading: true });
+      return;
+    }
+    // 'inactive'에는 아무것도 하지 않는다 — iOS가 제어센터·알림 배너·앱 스위처·전화 수신·
+    // 시스템 대화상자처럼 잠깐 가려질 때마다 쏘는 상태다. 여기서 watcher를 해제하면 그때마다
+    // 현재위치 마커가 사라지고(coords: null) 복귀할 때 권한 확인부터 다시 돈다.
+    if (next !== 'active') return;
+    if (listeners.size > 0) {
+      if (starting) resumePending = true;
+      else void start();
+    }
   });
 }
 
@@ -60,26 +98,62 @@ function setState(next: LocationState): void {
   listeners.forEach((notify) => notify());
 }
 
-async function start(): Promise<void> {
-  if (permissionDenied) {
-    // API를 다시 부르진 않지만(리뷰 지적 13번), 마지막 구독자가 나갔다 들어오는 사이
-    // state가 초기화됐을 수 있다(리뷰 지적 12번) — 이미 아는 결과를 다시 반영해줘야
-    // 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
-    setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
-    return;
-  }
-  if (starting || subscription) return;
-  starting = true;
+/**
+ * 아직 묻지 않았다면 묻고, 이미 거부된 뒤라면 대화상자 없이 현재 상태만 읽는다.
+ * 후자가 이용자가 OS 설정에서 권한을 바꾸고 돌아오는 복구 경로를 살려두면서도 포그라운드
+ * 복귀마다 시스템 팝업을 다시 띄우지 않는 유일한 방법이다(원스토어 반려 사유 1번).
+ */
+async function resolvePermissionStatus(): Promise<Location.PermissionStatus> {
+  const permission = await Location.getForegroundPermissionsAsync();
+  const explicit = explicitPermissionRequest;
+  explicitPermissionRequest = false;
+  if (permission.status === 'granted') return permission.status;
+  if (!explicit && (permission.status !== 'undetermined' || permissionDenied)) return permission.status;
+  requestingPermission = true;
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      permissionDenied = true;
-      setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
+    return status;
+  } finally {
+    requestingPermission = false;
+  }
+}
+
+async function start(): Promise<void> {
+  if (starting || subscription || listeners.size === 0 || AppState.currentState !== 'active') return;
+  starting = true;
+  const generation = locationGeneration;
+  const isCurrent = () =>
+    generation === locationGeneration && listeners.size > 0 && AppState.currentState === 'active';
+  try {
+    // 고지 확인 전에는 로딩 상태로 멈춰 선다. 여기서 에러로 떨어뜨리면 지도 화면이
+    // "위치 권한이 필요합니다"를 고지문 뒤에 미리 띄우게 된다 — 아직 묻지도 않은 권한이다.
+    if (!(await isPermissionNoticeAcknowledged())) {
+      setState({ coords: null, error: null, loading: true });
       return;
     }
+    if (!isCurrent()) return;
+    const status = await resolvePermissionStatus();
+    // 권한 결과는 generation이 아니라 앱 전역의 사실이므로 staleness 체크보다 **먼저** 기록한다.
+    // 순서를 뒤집으면, 권한 팝업 때문에 generation이 밀린 경우 거부 사실이 유실되고 아래
+    // finally의 재시작이 거부 직후 팝업을 한 번 더 띄운다(원스토어 반려 사유 1번).
+    permissionDenied = status !== 'granted';
+    if (permissionDenied) {
+      // 마지막 구독자가 나갔다 들어오는 사이 state가 초기화됐을 수 있다(리뷰 지적 12번) —
+      // 이미 아는 결과를 다시 반영해줘야 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
+      if (isCurrent()) setState({ coords: null, error: '위치 권한이 필요합니다', errorKind: 'permission', loading: false });
+      return;
+    }
+    if (!isCurrent()) return;
+    if (!(await Location.hasServicesEnabledAsync())) {
+      if (isCurrent()) setState({ coords: null, error: '위치 서비스가 꺼져 있습니다', errorKind: 'services', loading: false });
+      return;
+    }
+    if (!isCurrent()) return;
+    setState({ coords: null, error: null, loading: true });
     const sub = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
       (loc) => {
+        if (!isCurrent()) return;
         setState({
           coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
           error: null,
@@ -88,26 +162,33 @@ async function start(): Promise<void> {
       },
     );
     // 권한/구독을 기다리는 사이 마지막 구독자가 떠났으면 즉시 정리한다.
-    if (listeners.size === 0) {
+    if (!isCurrent()) {
       sub.remove();
       return;
     }
     subscription = sub;
   } catch (e) {
+    if (!isCurrent()) return;
     const message = e instanceof Error ? e.message : '위치 정보를 가져올 수 없습니다';
-    setState({ coords: null, error: message, loading: false });
+    setState({ coords: null, error: message, errorKind: 'unavailable', loading: false });
   } finally {
     starting = false;
+    const shouldResume = resumePending;
+    resumePending = false;
+    // 비동기 시작 중 중지·복귀한 경우 이전 요청을 버리고 새 구독을 시작한다.
+    if (shouldResume || generation !== locationGeneration) void start();
   }
 }
 
 function subscribe(onStoreChange: () => void): () => void {
+  ensurePermissionNoticeListener();
   ensureAppStateListener();
   listeners.add(onStoreChange);
   void start();
   return () => {
     listeners.delete(onStoreChange);
     if (listeners.size === 0) {
+      locationGeneration += 1;
       subscription?.remove();
       subscription = null;
       // state는 그대로 두면 안 된다 — subscription만 비우면, 로그아웃 후 재로그인처럼
@@ -125,6 +206,21 @@ function getSnapshot(): LocationState {
   return state;
 }
 
-export function useLocation(): LocationState {
-  return useSyncExternalStore(subscribe, getSnapshot);
+export async function recoverLocation(): Promise<void> {
+  if (starting || subscription || AppState.currentState !== 'active') return;
+  if (!(await isPermissionNoticeAcknowledged())) return;
+  if (state.errorKind === 'permission') {
+    const permission = await Location.getForegroundPermissionsAsync();
+    if (permission.status !== 'granted' && !permission.canAskAgain) {
+      await Linking.openSettings();
+      return;
+    }
+    explicitPermissionRequest = permission.status !== 'granted';
+  }
+  await start();
+}
+
+export function useLocation() {
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+  return { ...snapshot, recover: recoverLocation };
 }
