@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { AppState } from 'react-native';
 import { useAuth } from '@/hooks/use-auth';
 import { useLocation } from '@/hooks/use-location';
 import { useSocket } from '@/providers/SocketProvider';
@@ -22,7 +23,7 @@ function LocationBroadcasterInner() {
     // 이미 지나온 좌표로 조우 판정이 난다 — 연결됐을 때만 보내고, 끊겨 있었다면
     // 재연결 시점에 (그때의 최신 좌표로 다시 실행되는) 이 effect가 보낸다.
     const send = () => {
-      if (socket.connected) socket.emit('location:update', payload);
+      if (AppState.currentState === 'active' && socket.connected) socket.emit('location:update', payload);
     };
 
     send();

@@ -5,6 +5,7 @@ import { BusanMapView, BusanMapViewHandle } from '@/components/map/BusanMapView'
 import { MapHUD } from '@/components/map/MapHUD';
 import { OutOfBoundsBanner } from '@/components/map/OutOfBoundsBanner';
 import { SpotsErrorBanner } from '@/components/map/SpotsErrorBanner';
+import { LocationStatusBanner } from '@/components/map/LocationStatusBanner';
 import { LocateMeButton } from '@/components/map/LocateMeButton';
 import { BrandColors } from '@/constants/theme';
 import { isWithinBusanBounds } from '@/constants/busan';
@@ -22,7 +23,7 @@ export default function MapScreen() {
   } = useQuery({ queryKey: queryKeys.spots.busan, queryFn: fetchBusanSpots });
   // 좌표를 서버로 보내는 일은 앱 루트의 LocationBroadcaster가 전담한다 — 지도 화면을
   // 벗어나 있어도 계속 보내야 서버가 나를 접속 중으로 보고 결투 알림을 실시간 전달한다.
-  const { coords } = useLocation();
+  const { coords, error, errorKind, loading, recover } = useLocation();
 
   // 이번 주 수도는 주 1회만 바뀌는 값이라 넉넉한 staleTime으로 재조회를 줄인다.
   // MapHUD/DistrictPolygons가 store를 직접 구독하므로 여기서는 받아서 채우기만 한다.
@@ -51,6 +52,7 @@ export default function MapScreen() {
     <View style={styles.container}>
       <BusanMapView ref={mapRef} style={StyleSheet.absoluteFill} spots={spots} coords={coords} />
       <MapHUD />
+      <LocationStatusBanner error={error} errorKind={errorKind} loading={loading} onRecover={recover} />
       <LocateMeButton onPress={() => coords && mapRef.current?.panTo(coords)} disabled={!coords} />
       {isOutsideBusan && <OutOfBoundsBanner />}
       {isSpotsError && <SpotsErrorBanner onPress={() => refetchSpots()} />}
