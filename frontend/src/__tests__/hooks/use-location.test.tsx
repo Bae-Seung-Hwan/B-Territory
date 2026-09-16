@@ -293,6 +293,33 @@ describe('useLocation', () => {
     },
   );
 
+  it.each(['granted', 'denied'])('권한 처리 중 복귀한 경우 %s 결과를 반영한다', async (status) => {
+    let resolvePermission!: (value: { status: string }) => void;
+    mockedRequestPermission.mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePermission = resolve;
+    }));
+    mockedRequestPermission.mockResolvedValue({ status });
+    mockedGetPermission.mockResolvedValue({ status });
+    mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
+    const hook = await renderHook(() => useLocation());
+    await waitFor(() => expect(mockedRequestPermission).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      mockAppState.currentState = 'background';
+      mockAppState.listener?.('background');
+      resolvePermission({ status });
+      await Promise.resolve();
+      await Promise.resolve();
+      mockAppState.currentState = 'active';
+      mockAppState.listener?.('active');
+    });
+    if (status === 'granted') {
+      await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalled());
+    } else {
+      await waitFor(() => expect(hook.result.current.error).toBe('위치 권한이 필요합니다'));
+    }
+    await hook.unmount();
+  });
+
   it(
     '마지막 구독자가 사라지면 좌표 상태도 초기화한다 — 그러지 않으면 다음 구독자(재로그인한 ' +
       '다른 사용자 등)가 새 위치가 잡히기 전까지 이전 좌표를 그대로 본다(PR #54 리뷰 지적 12번)',
@@ -305,6 +332,7 @@ describe('useLocation', () => {
         return Promise.resolve({ remove: jest.fn() });
       });
 
+      mockedGetPermission.mockResolvedValue({ status: 'granted' });
       const first = await renderHook(() => useLocation());
       await waitFor(() => expect(mockedWatchPosition).toHaveBeenCalledTimes(1));
       await act(async () => onLocation?.({ coords: { latitude: 1, longitude: 2 } }));

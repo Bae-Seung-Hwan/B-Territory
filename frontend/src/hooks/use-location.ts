@@ -34,6 +34,7 @@ let state: LocationState = { coords: null, error: null, loading: true };
 const listeners = new Set<() => void>();
 let subscription: Location.LocationSubscription | null = null;
 let starting = false;
+let resumePending = false;
 let locationGeneration = 0;
 // 한 번 거부되면 소비자가 새로 마운트될 때마다(화면 이동 등) requestForegroundPermissionsAsync를
 // 다시 호출하지 않는다(PR #54 리뷰 지적 13번) — subscription/starting 가드만으로는 거부 경로에서
@@ -83,7 +84,10 @@ function ensureAppStateListener(): void {
     // 시스템 대화상자처럼 잠깐 가려질 때마다 쏘는 상태다. 여기서 watcher를 해제하면 그때마다
     // 현재위치 마커가 사라지고(coords: null) 복귀할 때 권한 확인부터 다시 돈다.
     if (next !== 'active') return;
-    if (listeners.size > 0) void start();
+    if (listeners.size > 0) {
+      if (starting) resumePending = true;
+      else void start();
+    }
   });
 }
 
@@ -160,8 +164,10 @@ async function start(): Promise<void> {
     setState({ coords: null, error: message, loading: false });
   } finally {
     starting = false;
+    const shouldResume = resumePending;
+    resumePending = false;
     // 비동기 시작 중 중지·복귀한 경우 이전 요청을 버리고 새 구독을 시작한다.
-    if (generation !== locationGeneration) void start();
+    if (shouldResume || generation !== locationGeneration) void start();
   }
 }
 
