@@ -191,6 +191,13 @@ export const ko = {
     },
   },
   map: {
+    locationLoading: '위치를 확인하고 있습니다…',
+    locationPermission: '위치 권한이 꺼져 있습니다.',
+    locationServices: '기기의 위치 서비스를 켜 주세요.',
+    locationUnavailable: '위치를 가져오지 못했습니다.',
+    locationAllow: '권한 허용 / 설정',
+    locationRetry: '다시 시도',
+
     hud: {
       topTeam: '1위 팀',
       capitalDistrict: '이번 주 수도',

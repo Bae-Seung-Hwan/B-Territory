@@ -189,6 +189,13 @@ export const en: Translations = {
     },
   },
   map: {
+    locationLoading: 'Finding your location…',
+    locationPermission: 'Location permission is disabled.',
+    locationServices: 'Turn on your device’s location services.',
+    locationUnavailable: 'Unable to get your location.',
+    locationAllow: 'Allow permission / Settings',
+    locationRetry: 'Try again',
+
     hud: {
       topTeam: 'Top Team',
       capitalDistrict: "This Week's Capital",

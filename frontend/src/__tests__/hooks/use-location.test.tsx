@@ -1,9 +1,11 @@
 import { renderHook, waitFor, act } from '@testing-library/react-native';
+import { Linking } from 'react-native';
 import * as Location from 'expo-location';
 import { useLocation } from '@/hooks/use-location';
 
 jest.mock('expo-location', () => ({
   Accuracy: { High: 4 },
+  hasServicesEnabledAsync: jest.fn(async () => true),
   requestForegroundPermissionsAsync: jest.fn(),
   // 거부 이후의 재확인은 대화상자를 띄우지 않는 이쪽으로만 한다 — 두 목을 따로 두는 것이
   // "팝업이 다시 떴는지"를 테스트가 구분할 수 있는 유일한 방법이다.
@@ -335,6 +337,39 @@ describe('useLocation', () => {
     } else {
       await waitFor(() => expect(hook.result.current.error).toBe('위치 권한이 필요합니다'));
     }
+    await hook.unmount();
+  });
+
+  it('권한 거부 후 사용자가 선택하면 재요청하고, 재요청 불가 시 설정을 연다', async () => {
+    mockedGetPermission.mockResolvedValue({ status: 'denied', canAskAgain: true });
+    const hook = await renderHook(() => useLocation());
+    await waitFor(() => expect(hook.result.current.errorKind).toBe('permission'));
+    expect(mockedRequestPermission).not.toHaveBeenCalled();
+    mockedRequestPermission.mockResolvedValue({ status: 'denied' });
+    await act(async () => { await hook.result.current.recover(); });
+    expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
+    const settings = jest.spyOn(Linking, 'openSettings').mockResolvedValue();
+    mockedGetPermission.mockResolvedValue({ status: 'denied', canAskAgain: false });
+    await act(async () => { await hook.result.current.recover(); });
+    expect(settings).toHaveBeenCalledTimes(1);
+    expect(mockedRequestPermission).toHaveBeenCalledTimes(1);
+    settings.mockRestore();
+    await hook.unmount();
+  });
+
+  it('위치 서비스 중지와 조회 실패를 구분하고 재시도한다', async () => {
+    mockedGetPermission.mockResolvedValue({ status: 'granted' });
+    const services = Location.hasServicesEnabledAsync as jest.Mock;
+    services.mockResolvedValue(false);
+    const hook = await renderHook(() => useLocation());
+    await waitFor(() => expect(hook.result.current.errorKind).toBe('services'));
+    services.mockResolvedValue(true);
+    mockedWatchPosition.mockRejectedValueOnce(new Error('provider failed'));
+    await act(async () => { await hook.result.current.recover(); });
+    expect(hook.result.current.errorKind).toBe('unavailable');
+    mockedWatchPosition.mockResolvedValue({ remove: jest.fn() });
+    await act(async () => { await hook.result.current.recover(); });
+    expect(hook.result.current.error).toBeNull();
     await hook.unmount();
   });
 

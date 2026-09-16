@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Linking } from 'react-native';
 import * as Location from 'expo-location';
 import {
   isPermissionNoticeAcknowledged,
@@ -15,6 +15,7 @@ interface LocationState {
   coords: Coords | null;
   error: string | null;
   loading: boolean;
+  errorKind?: 'permission' | 'services' | 'unavailable';
 }
 
 /**
@@ -48,6 +49,7 @@ let permissionDenied = false;
 // AppState가 'background'를 쏜다 — 이용자가 앱을 떠난 것이 아니므로 그 사이에는 구독을 접지도,
 // generation을 밀지도 않는다. 밀면 await가 풀린 뒤의 권한 결과가 전부 stale로 버려진다.
 let requestingPermission = false;
+let explicitPermissionRequest = false;
 // 모듈이 처음 로드될 때가 아니라 첫 구독자가 생길 때 딱 한 번만 등록한다(subscribe() 참고) —
 // GPS watcher를 지연 시작하는 이 파일의 기존 철학과 같은 이유일 뿐 아니라, 모듈 로드 시점에
 // 곧바로 네이티브 이벤트 이미터를 건드리면 테스트에서 이 모듈을 import하는 순간 앱스테이트
@@ -103,8 +105,10 @@ function setState(next: LocationState): void {
  */
 async function resolvePermissionStatus(): Promise<Location.PermissionStatus> {
   const permission = await Location.getForegroundPermissionsAsync();
-  if (permission.status !== 'undetermined') return permission.status;
-  if (permissionDenied) return permission.status;
+  const explicit = explicitPermissionRequest;
+  explicitPermissionRequest = false;
+  if (permission.status === 'granted') return permission.status;
+  if (!explicit && (permission.status !== 'undetermined' || permissionDenied)) return permission.status;
   requestingPermission = true;
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -136,10 +140,16 @@ async function start(): Promise<void> {
     if (permissionDenied) {
       // 마지막 구독자가 나갔다 들어오는 사이 state가 초기화됐을 수 있다(리뷰 지적 12번) —
       // 이미 아는 결과를 다시 반영해줘야 새 구독자가 "영원히 로딩 중"에 갇히지 않는다.
-      if (isCurrent()) setState({ coords: null, error: '위치 권한이 필요합니다', loading: false });
+      if (isCurrent()) setState({ coords: null, error: '위치 권한이 필요합니다', errorKind: 'permission', loading: false });
       return;
     }
     if (!isCurrent()) return;
+    if (!(await Location.hasServicesEnabledAsync())) {
+      if (isCurrent()) setState({ coords: null, error: '위치 서비스가 꺼져 있습니다', errorKind: 'services', loading: false });
+      return;
+    }
+    if (!isCurrent()) return;
+    setState({ coords: null, error: null, loading: true });
     const sub = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
       (loc) => {
@@ -160,7 +170,7 @@ async function start(): Promise<void> {
   } catch (e) {
     if (!isCurrent()) return;
     const message = e instanceof Error ? e.message : '위치 정보를 가져올 수 없습니다';
-    setState({ coords: null, error: message, loading: false });
+    setState({ coords: null, error: message, errorKind: 'unavailable', loading: false });
   } finally {
     starting = false;
     const shouldResume = resumePending;
@@ -196,6 +206,21 @@ function getSnapshot(): LocationState {
   return state;
 }
 
-export function useLocation(): LocationState {
-  return useSyncExternalStore(subscribe, getSnapshot);
+export async function recoverLocation(): Promise<void> {
+  if (starting || subscription || AppState.currentState !== 'active') return;
+  if (!(await isPermissionNoticeAcknowledged())) return;
+  if (state.errorKind === 'permission') {
+    const permission = await Location.getForegroundPermissionsAsync();
+    if (permission.status !== 'granted' && !permission.canAskAgain) {
+      await Linking.openSettings();
+      return;
+    }
+    explicitPermissionRequest = permission.status !== 'granted';
+  }
+  await start();
+}
+
+export function useLocation() {
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+  return { ...snapshot, recover: recoverLocation };
 }
