@@ -9,7 +9,7 @@ import { useBattleStore } from '@/store/useBattleStore';
 
 jest.mock('socket.io-client', () => ({ io: jest.fn() }));
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
-jest.mock('@/lib/firebase', () => ({ auth: { currentUser: { getIdToken: jest.fn() } } }));
+jest.mock('@/lib/firebase', () => ({ auth: { currentUser: null } }));
 
 const mockedIo = io as unknown as jest.Mock;
 const mockedUseAuth = useAuth as jest.Mock;
@@ -27,6 +27,7 @@ function createFakeSocket() {
 
 const initialOverlayState = useOverlayStore.getState();
 const initialBattleState = useBattleStore.getState();
+const firebaseUser = { getIdToken: jest.fn().mockResolvedValue('token') };
 
 describe('SocketProvider', () => {
   let fakeSocket: ReturnType<typeof createFakeSocket>;
@@ -38,7 +39,7 @@ describe('SocketProvider', () => {
     useBattleStore.setState(initialBattleState, true);
     fakeSocket = createFakeSocket();
     mockedIo.mockReturnValue(fakeSocket);
-    mockedUseAuth.mockReturnValue({ isAuthenticated: true, profile: { id: 'me' } });
+    mockedUseAuth.mockReturnValue({ isAuthenticated: true, profile: { id: 'me' }, firebaseUser });
     alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     await render(
       <SocketProvider>
@@ -49,6 +50,20 @@ describe('SocketProvider', () => {
 
   afterEach(() => {
     alertSpy.mockRestore();
+  });
+
+  it('AuthProvider가 확정한 firebaseUser의 ID 토큰을 핸드셰이크에 넣는다', async () => {
+    const callback = jest.fn();
+    expect(mockedIo.mock.calls[0][0]).not.toContain('//realtime');
+    const options = mockedIo.mock.calls[0][1];
+
+    await act(async () => {
+      options.auth(callback);
+      await Promise.resolve();
+    });
+
+    expect(firebaseUser.getIdToken).toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith({ token: 'token' });
   });
 
   function exceptionHandler(): (payload: { code: string; message: string }) => void {
@@ -68,6 +83,10 @@ describe('SocketProvider', () => {
       fromUserId: string;
       fromNickname: string | null;
     }) => void;
+  }
+
+  function duelAcceptedHandler(): (payload: { duelId: number }) => void {
+    return fakeSocket.__handlers.get('duel:accepted') as (payload: { duelId: number }) => void;
   }
 
   it(
@@ -192,6 +211,29 @@ describe('SocketProvider', () => {
 
     expect(useOverlayStore.getState().showDuelRequest).toBe(true);
     expect(useOverlayStore.getState().duelId).toBe(1);
+  });
+
+  it('duel:request ack보다 수락 이벤트가 먼저 와도 신청자의 미니게임을 연다', async () => {
+    useBattleStore.getState().upsertEnemy({
+      userId: 'enemy-1',
+      nickname: '상대',
+      team: 'JP',
+    });
+    useBattleStore.getState().setPendingChallengeTargetId('enemy-1');
+
+    await act(async () => {
+      duelAcceptedHandler()({ duelId: 42 });
+    });
+
+    expect(useOverlayStore.getState()).toMatchObject({
+      duelId: 42,
+      duelRole: 'challenger',
+      showDuelPending: false,
+      showMiniGame: true,
+    });
+    expect(useOverlayStore.getState().enemyInfo).toMatchObject({ userId: 'enemy-1' });
+    expect(useBattleStore.getState().pendingChallengeTargetId).toBeNull();
+    expect(useBattleStore.getState().enemiesById['enemy-1']).toBeUndefined();
   });
 
   it(

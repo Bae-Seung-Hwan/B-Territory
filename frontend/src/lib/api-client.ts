@@ -10,6 +10,9 @@ declare module 'axios' {
 // API 주소의 단일 소스. 예전엔 이 식이 api/spots.ts·api/claims.ts에도 복사돼 있었고,
 // 그쪽에만 로컬 폴백이 있어 env를 빠뜨렸을 때 인증 요청만 조용히 실패하는 상태였다.
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+// 환경변수가 슬래시로 끝나도 Socket.IO namespace가 `//chat`처럼 만들어지지 않게 한다.
+// Socket.IO는 이를 `/chat`과 다른 namespace로 취급해 서버가 "Invalid namespace"로 거부한다.
+export const SOCKET_BASE_URL = API_BASE_URL.replace(/\/+$/, '');
 
 export const apiClient = create({
   baseURL: API_BASE_URL,
