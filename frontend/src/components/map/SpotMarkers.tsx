@@ -1,7 +1,6 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Callout, Marker, type MapMarker, type Region } from 'react-native-maps';
-import Svg, { Path, Circle, Text as SvgText } from 'react-native-svg';
 import type { Spot } from '@/api/spots';
 import { categoryKey, getCategoryMeta } from '@/constants/mapCategories';
 import { BrandColors } from '@/constants/theme';
@@ -61,10 +60,9 @@ interface SpotMarkerProps {
   onSelect: SpotHandler;
 }
 
-// 카테고리별 색+이모지 핀을 react-native-svg로 그린다(카카오 버전의 SVG data-URI MarkerImage와
-// 동일한 모양). 500개 규모라 초기 레이아웃 이후엔 tracksViewChanges를 꺼서 리렌더 비용을 없앤다.
-// memo로 감싸는 이유: 팬/GPS 갱신마다 부모가 리렌더되는데, 그때마다 마커 수십 개의 SVG 트리를
-// 다시 만들 이유가 없다. coordinate는 부모가 미리 만들어 identity를 고정해준다(SpotPoint).
+// Android Google Maps는 Marker 자식으로 둔 SVG를 비트맵으로 캡처하는 과정에서 렌더링을 잃을 수
+// 있다. 그러면 기본 빨간 핀으로 되돌아가거나 Marker가 사라진다. 카테고리 색은 SDK가 직접
+// 그리는 pinColor로 전달해, 자식 뷰 스냅샷에 의존하지 않는다.
 const SpotMarker = memo(function SpotMarker({
   spot,
   coordinate,
@@ -72,7 +70,6 @@ const SpotMarker = memo(function SpotMarker({
   onPress,
   onSelect,
 }: SpotMarkerProps) {
-  const [tracksViewChanges, setTracksViewChanges] = useState(true);
   const markerRef = useRef<MapMarker>(null);
   const meta = getCategoryMeta(spot.contenttypeid);
   const claimOpenSeq = claim?.openSeq ?? 0;
@@ -106,8 +103,6 @@ const SpotMarker = memo(function SpotMarker({
     return () => clearTimeout(timer);
   }, [claimOpenSeq]);
 
-  const handleLayout = useCallback(() => setTracksViewChanges(false), []);
-
   const handlePress = useCallback(() => {
     // 같은 마커를 다시 탭하는 경우, 이 시점엔 직전 조회 결과로 만들어진 <Callout>이 아직
     // 마운트돼 있어서 네이티브가 그걸로 말풍선을 연다. 그런데 곧바로 재조회가 시작되면
@@ -131,21 +126,9 @@ const SpotMarker = memo(function SpotMarker({
       // title/description(네이티브 기본 말풍선)을 쓰지 않는 이유: 기본 말풍선의 snippet은
       // 여러 줄을 제대로 렌더링하지 않아 주소 아래에 점령 현황을 붙일 수 없다. 내용을 직접
       // 그리는 <Callout>으로 대체한다(tooltip=false라 말풍선 테두리는 기본 모양 그대로 나온다).
-      tracksViewChanges={tracksViewChanges}
-      onLayout={handleLayout}
+      pinColor={meta.color}
       onPress={handlePress}
     >
-      <Svg width={32} height={40} viewBox="0 0 32 40">
-        <Path
-          d="M16 0C7.163 0 0 7.163 0 16c0 11.5 16 24 16 24s16-12.5 16-24C32 7.163 24.837 0 16 0z"
-          fill={meta.color}
-        />
-        <Circle cx={16} cy={15} r={10.5} fill="#fff" />
-        <SvgText x={16} y={20} fontSize={13} textAnchor="middle">
-          {meta.emoji}
-        </SvgText>
-      </Svg>
-
       {claim && (
         <SpotCallout spot={spot} claimText={claim.text} color={meta.color} onPress={handleCalloutPress} />
       )}
