@@ -424,7 +424,9 @@ export class DuelsService {
   /**
    * @param requestId 클라이언트가 신청마다 만든 uuid(선택). 같은 신청자가 같은 값으로 다시
    *   보내면 새 결투를 만들지 않고 기존 결투를 **현재 상태 그대로** 돌려준다(created=false).
-   *   이때 호출자는 만료 타이머·초대 전송을 다시 걸면 안 된다 — 첫 요청이 이미 걸었다.
+   *   이때 호출자는 만료 타이머·초대 전송을 **다시 걸어야 한다** — 첫 요청이 행을 커밋한 뒤
+   *   그 등록 전에 중단됐을 수 있고, 여기서는 그 사실을 알 수 없다. 두 등록 모두 멱등이다
+   *   (realtime.gateway.ts#rearmDuelRequest).
    */
   async requestDuel(
     challenger: { id: string; team: string },
@@ -557,6 +559,9 @@ export class DuelsService {
     // advisory lock으로 확인과 저장을 직렬화한다. 부분 유니크 인덱스는 한 유저가
     // challenger와 opponent로 엇갈려 등장하는 동시 신청을 막지 못해 이 방식을 쓴다.
     const participantIds = [challenger.id, targetUserId];
+    // 커밋 전에 잡은 페어 락의 소유권 토큰. 커밋이 실패하면(행은 없는데 락만 남는다) 이
+    // 값으로 CAS 해제한다. 성공 경로에서는 결투가 끝날 때 respondDuel/resolveDuel이 푼다.
+    let lockedDuelId: number | null = null;
     const outcome = await this.dataSource
       .transaction(async (manager) => {
         // 트랜잭션 종료 시 자동 해제. id 정렬로 락 획득 순서를 고정해 교차 신청 간 데드락 방지.
@@ -596,7 +601,7 @@ export class DuelsService {
         }
 
         // 락보다 DB row를 먼저 만들어, row의 id를 락의 소유권 토큰으로 사용한다.
-        // (락 획득 실패 시 방금 만든 row만 지우면 되므로 롤백이 단순해진다)
+        // (id는 INSERT 시점에 정해지므로 커밋 전에도 토큰으로 쓸 수 있다)
         const created = await manager.save(
           manager.create(Duel, {
             challengerId: challenger.id,
@@ -605,6 +610,31 @@ export class DuelsService {
             requestId: requestId ?? null,
           }),
         );
+
+        // 페어 락을 **커밋 전에** 잡는다. 커밋 뒤에 잡고 실패 시 행을 지우는 방식이면,
+        // 커밋~삭제 사이에 같은 requestId의 재시도가 그 행을 보고 성공 ack를 받은 뒤 결투가
+        // 사라진다(재시도 클라이언트는 존재하지 않는 결투를 기다리게 된다). 여기서 던지면
+        // 트랜잭션이 통째로 롤백돼 **커밋된 행이 아예 없으므로** 그 창이 생기지 않는다 —
+        // "커밋된 PENDING 행이 있다 = 이 쌍의 페어 락도 잡혀 있다"가 불변식이 된다.
+        //
+        // 대가는 advisory lock을 쥔 채 Redis 왕복 한 번(~1ms)을 기다리는 것이다. Redis가
+        // 느리면 그만큼 두 참가자의 다른 신청이 직렬화될 뿐이라(다른 유저 쌍은 다른 키),
+        // 살아 있는 결투가 지워지는 쪽보다 훨씬 가볍다.
+        const acquired = await this.redis.tryAcquireLock(
+          this.lockKey(challenger.id, targetUserId),
+          DUEL_REQUEST_TTL,
+          String(created.id),
+        );
+        if (!acquired) {
+          throw new ConflictException(
+            errBody(
+              ErrorCode.DUEL_ALREADY_PENDING,
+              '이미 진행 중인 결투 요청이 있습니다.',
+            ),
+          );
+        }
+        lockedDuelId = created.id;
+
         return { duel: created, created: true };
       })
       // 위 사전 검문(findById·getUserMeta·verifyProximity)은 전부 트랜잭션 밖이라, 그것들이
@@ -616,7 +646,22 @@ export class DuelsService {
       // 통째로 롤백되는 것이 맞다(부분 반영이 남지 않는다).
       // 이론상 challengerId 쪽 위반(신청자가 자기 계정을 동시에 지운 경우)도 같은 코드로
       // 오지만, 그때는 토큰이 이미 죽어 다음 요청부터 인증에서 막힌다.
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
+        // 락을 잡은 뒤 커밋이 깨진 경우다(락 획득 실패로 던졌다면 lockedDuelId는 비어 있다).
+        // 행이 없는 채로 남은 락은 그 쌍의 다음 신청을 TTL만큼 막으므로 토큰으로 되돌린다.
+        // 실패해도 삼킨다 — 30초 뒤 자연 만료되고, 그동안 이 쌍만 신청이 막힐 뿐이다.
+        if (lockedDuelId !== null) {
+          await this.redis
+            .releaseLock(
+              this.lockKey(challenger.id, targetUserId),
+              String(lockedDuelId),
+            )
+            .catch((releaseErr: unknown) => {
+              this.logger.warn(
+                `결투 생성 롤백 후 락 해제 실패 duelId=${lockedDuelId}: ${(releaseErr as Error).message}`,
+              );
+            });
+        }
         if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
         throw new NotFoundException(
           errBody(
@@ -626,9 +671,10 @@ export class DuelsService {
         );
       });
 
-    // 동시 재시도에 진 쪽이다. 락·보호막은 결투를 만든 요청이 처리하므로 여기서 건드리지
-    // 않는다 — 특히 락을 다시 잡으려 하면 이미 그 결투가 쥔 키라 실패하고, 아래 실패 경로가
-    // 살아 있는 결투를 지워버린다.
+    // 동시 재시도에 진 쪽이거나, ack가 유실된 뒤의 재시도다. 락·보호막은 결투를 만든 요청이
+    // 이미 처리했으므로 여기서 건드리지 않는다 — 락을 다시 잡으려 하면 그 결투가 쥔 키라
+    // 실패한다. 첫 요청이 만료 타이머·초대까지 걸었는지는 여기서 알 수 없어, 호출측이
+    // created=false를 보고 그 초기화를 멱등하게 다시 건다(realtime.gateway.ts#handleDuelRequest).
     if (!outcome.created) {
       return {
         duel: this.assertSameTarget(outcome.duel, targetUserId),
@@ -636,21 +682,6 @@ export class DuelsService {
       };
     }
     const { duel } = outcome;
-
-    const acquired = await this.redis.tryAcquireLock(
-      this.lockKey(challenger.id, targetUserId),
-      DUEL_REQUEST_TTL,
-      String(duel.id),
-    );
-    if (!acquired) {
-      await this.duelRepo.delete(duel.id);
-      throw new ConflictException(
-        errBody(
-          ErrorCode.DUEL_ALREADY_PENDING,
-          '이미 진행 중인 결투 요청이 있습니다.',
-        ),
-      );
-    }
 
     // 스스로 결투를 건 순간 자기 보호막은 걷힌다 — 보호막 뒤에 숨어 일방적으로 공격만
     // 하는 것을 막는 규칙이다. 신청이 **실제로 성립한 뒤에** 푼다: 사거리 밖·중복 신청
@@ -769,12 +800,25 @@ export class DuelsService {
    * shieldUntil과 같은 방식이다. 이미 지났으면 지금 시각을 돌려준다(음수 기한을 만들지 않는다).
    */
   private async pendingExpiresAt(duelId: number): Promise<string | null> {
+    const remainingMs = await this.pendingRemainingMs(duelId);
+    if (remainingMs === null) return null;
+    return new Date(Date.now() + remainingMs).toISOString();
+  }
+
+  /**
+   * 응답 기한까지 남은 시간(ms). 결투가 없으면 null, 이미 지났으면 0.
+   *
+   * 게이트웨이가 재시도에서 만료 타이머를 다시 걸 때 쓴다 — 기한은 결투가 만들어진 시각부터
+   * 세므로, 재시도 시점에 DUEL_REQUEST_TTL을 통째로 다시 주면 그만큼 만료가 밀린다.
+   * 계산을 DB 안에서 하는 이유는 pendingExpiresAt 주석의 타임존 함정과 같다.
+   */
+  async pendingRemainingMs(duelId: number): Promise<number | null> {
     const rows = await this.dataSource.query<{ remainingMs: number }[]>(
       'SELECT GREATEST(0, EXTRACT(EPOCH FROM ("requestedAt" + make_interval(secs => $2) - LOCALTIMESTAMP)) * 1000)::float8 AS "remainingMs" FROM duels WHERE id = $1',
       [duelId, DUEL_REQUEST_TTL],
     );
     if (rows.length === 0) return null;
-    return new Date(Date.now() + Number(rows[0].remainingMs)).toISOString();
+    return Number(rows[0].remainingMs);
   }
 
   /**
@@ -806,6 +850,21 @@ export class DuelsService {
         `결투 초대 전달 기록 실패 duelId=${duelId} — 이 건은 무응답으로 청구하지 않는다: ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * 이 결투의 초대가 이미 상대에게 전달된 것으로 기록됐는지.
+   *
+   * 재시도가 초대를 다시 보낼지 가르는 데만 쓴다 — 첫 요청이 이미 보냈다면 같은 초대를
+   * 한 번 더 띄우지 않는다. 결투가 없으면 false다: 그때는 전송 직전의 PENDING 확인
+   * (deliverDuelInvite)이 다시 걸러낸다.
+   */
+  async isInviteDelivered(duelId: number): Promise<boolean> {
+    const duel = await this.duelRepo.findOne({
+      select: { id: true, inviteDeliveredAt: true },
+      where: { id: duelId },
+    });
+    return duel?.inviteDeliveredAt != null;
   }
 
   async respondDuel(

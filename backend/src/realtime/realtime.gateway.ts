@@ -83,6 +83,13 @@ export class RealtimeGateway
 {
   private readonly logger = new Logger(RealtimeGateway.name);
 
+  /**
+   * 재시도가 이미 만료 타이머를 다시 걸어둔 결투. 소켓 이벤트에는 레이트 리밋이 없어, 같은
+   * requestId로 반복해 보내면 재시도마다 타이머와 초대가 쌓인다(각각은 가볍지만 30초 창
+   * 동안 누적된다). 결투당 한 번으로 묶고, 그 타이머가 발화할 때 비워 스스로 줄어들게 한다.
+   */
+  private readonly rearmedDuels = new Set<number>();
+
   // namespace를 지정한 게이트웨이에는 Server가 아닌 해당 Namespace 인스턴스가 주입된다.
   // (sockets Map으로 개별 소켓의 연결 상태를 확인하기 위해 정확한 타입을 쓴다)
   @WebSocketServer()
@@ -358,10 +365,18 @@ export class RealtimeGateway
       dto.requestId,
     );
 
-    // 같은 requestId의 재시도다. 타이머와 초대는 첫 요청이 이미 걸었으므로 다시 걸지 않고,
-    // 기존 결투의 **현재** 상태를 그대로 돌려준다 — 그 사이 수락됐다면 state: ACCEPTED다.
-    // 클라이언트는 revision으로 이미 반영한 상태보다 오래된 ack를 버린다.
+    // 같은 requestId의 재시도다. 기존 결투의 **현재** 상태를 그대로 돌려준다 — 그 사이
+    // 수락됐다면 state: ACCEPTED다. 클라이언트는 revision으로 이미 반영한 상태보다 오래된
+    // ack를 버린다.
+    //
+    // 첫 요청이 만료 타이머·초대까지 걸었는지는 알 수 없으므로(행 커밋과 이 등록은 서로 다른
+    // 단계다 — 그 사이에 프로세스가 죽으면 초기화되지 않은 PENDING 결투가 스윕까지 남는다),
+    // 여기서 둘 다 다시 건다. 두 등록 모두 멱등이라 첫 요청이 이미 걸어둔 정상 경로에서도
+    // 안전하다(rearmDuelRequest).
     if (!created) {
+      if (duel.status === DuelStatus.PENDING) {
+        await this.rearmDuelRequest(duel.id, user, dto.targetUserId);
+      }
       return { status: 'ok', ...duelStateFields(duel) };
     }
 
@@ -395,6 +410,60 @@ export class RealtimeGateway
 
     // ack에도 이벤트와 같은 상태 필드를 싣는다 — PENDING / revision 0.
     return { status: 'ok', ...duelStateFields(duel) };
+  }
+
+  /**
+   * 재시도가 받은 기존 PENDING 결투에 만료 타이머와 초대를 다시 건다.
+   *
+   * 필요한 이유: requestDuel은 행을 커밋한 뒤 반환하고, 만료 타이머·초대 등록은 그 **다음**
+   * 단계다. 첫 요청이 그 사이에 끊기면(프로세스 종료, 배포 중 재시작) 타이머도 초대도 없는
+   * PENDING 결투가 남아 스윕(최대 5분)까지 두 유저의 새 신청을 막는다. 재시도는 행이 있다는
+   * 사실만 볼 수 있어 그 상태를 구분하지 못하므로, 구분하는 대신 **항상 다시 건다**.
+   *
+   * 정상 경로(첫 요청이 이미 걸었고 ack만 유실된 경우)에서도 안전하도록 둘 다 멱등하다.
+   * - 타이머: expireDuel이 PENDING→EXPIRED CAS라 둘 중 하나만 이기고, 진 쪽은 알림 없이 끝난다.
+   *   기한은 결투 생성 시점부터 세므로 DUEL_REQUEST_TTL이 아니라 **남은 시간**으로 건다.
+   * - 초대: 이미 전달로 기록된 결투에는 보내지 않는다. 첫 요청의 emit이 아직 기록 전인 극히
+   *   좁은 창에서는 초대가 두 번 나갈 수 있지만, 같은 revision이라 클라이언트가 뒤엣것을
+   *   버린다(duel.entity.ts#revision).
+   *
+   * 재등록 실패는 삼킨다 — 재시도의 답(결투의 현재 상태)은 이미 확정돼 있어, 여기서 던지면
+   * 살아 있는 결투에 에러 ack가 나간다. 실패해도 스윕이 백스톱으로 남는다.
+   */
+  private async rearmDuelRequest(
+    duelId: number,
+    challenger: { id: string; nickname: string },
+    targetUserId: string,
+  ): Promise<void> {
+    // 표시는 첫 조회 **앞**에서 한다 — 한꺼번에 도착한 재시도들은 서로의 await 사이에
+    // 끼어들므로, 타이머를 건 뒤에 표시하면 그 무리가 전부 통과한다.
+    if (this.rearmedDuels.has(duelId)) return;
+    this.rearmedDuels.add(duelId);
+    let armed = false;
+    try {
+      const remainingMs = await this.duelsService.pendingRemainingMs(duelId);
+      // 조회 사이에 결투가 사라졌다(탈퇴 정리 등). 걸 타이머도, 보낼 초대도 없다.
+      if (remainingMs === null) return;
+
+      armed = true;
+      setTimeout(() => {
+        // 타이머가 발화하면 이 결투는 끝난다 — 표시를 지워 집합이 스스로 줄어들게 한다.
+        this.rearmedDuels.delete(duelId);
+        void this.expireAndNotify(duelId, challenger.id, targetUserId);
+      }, remainingMs);
+
+      if (await this.duelsService.isInviteDelivered(duelId)) return;
+      // 초대는 핸들러 반환 뒤로 미룬다 — 이유는 handleDuelRequest의 setImmediate 주석과 같다.
+      setImmediate(() => {
+        void this.deliverDuelInvite(duelId, challenger, targetUserId);
+      });
+    } catch (err) {
+      this.logger.error(`결투 재시도 재등록 실패 duelId=${duelId}`, err);
+    } finally {
+      // 타이머를 못 건 채로 끝났으면 표시를 지운다 — 남겨두면 지울 사람이 없어(발화할
+      // 타이머가 없다) 다음 재시도까지 영영 막힌다.
+      if (!armed) this.rearmedDuels.delete(duelId);
+    }
   }
 
   /**

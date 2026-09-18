@@ -296,14 +296,63 @@ describe('DuelsService', () => {
       );
     });
 
-    it('이미 진행 중인 요청이 있으면 거부하고 방금 만든 row를 삭제한다', async () => {
+    /**
+     * 락 실패를 트랜잭션 **안에서** 던져야 하는 이유: 커밋 뒤에 잡고 실패 시 행을 지우면,
+     * 커밋~삭제 사이에 같은 requestId의 재시도가 그 행을 보고 성공 ack를 받는다. 그 뒤 첫
+     * 요청이 행을 지우므로 재시도 클라이언트에는 존재하지 않는 결투의 성공 ack만 남는다.
+     * 여기서 던지면 롤백돼 **커밋된 행이 아예 없어** 그 창이 생기지 않는다.
+     */
+    it('락을 못 잡으면 트랜잭션 안에서 거부해 커밋된 행을 남기지 않는다', async () => {
       redis.tryAcquireLock.mockResolvedValue(false);
+      let threwInsideTransaction = false;
+      dataSource.transaction.mockImplementation(
+        async (cb: (manager: unknown) => unknown) => {
+          try {
+            return await cb(txManager);
+          } catch (err) {
+            threwInsideTransaction = true; // 실제 드라이버는 여기서 ROLLBACK한다
+            throw err;
+          }
+        },
+      );
 
       await expect(service.requestDuel(challenger, opponentId)).rejects.toThrow(
         ConflictException,
       );
+      expect(threwInsideTransaction).toBe(true);
+      // 커밋된 행이 없으므로 지울 것도 없다(보상 삭제 자체가 사라졌다).
       // eslint-disable-next-line @typescript-eslint/unbound-method -- overloaded Repository.delete confuses the rule on a jest mock
-      expect(duelRepo.delete).toHaveBeenCalledWith(1);
+      expect(duelRepo.delete).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 반대 방향의 실패다. 락은 잡혔는데 커밋이 깨지면 행 없이 락만 남아 그 쌍의 다음 신청이
+     * TTL만큼 막힌다 — 토큰으로 되돌린다(CAS라 그 사이 다른 결투가 잡은 락은 건드리지 않는다).
+     */
+    it('락을 잡은 뒤 커밋이 깨지면 그 락을 토큰으로 되돌린다', async () => {
+      const commitFailed = new Error('commit failed');
+      dataSource.transaction.mockImplementation(
+        async (cb: (manager: unknown) => unknown) => {
+          await cb(txManager);
+          throw commitFailed;
+        },
+      );
+
+      await expect(service.requestDuel(challenger, opponentId)).rejects.toBe(
+        commitFailed,
+      );
+      expect(redis.releaseLock).toHaveBeenCalledWith(expect.any(String), '1');
+    });
+
+    /** 락을 잡기 전에 깨진 트랜잭션에서는 되돌릴 락이 없다 — 남의 락을 건드리면 안 된다. */
+    it('락을 잡기 전에 트랜잭션이 깨지면 락을 건드리지 않는다', async () => {
+      const failed = new Error('insert failed');
+      txManager.save.mockRejectedValue(failed);
+
+      await expect(service.requestDuel(challenger, opponentId)).rejects.toBe(
+        failed,
+      );
+      expect(redis.releaseLock).not.toHaveBeenCalled();
     });
 
     it('정상 조건이면 PENDING 결투를 생성하고 결투 id를 락 토큰으로 사용한다', async () => {
