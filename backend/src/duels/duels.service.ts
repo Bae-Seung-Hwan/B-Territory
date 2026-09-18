@@ -177,7 +177,21 @@ export interface DuelSyncView extends DuelStateFields {
 }
 
 /** requestDuel의 결과. created=false면 같은 requestId의 재시도라 기존 결투를 돌려준 것이다. */
-export type DuelRequestResult = { duel: Duel; created: boolean };
+export type DuelRequestResult = {
+  duel: Duel;
+  created: boolean;
+  /**
+   * 응답 기한까지 남은 시간(ms) — 호출측이 만료 타이머를 거는 기준이다. PENDING이 아니거나
+   * 계산에 실패했으면 null.
+   *
+   * 결과에 실어 보내는 이유는 생성 경로와 재시도 경로가 **같은 기준**을 쓰게 하기 위해서다.
+   * 생성 경로가 반환 뒤에 DUEL_REQUEST_TTL 전체를 새로 걸면, 커밋 후처리(보호막 해제 등)가
+   * 지연된 만큼 타이머 기준이 DB의 requestedAt보다 늦어진다 — 그 사이 클라이언트는
+   * duel:sync의 expiresAt(requestedAt 기준)을 보고 이미 만료로 판단하는데 서버는 아직
+   * PENDING이라, 지난 기한의 수락이 성공한다.
+   */
+  remainingMs: number | null;
+};
 
 const ACTIVE_STATUSES = [DuelStatus.PENDING, DuelStatus.ACCEPTED];
 
@@ -442,10 +456,10 @@ export class DuelsService {
         where: { challengerId: challenger.id, requestId },
       });
       if (existing) {
-        return {
-          duel: this.assertSameTarget(existing, targetUserId),
-          created: false,
-        };
+        return this.withRemaining(
+          this.assertSameTarget(existing, targetUserId),
+          false,
+        );
       }
     }
 
@@ -676,10 +690,10 @@ export class DuelsService {
     // 실패한다. 첫 요청이 만료 타이머·초대까지 걸었는지는 여기서 알 수 없어, 호출측이
     // created=false를 보고 그 초기화를 멱등하게 다시 건다(realtime.gateway.ts#handleDuelRequest).
     if (!outcome.created) {
-      return {
-        duel: this.assertSameTarget(outcome.duel, targetUserId),
-        created: false,
-      };
+      return this.withRemaining(
+        this.assertSameTarget(outcome.duel, targetUserId),
+        false,
+      );
     }
     const { duel } = outcome;
 
@@ -702,7 +716,37 @@ export class DuelsService {
       );
     }
 
-    return { duel, created: true };
+    // 남은 시간은 보호막 해제까지 끝난 **여기서** 읽는다 — 커밋 후처리가 지연된 만큼
+    // 기한이 줄어든 것이 맞고, 호출측은 이 값을 그대로 타이머에 쓴다.
+    return this.withRemaining(duel, true);
+  }
+
+  /**
+   * requestDuel의 결과에 만료 타이머의 기준(남은 시간)을 붙인다.
+   *
+   * 조회가 실패해도 던지지 않는다 — 결투는 이미 만들어졌고, 여기서 던지면 신청자만 500을
+   * 받은 채 결투가 살아남는다. null이면 호출측이 DUEL_REQUEST_TTL로 대신 건다(기준이 조금
+   * 늦어질 뿐이고, 어긋난 만큼은 스윕이 정리한다).
+   */
+  private async withRemaining(
+    duel: Duel,
+    created: boolean,
+  ): Promise<DuelRequestResult> {
+    if (duel.status !== DuelStatus.PENDING) {
+      return { duel, created, remainingMs: null };
+    }
+    try {
+      return {
+        duel,
+        created,
+        remainingMs: await this.pendingRemainingMs(duel.id),
+      };
+    } catch (err) {
+      this.logger.warn(
+        `결투 응답 기한 조회 실패 duelId=${duel.id}: ${(err as Error).message}`,
+      );
+      return { duel, created, remainingMs: null };
+    }
   }
 
   /**
@@ -812,7 +856,7 @@ export class DuelsService {
    * 세므로, 재시도 시점에 DUEL_REQUEST_TTL을 통째로 다시 주면 그만큼 만료가 밀린다.
    * 계산을 DB 안에서 하는 이유는 pendingExpiresAt 주석의 타임존 함정과 같다.
    */
-  async pendingRemainingMs(duelId: number): Promise<number | null> {
+  private async pendingRemainingMs(duelId: number): Promise<number | null> {
     const rows = await this.dataSource.query<{ remainingMs: number }[]>(
       'SELECT GREATEST(0, EXTRACT(EPOCH FROM ("requestedAt" + make_interval(secs => $2) - LOCALTIMESTAMP)) * 1000)::float8 AS "remainingMs" FROM duels WHERE id = $1',
       [duelId, DUEL_REQUEST_TTL],

@@ -119,7 +119,15 @@ describe('DuelsService', () => {
     };
 
     dataSource = {
-      query: jest.fn().mockResolvedValue([{ id: opponentId, within: true }]),
+      // 한 목이 두 종류의 원시 쿼리를 받는다 — 근접 검증(PostGIS)과 응답 기한 계산.
+      // SQL로 갈라 두지 않으면 기한 계산이 근접 검증의 행을 받아 NaN이 된다.
+      query: jest.fn((sql: string) =>
+        Promise.resolve(
+          sql.includes('remainingMs')
+            ? [{ remainingMs: DUEL_REQUEST_TTL * 1000 }]
+            : [{ id: opponentId, within: true }],
+        ),
+      ),
       transaction: jest.fn((cb: (manager: unknown) => unknown) =>
         Promise.resolve(cb(txManager)),
       ),
@@ -344,6 +352,45 @@ describe('DuelsService', () => {
       expect(redis.releaseLock).toHaveBeenCalledWith(expect.any(String), '1');
     });
 
+    /**
+     * 만료 타이머의 기준은 DB의 requestedAt이어야 한다. 호출측이 반환 뒤에 30초를 새로 걸면,
+     * 커밋 후처리(보호막 해제)가 지연된 만큼 타이머가 기한보다 늦게 발화한다 — 그 구간에서
+     * 클라이언트는 duel:sync의 expiresAt을 보고 만료로 판단하는데 서버는 아직 PENDING이라
+     * 지난 기한의 수락이 성공한다. 그래서 남은 시간을 **후처리까지 끝난 뒤** 읽어 실어 보낸다.
+     */
+    it('커밋 후처리가 끝난 뒤의 남은 시간을 결과에 싣는다', async () => {
+      redis.clearDuelShield.mockResolvedValue(true);
+      dataSource.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.includes('remainingMs')
+            ? [{ remainingMs: 20_000 }] // 후처리가 10초 지연된 셈
+            : [{ id: opponentId, within: true }],
+        ),
+      );
+
+      const result = await service.requestDuel(challenger, opponentId);
+
+      expect(result.remainingMs).toBe(20_000);
+      // 후처리(보호막 해제)보다 뒤에 읽어야 그 지연이 기한에 반영된다.
+      const shieldOrder = redis.clearDuelShield.mock.invocationCallOrder[0];
+      const remainingOrder = dataSource.query.mock.invocationCallOrder.at(-1);
+      expect(remainingOrder).toBeGreaterThan(shieldOrder);
+    });
+
+    /** 기한 조회가 실패해도 결투는 이미 만들어졌다 — 던지지 않고 호출측이 TTL로 대신 건다. */
+    it('기한 조회가 실패해도 결투 생성은 성공하고 남은 시간만 비운다', async () => {
+      dataSource.query.mockImplementation((sql: string) =>
+        sql.includes('remainingMs')
+          ? Promise.reject(new Error('db down'))
+          : Promise.resolve([{ id: opponentId, within: true }]),
+      );
+
+      const result = await service.requestDuel(challenger, opponentId);
+
+      expect(result.created).toBe(true);
+      expect(result.remainingMs).toBeNull();
+    });
+
     /** 락을 잡기 전에 깨진 트랜잭션에서는 되돌릴 락이 없다 — 남의 락을 건드리면 안 된다. */
     it('락을 잡기 전에 트랜잭션이 깨지면 락을 건드리지 않는다', async () => {
       const failed = new Error('insert failed');
@@ -456,7 +503,12 @@ describe('DuelsService', () => {
           requestId,
         );
 
-        expect(result).toEqual({ duel: existingDuel(), created: false });
+        // 끝난(수락된) 결투에는 걸 타이머가 없어 기한 조회도 하지 않는다.
+        expect(result).toEqual({
+          duel: existingDuel(),
+          created: false,
+          remainingMs: null,
+        });
         // requestId는 신청자 범위에서만 유일하다 — 남의 결투를 돌려주지 않는다.
         // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock
         expect(duelRepo.findOne).toHaveBeenCalledWith({

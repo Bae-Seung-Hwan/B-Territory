@@ -430,13 +430,11 @@ describe('duel:requested 전달 기록', () => {
         revision: 0,
       },
       created: true,
+      remainingMs: DUEL_REQUEST_TTL * 1000,
     });
     const findState = jest.fn().mockResolvedValue(pendingState);
     const syncDuel = jest.fn().mockResolvedValue(null);
     const expireDuel = jest.fn().mockResolvedValue(null);
-    const pendingRemainingMs = jest
-      .fn()
-      .mockResolvedValue(DUEL_REQUEST_TTL * 1000);
     const isInviteDelivered = jest.fn().mockResolvedValue(false);
     const gateway = new RealtimeGateway(
       {} as unknown as FirebaseService,
@@ -455,7 +453,6 @@ describe('duel:requested 전달 기록', () => {
         syncDuel,
         expireDuel,
         markInviteDelivered,
-        pendingRemainingMs,
         isInviteDelivered,
       } as unknown as DuelsService,
       { start: jest.fn(), discardSession: jest.fn() } as never,
@@ -478,7 +475,6 @@ describe('duel:requested 전달 기록', () => {
       findState,
       syncDuel,
       expireDuel,
-      pendingRemainingMs,
       isInviteDelivered,
     };
   }
@@ -575,6 +571,71 @@ describe('duel:requested 전달 기록', () => {
       'duel:requested',
       expect.objectContaining({ duelId }),
     );
+  });
+
+  /**
+   * 기준은 언제나 DB의 requestedAt이다. 생성 경로가 requestDuel 반환 뒤에 30초를 새로 걸면,
+   * 커밋 후처리(보호막 해제 등)가 지연된 만큼 타이머가 기한보다 늦게 발화한다 — 그 구간에서
+   * 클라이언트는 duel:sync의 expiresAt을 보고 이미 만료로 판단하는데 서버는 아직 PENDING이라
+   * 지난 기한의 수락이 성공한다. 그래서 서비스가 돌려준 남은 시간을 그대로 쓴다.
+   */
+  it('최초 생성 타이머도 서비스가 돌려준 남은 시간으로 건다', async () => {
+    jest.useFakeTimers();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const { gateway, client, requestDuel } = make({ connected: true });
+    // 후처리가 9초 지연된 셈 — 기한까지 21초만 남았다.
+    requestDuel.mockResolvedValue({
+      duel: {
+        id: duelId,
+        challengerId: 'user-1',
+        opponentId: targetUserId,
+        requestId: null,
+        status: DuelStatus.PENDING,
+        revision: 0,
+      },
+      created: true,
+      remainingMs: 21_000,
+    });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 21_000)).toBe(
+      true,
+    );
+    expect(
+      setTimeoutSpy.mock.calls.some(
+        ([, delay]) => delay === DUEL_REQUEST_TTL * 1000,
+      ),
+    ).toBe(false);
+    setTimeoutSpy.mockRestore();
+  });
+
+  /** 기한 조회가 실패했을 때다(remainingMs: null). 타이머를 아예 안 거는 것보다 낫다. */
+  it('남은 시간을 못 받으면 TTL 전체로 건다', async () => {
+    jest.useFakeTimers();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const { gateway, client, requestDuel } = make({ connected: true });
+    requestDuel.mockResolvedValue({
+      duel: {
+        id: duelId,
+        challengerId: 'user-1',
+        opponentId: targetUserId,
+        requestId: null,
+        status: DuelStatus.PENDING,
+        revision: 0,
+      },
+      created: true,
+      remainingMs: null,
+    });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+
+    expect(
+      setTimeoutSpy.mock.calls.some(
+        ([, delay]) => delay === DUEL_REQUEST_TTL * 1000,
+      ),
+    ).toBe(true);
+    setTimeoutSpy.mockRestore();
   });
 
   /**
@@ -785,15 +846,11 @@ describe('duel:requested 전달 기록', () => {
   it('재시도한 결투가 PENDING이면 만료 타이머와 초대를 다시 건다', async () => {
     jest.useFakeTimers();
     const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
-    const {
-      gateway,
-      client,
-      socket,
-      requestDuel,
-      pendingRemainingMs,
-      markInviteDelivered,
-    } = make({ connected: true });
+    const { gateway, client, socket, requestDuel, markInviteDelivered } = make({
+      connected: true,
+    });
     const requestId = '7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6';
+    // 첫 요청이 12초 전에 행을 커밋했다 — 서비스가 남은 시간을 그대로 실어 준다.
     requestDuel.mockResolvedValue({
       duel: {
         id: duelId,
@@ -804,15 +861,13 @@ describe('duel:requested 전달 기록', () => {
         revision: 0,
       },
       created: false,
+      remainingMs: 18_000,
     });
-    // 첫 요청이 12초 전에 행을 커밋했다.
-    pendingRemainingMs.mockResolvedValue(18_000);
 
     await gateway.handleDuelRequest(client, { targetUserId, requestId });
     await flushInvite();
 
     // 기한은 결투가 만들어진 시점부터 센다 — 30초를 통째로 다시 주면 만료가 그만큼 밀린다.
-    expect(pendingRemainingMs).toHaveBeenCalledWith(duelId);
     expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 18_000)).toBe(
       true,
     );
@@ -879,14 +934,10 @@ describe('duel:requested 전달 기록', () => {
    */
   it('재시도가 몰려와도 재등록은 결투당 한 번이다', async () => {
     jest.useFakeTimers();
-    const {
-      gateway,
-      client,
-      socket,
-      requestDuel,
-      pendingRemainingMs,
-      isInviteDelivered,
-    } = make({ connected: true });
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const { gateway, client, socket, requestDuel, isInviteDelivered } = make({
+      connected: true,
+    });
     const requestId = '7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6';
     requestDuel.mockResolvedValue({
       duel: {
@@ -898,6 +949,7 @@ describe('duel:requested 전달 기록', () => {
         revision: 0,
       },
       created: false,
+      remainingMs: 18_000,
     });
 
     await Promise.all(
@@ -907,9 +959,13 @@ describe('duel:requested 전달 기록', () => {
     );
     await flushInvite();
 
-    expect(pendingRemainingMs).toHaveBeenCalledTimes(1);
+    expect(
+      setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 18_000),
+    ).toHaveLength(1);
+    // 초대 재전송도 같은 판정에 묶인다 — 아니면 몰려온 재시도가 저마다 초대를 쏜다.
     expect(isInviteDelivered).toHaveBeenCalledTimes(1);
     expect(socket!.emit).toHaveBeenCalledTimes(1);
+    setTimeoutSpy.mockRestore();
   });
 
   /**
@@ -918,7 +974,7 @@ describe('duel:requested 전달 기록', () => {
    */
   it('재시도 재등록이 실패해도 ack는 정상이다', async () => {
     jest.useFakeTimers();
-    const { gateway, client, requestDuel, pendingRemainingMs } = make({
+    const { gateway, client, requestDuel, isInviteDelivered } = make({
       connected: true,
     });
     const errorSpy = jest
@@ -935,8 +991,9 @@ describe('duel:requested 전달 기록', () => {
         revision: 0,
       },
       created: false,
+      remainingMs: 18_000,
     });
-    pendingRemainingMs.mockRejectedValue(new Error('db down'));
+    isInviteDelivered.mockRejectedValue(new Error('db down'));
 
     const ack = await gateway.handleDuelRequest(client, {
       targetUserId,
