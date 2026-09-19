@@ -928,6 +928,51 @@ describe('duel:requested 전달 기록', () => {
   });
 
   /**
+   * 첫 요청이 초대를 전달하지 못한 뒤의 재시도다(상대가 재접속 중이라 살아 있는 소켓이
+   * 없었다). 이 결투는 **같은 프로세스**가 만들었으니 만료 타이머 표시는 이미 남아 있는데,
+   * 그 표시로 초대 재전송까지 함께 묶으면 재전송이 통째로 건너뛰어진다 — 상대는 온라인인데
+   * 초대를 영영 받지 못하고, 양쪽 모두 만료까지 새 결투가 막힌다.
+   */
+  it('같은 프로세스가 만든 결투도 전달 기록이 없으면 초대를 다시 보낸다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, requestDuel, markInviteDelivered } =
+      make(undefined);
+    const requestId = '7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6';
+
+    // 첫 요청: 결투가 만들어지고 만료 타이머도 걸리지만, 상대 소켓이 없어 초대는 못 나간다.
+    await gateway.handleDuelRequest(client, { targetUserId, requestId });
+    await flushInvite();
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+
+    // 상대가 재접속을 마친 뒤의 재시도.
+    const socket = { connected: true, emit: jest.fn() };
+    gateway.server = {
+      sockets: new Map([['sock-opponent', socket]]),
+    } as never;
+    requestDuel.mockResolvedValue({
+      duel: {
+        id: duelId,
+        challengerId: 'user-1',
+        opponentId: targetUserId,
+        requestId,
+        status: DuelStatus.PENDING,
+        revision: 0,
+      },
+      created: false,
+      remainingMs: 18_000,
+    });
+
+    await gateway.handleDuelRequest(client, { targetUserId, requestId });
+    await flushInvite();
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'duel:requested',
+      expect.objectContaining({ duelId }),
+    );
+    expect(markInviteDelivered).toHaveBeenCalledWith(duelId);
+  });
+
+  /**
    * 소켓 이벤트에는 레이트 리밋이 없다. 같은 requestId를 한꺼번에 쏟아부으면 재시도마다
    * 타이머와 초대가 쌓이므로, 재등록은 결투당 한 번으로 묶는다 — 동시에 도착해 서로의
    * await 사이에 끼어드는 무리도 포함한다.

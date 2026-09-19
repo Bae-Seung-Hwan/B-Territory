@@ -7,7 +7,11 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { DuelsService, duelPenaltyPayload } from './duels.service';
+import {
+  DuelsService,
+  duelPenaltyPayload,
+  duelVoidPayload,
+} from './duels.service';
 import { Duel, DuelStatus } from './entities/duel.entity';
 import { RedisService } from '../common/redis/redis.service';
 import { ErrorCode } from '../common/errors/error-code';
@@ -558,6 +562,69 @@ describe('DuelsService', () => {
         expect(redis.tryAcquireLock).not.toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/unbound-method -- jest mock
         expect(duelRepo.delete).not.toHaveBeenCalled();
+      });
+
+      /**
+       * opponentId는 탈퇴 시 SET NULL이다(duel.entity.ts#opponentId). 비교할 상대가 없는데
+       * 거부하면 정상 재시도가 클라이언트 버그로 보고되고, 그 requestId는 무슨 수를 써도
+       * 결투의 실제 종료 상태를 받지 못한다 — 재시도마다 같은 에러만 돌아온다.
+       */
+      it('상대가 탈퇴해 참가자 칸이 비었으면 거부 대신 현재 상태를 돌려준다', async () => {
+        const withdrawn = {
+          ...existingDuel({ status: DuelStatus.VOID, revision: 2 }),
+          // 탈퇴로 비워진 칸. 엔티티 TS 타입은 string이라 캐스팅한다
+          // (duel.entity.ts#opponentId의 "DB는 nullable이지만" 주석).
+          opponentId: null,
+        } as unknown as Duel;
+        duelRepo.findOne.mockResolvedValue(withdrawn);
+
+        const result = await service.requestDuel(
+          challenger,
+          opponentId,
+          requestId,
+        );
+
+        expect(result).toEqual({
+          duel: withdrawn,
+          created: false,
+          remainingMs: null,
+        });
+      });
+
+      /**
+       * advisory lock 안의 재확인이 걸러내지 못한 동시 재시도 — 부분 유니크 인덱스가
+       * 최종 방어선으로 발동한다. 그대로 던지면 살아 있는 결투를 만든 요청이 500을 받아,
+       * 이 계약이 없애려던 "결투가 생겼는지 알 수 없는 ack"가 그대로 돌아온다.
+       */
+      it('유니크 인덱스가 발동하면 이긴 쪽 결투를 다시 읽어 돌려준다', async () => {
+        const winner = existingDuel({
+          status: DuelStatus.PENDING,
+          revision: 0,
+        });
+        duelRepo.findOne
+          .mockResolvedValueOnce(null) // 사전 확인 — 아직 커밋 전이다
+          .mockResolvedValue(winner); // 위반 뒤 재조회
+        txManager.save.mockRejectedValue(
+          new QueryFailedError('INSERT ...', [], {
+            name: 'error',
+            message:
+              'duplicate key value violates unique constraint "IDX_duels_challenger_request"',
+            code: '23505',
+          } as unknown as Error),
+        );
+
+        const result = await service.requestDuel(
+          challenger,
+          opponentId,
+          requestId,
+        );
+
+        expect(result.created).toBe(false);
+        expect(result.duel).toBe(winner);
+        // 락은 이긴 쪽이 쥐고 있다 — 진 쪽은 잡은 적이 없어 풀 것도 없다.
+        expect(redis.tryAcquireLock).not.toHaveBeenCalled();
+
+        expect(redis.releaseLock).not.toHaveBeenCalled();
       });
 
       it('requestId가 없으면 재시도 조회를 하지 않는다 (구버전 앱)', async () => {
@@ -2313,6 +2380,34 @@ describe('DuelsService', () => {
           'user-a',
         ),
       ).resolves.toBeUndefined();
+    });
+  });
+});
+
+/**
+ * VOID는 누구의 책임도 아닌 종료라 차감이 없다. 호출부가 넘기는 것은 전부 Duel 엔티티라,
+ * 행을 스프레드해 넘기면 타입에 없는 scoreDelta가 딸려 들어간다 — "2점 깎였는데 깎인
+ * 사람은 없다"는 모순된 안내가 나간다(settle 경합으로 COMPLETED 행이 이 경로에 올 수 있다).
+ */
+describe('duelVoidPayload', () => {
+  it('행의 scoreDelta가 차감 안내로 새지 않는다', () => {
+    const row = {
+      id: 7,
+      requestId: 'r-1',
+      status: DuelStatus.COMPLETED,
+      revision: 3,
+      scoreDelta: 2,
+      opponentId: 'user-2',
+    } as unknown as Duel;
+
+    expect(duelVoidPayload(row)).toEqual({
+      duelId: 7,
+      requestId: 'r-1',
+      state: DuelStatus.COMPLETED,
+      revision: 3,
+      scorePenalty: 0,
+      penalizedUserId: null,
+      shieldUntil: null,
     });
   });
 });

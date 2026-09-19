@@ -33,6 +33,7 @@ import {
 import { ErrorCode, errBody } from '../common/errors/error-code';
 import {
   PG_FOREIGN_KEY_VIOLATION,
+  PG_UNIQUE_VIOLATION,
   pgErrorCode,
 } from '../common/utils/pg-error.util';
 
@@ -154,10 +155,17 @@ export function duelPenaltyPayload(
 export function duelVoidPayload(
   row: DuelStateRow,
 ): ReturnType<typeof duelPenaltyPayload> {
+  // 상태 필드만 골라 넘긴다 — 호출부는 전부 Duel 엔티티를 통째로 넘기므로, 스프레드하면
+  // 타입에 없는 scoreDelta가 딸려 들어가 "차감 없음"이어야 할 payload가 scorePenalty > 0에
+  // penalizedUserId: null인 모순된 안내가 된다.
   // VOID는 차감이 없으니 보호막도 없다.
   return duelPenaltyPayload({
-    ...row,
+    id: row.id,
+    requestId: row.requestId ?? null,
+    status: row.status,
+    revision: row.revision,
     opponentId: null,
+    scoreDelta: null,
     shieldGranted: false,
   });
 }
@@ -440,7 +448,7 @@ export class DuelsService {
    *   보내면 새 결투를 만들지 않고 기존 결투를 **현재 상태 그대로** 돌려준다(created=false).
    *   이때 호출자는 만료 타이머·초대 전송을 **다시 걸어야 한다** — 첫 요청이 행을 커밋한 뒤
    *   그 등록 전에 중단됐을 수 있고, 여기서는 그 사실을 알 수 없다. 두 등록 모두 멱등이다
-   *   (realtime.gateway.ts#rearmDuelRequest).
+   *   (realtime.gateway.ts#handleDuelRequest).
    */
   async requestDuel(
     challenger: { id: string; team: string },
@@ -589,7 +597,8 @@ export class DuelsService {
         // 있다(동시 재시도). 신청자 id의 advisory lock 안에서 다시 보므로 둘 중 하나만
         // 만든다 — 이 확인을 hasActiveDuel보다 먼저 해야, 방금 만들어진 자기 결투에 막혀
         // DUEL_ALREADY_ACTIVE를 받지 않는다. 유니크 인덱스(IDX_duels_challenger_request)는
-        // 이 직렬화가 깨졌을 때의 최종 방어선이다.
+        // 이 직렬화가 깨졌을 때의 최종 방어선이다 — 발동하면 아래 .catch가 이긴 쪽 행을
+        // 다시 읽어 재시도와 같은 답을 돌려준다.
         if (requestId) {
           // requestId는 신청자가 만든 값이라 신청자 범위에서만 유일하다 — 다른 유저가 같은
           // uuid를 보내도 남의 결투를 돌려주지 않도록 challengerId를 함께 건다.
@@ -676,6 +685,16 @@ export class DuelsService {
               );
             });
         }
+        // 유니크 인덱스(IDX_duels_challenger_request)가 실제로 발동한 경우 — advisory lock
+        // 안의 재확인이 걸러내지 못한 동시 재시도다. 그대로 던지면 살아 있는 결투를 만든
+        // 요청이 500을 받아, requestId 멱등성이 없애려던 "결투가 생겼는지 알 수 없는 ack"가
+        // 돌아온다. 이겼던 쪽의 행은 이미 커밋돼 있으므로 다시 읽어 재시도와 똑같이 답한다.
+        if (requestId && pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
+          const winner = await this.duelRepo.findOne({
+            where: { challengerId: challenger.id, requestId },
+          });
+          if (winner) return { duel: winner, created: false };
+        }
         if (pgErrorCode(err) !== PG_FOREIGN_KEY_VIOLATION) throw err;
         throw new NotFoundException(
           errBody(
@@ -753,9 +772,13 @@ export class DuelsService {
    * 재시도라면 상대도 같아야 한다. 다른 상대에게 같은 requestId를 쓴 것은 재시도가 아니라
    * 클라이언트 버그인데, 그대로 기존 결투를 돌려주면 "B에게 신청했다"는 ack에 A와의 결투가
    * 실려 나간다.
+   *
+   * 단, opponentId가 비었으면(상대 탈퇴 — duel.entity.ts#opponentId의 SET NULL) 비교할 수
+   * 없으니 통과시킨다. 여기서 막으면 정상적인 재시도가 클라이언트 버그로 보고되고, 그
+   * requestId는 무슨 수를 써도 결투의 실제 종료 상태를 받지 못한다(재시도마다 같은 에러).
    */
   private assertSameTarget(duel: Duel, targetUserId: string): Duel {
-    if (duel.opponentId !== targetUserId) {
+    if (duel.opponentId !== null && duel.opponentId !== targetUserId) {
       throw new ConflictException(
         errBody(
           ErrorCode.DUEL_REQUEST_ID_REUSED,

@@ -86,6 +86,9 @@ export class RealtimeGateway
   /** 만료 타이머를 이미 걸어둔 결투 (armExpiryTimer — 결투당 한 번). */
   private readonly armedExpiries = new Set<number>();
 
+  /** 초대 재전송 판정이 진행 중인 결투 (redeliverInvite — 몰려온 재시도 합치기). */
+  private readonly redeliveringInvites = new Set<number>();
+
   // namespace를 지정한 게이트웨이에는 Server가 아닌 해당 Namespace 인스턴스가 주입된다.
   // (sockets Map으로 개별 소켓의 연결 상태를 확인하기 위해 정확한 타입을 쓴다)
   @WebSocketServer()
@@ -370,10 +373,8 @@ export class RealtimeGateway
     // 여기서 둘 다 다시 건다. 두 등록 모두 멱등이라 첫 요청이 이미 걸어둔 정상 경로에서도
     // 안전하다(armExpiryTimer·redeliverInvite).
     if (!created) {
-      if (
-        duel.status === DuelStatus.PENDING &&
-        this.armExpiryTimer(duel.id, user, dto.targetUserId, remainingMs)
-      ) {
+      if (duel.status === DuelStatus.PENDING) {
+        this.armExpiryTimer(duel.id, user, dto.targetUserId, remainingMs);
         await this.redeliverInvite(duel.id, user, dto.targetUserId);
       }
       return { status: 'ok', ...duelStateFields(duel) };
@@ -423,9 +424,12 @@ export class RealtimeGateway
    * 재시도마다 타이머가 쌓인다(각각은 가볍지만 30초 창 동안 누적된다). 이 판정이 동기라
    * 한꺼번에 도착한 무리도 함께 걸러진다 — 사이에 끼어들 await이 없다.
    *
-   * @returns 이번 호출이 실제로 걸었으면 true. 재시도 경로는 이 값으로 초대 재전송까지
-   *   한 번으로 묶는다 — 그러지 않으면 몰려온 재시도가 저마다 초대를 emit해 상대 화면을
-   *   같은 초대로 두드린다.
+   * @returns 이번 호출이 실제로 걸었으면 true.
+   *
+   *   초대 재전송의 합치기에는 이 값을 쓰지 않는다. 이 표시는 타이머가 발화할 때까지
+   *   남아 있어, 이 프로세스가 만든 결투는 재시도 시점에 언제나 false다 — 그것으로
+   *   재전송까지 묶으면 초대가 유실된 재시도에서 redeliverInvite가 통째로 건너뛰어진다.
+   *   재전송은 redeliveringInvites로 따로 묶는다.
    */
   private armExpiryTimer(
     duelId: number,
@@ -457,6 +461,11 @@ export class RealtimeGateway
    * 첫 요청의 emit이 아직 기록 전인 좁은 창에서는 초대가 두 번 나갈 수 있지만, 같은
    * revision이라 클라이언트가 뒤엣것을 버린다(duel.entity.ts#revision).
    *
+   * 몰려온 재시도는 redeliveringInvites로 합친다 — 전달 기록 조회(await)와 emit 사이에
+   * 다른 재시도가 끼어들면 저마다 초대를 내보내 상대 화면을 같은 초대로 두드린다. 표시는
+   * 전송이 끝난 뒤에 지우므로, 이번 전송이 또 실패했다면(기록이 남지 않았다면) 다음
+   * 재시도가 다시 시도한다.
+   *
    * 실패는 삼킨다 — 재시도의 답(결투의 현재 상태)은 이미 확정돼 있어, 여기서 던지면 살아
    * 있는 결투에 에러 ack가 나간다. 실패해도 만료 타이머와 스윕이 백스톱으로 남는다.
    */
@@ -465,13 +474,23 @@ export class RealtimeGateway
     challenger: { id: string; nickname: string },
     targetUserId: string,
   ): Promise<void> {
+    if (this.redeliveringInvites.has(duelId)) return;
+    this.redeliveringInvites.add(duelId);
     try {
-      if (await this.duelsService.isInviteDelivered(duelId)) return;
+      if (await this.duelsService.isInviteDelivered(duelId)) {
+        this.redeliveringInvites.delete(duelId);
+        return;
+      }
       // 초대는 핸들러 반환 뒤로 미룬다 — 이유는 handleDuelRequest의 setImmediate 주석과 같다.
+      // 표시는 전송이 끝난 뒤에 지운다 — emit 전에 지우면 전달 기록이 남기 전의 재시도가
+      // 판정을 통과해 같은 초대를 한 번 더 내보낸다.
       setImmediate(() => {
-        void this.deliverDuelInvite(duelId, challenger, targetUserId);
+        void this.deliverDuelInvite(duelId, challenger, targetUserId).finally(
+          () => this.redeliveringInvites.delete(duelId),
+        );
       });
     } catch (err) {
+      this.redeliveringInvites.delete(duelId);
       this.logger.error(`결투 초대 재전송 판정 실패 duelId=${duelId}`, err);
     }
   }
