@@ -126,7 +126,11 @@ export type MiniGameOutcome = { participants: DuelParticipants } &
     | { status: 'rematch'; plan: GameStartPlan; scores: RevealedScore[] }
     /** duel에 winnerId·scoreDelta·allyBonusApplied가 확정되어 있다. */
     | { status: 'completed'; duel: Duel; scores: RevealedScore[] }
-    | { status: 'void'; scores: RevealedScore[] }
+    /**
+     * duel은 무효 처리 뒤의 행이다 — duel:voided에 실을 revision의 원천. 다른 경로(스윕 등)가
+     * 먼저 종료했으면 그쪽이 커밋한 행이고, 행 자체가 없으면 null이다.
+     */
+    | { status: 'void'; duel: Duel | null; scores: RevealedScore[] }
   );
 
 interface ParsedEntry {
@@ -476,7 +480,7 @@ export class MinigameService {
             scores,
             participants: duel,
           }
-        : { status: 'void', scores, participants: duel };
+        : { status: 'void', duel: outcome.duel, scores, participants: duel };
     }
 
     // 아무도 안 낸 판은 재경기를 열어도 또 아무도 내지 않는다 — 곧바로 무효 처리한다.
@@ -487,10 +491,10 @@ export class MinigameService {
       return { status: 'rematch', plan, scores, participants: duel };
     }
 
-    await this.duelsService.voidByGame(duel.id);
+    const voided = await this.duelsService.voidByGame(duel.id);
     // 위와 같은 이유로 정리 실패가 결과 통보를 막지 않는다.
     await this.cleanupSession(duel.id, session.round).catch(() => undefined);
-    return { status: 'void', scores, participants: duel };
+    return { status: 'void', duel: voided, scores, participants: duel };
   }
 
   /** 미제출자는 어떤 정상 제출보다도 낮은 점수를 받는다 (기권패). */

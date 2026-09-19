@@ -32,11 +32,14 @@ import {
 import {
   DuelsService,
   duelPenaltyPayload,
+  duelStateFields,
   duelVoidPayload,
 } from '../duels/duels.service';
 import { LocationUpdateDto } from '../duels/dto/location-update.dto';
 import { DuelRequestDto } from '../duels/dto/duel-request.dto';
 import { DuelRespondDto } from '../duels/dto/duel-respond.dto';
+import { DuelSyncDto } from '../duels/dto/duel-sync.dto';
+import { DuelStatus } from '../duels/entities/duel.entity';
 import { MinigameService } from '../duels/minigame/minigame.service';
 import type {
   DuelParticipants,
@@ -79,6 +82,12 @@ export class RealtimeGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   private readonly logger = new Logger(RealtimeGateway.name);
+
+  /** 만료 타이머를 이미 걸어둔 결투 (armExpiryTimer — 결투당 한 번). */
+  private readonly armedExpiries = new Set<number>();
+
+  /** 초대 재전송 판정이 진행 중인 결투 (redeliverInvite — 몰려온 재시도 합치기). */
+  private readonly redeliveringInvites = new Set<number>();
 
   // namespace를 지정한 게이트웨이에는 Server가 아닌 해당 Namespace 인스턴스가 주입된다.
   // (sockets Map으로 개별 소켓의 연결 상태를 확인하기 위해 정확한 타입을 쓴다)
@@ -140,7 +149,8 @@ export class RealtimeGateway
      * - duel:requested — 초대가 30초(DUEL_REQUEST_TTL)라 격차가 가장 크다. 큐잉하면 20분 뒤
      *   접속한 유저가 이미 EXPIRED된 결투의 초대 모달을 받고, 곧이어 재생되는 duel:expired에
      *   그 모달이 사라진다. 큐잉하지 않으면 "전달 안 됨 = 큐잉 안 함 = 무응답으로 청구하지
-     *   않음"이 한 줄로 맞아떨어진다(duel.entity.ts#inviteDeliveredAt).
+     *   않음"이 한 줄로 맞아떨어진다(duel.entity.ts#inviteDeliveredAt). 초대는 emit 직전에
+     *   결투 상태를 확인해야 해서 이 함수 대신 deliverDuelInvite가 같은 규칙으로 직접 보낸다.
      */
     ephemeral = false,
   ): Promise<boolean> {
@@ -156,8 +166,7 @@ export class RealtimeGateway
       payload,
       NOTIFICATION_QUEUE_TTL,
     );
-    // 큐잉은 "지금 화면에 뜨지 않았다"는 뜻이다. 결투 초대처럼 전달 여부가 과금을 가르는
-    // 이벤트가 이 값을 본다(handleDuelRequest).
+    // 큐잉은 "지금 화면에 뜨지 않았다"는 뜻이다.
     return false;
   }
 
@@ -349,38 +358,206 @@ export class RealtimeGateway
     @MessageBody(wsValidationPipe) dto: DuelRequestDto,
   ) {
     const user = getSocketUser(client);
-    const duel = await this.duelsService.requestDuel(user, dto.targetUserId);
-
-    // 초대가 상대의 살아 있는 소켓으로 실제 나갔는지를 여기서 확정해 기록한다. 무응답
-    // 페널티는 이 기록에만 근거한다 — 만료 시점에 소켓 생존을 다시 확인하는 방식은 끊김이
-    // ping timeout만큼 늦게 드러나 창 후반부의 단절을 놓쳤고(만료가 30초인데 감지는 최대
-    // 20초 지연), 서버 재시작으로 타이머가 유실된 신청은 확인할 방법조차 없었다.
-    //
-    // 이 판단도 socket.connected를 읽으므로 감지 지연 자체가 사라진 것은 아니다 — 창의
-    // 끝(30초 내내)에서 신청 시점 한 순간으로 좁아졌을 뿐이다. 남은 구멍과 그것을 닫는
-    // 방법(클라이언트 렌더 ack)은 socket-options.ts 주석에 정리해 두었다.
-    const delivered = await this.notifyUser(
+    const { duel, created, remainingMs } = await this.duelsService.requestDuel(
+      user,
       dto.targetUserId,
-      'duel:requested',
-      {
-        duelId: duel.id,
-        fromUserId: user.id,
-        fromNickname: user.nickname,
-      },
-      // 초대는 30초짜리라 큐에 넣지 않는다 (notifyUser의 ephemeral 주석 참고).
-      true,
+      dto.requestId,
     );
 
-    // 타이머를 전달 기록보다 **먼저** 건다. markInviteDelivered는 실패해도 삼키는 부수적
-    // 쓰기인데 그걸 await한 뒤에 타이머를 걸면, DB가 느린 만큼 만료가 30초보다 늦게
-    // 발화한다. startGameRound가 같은 이유로 emit보다 타이머를 먼저 건다.
-    setTimeout(() => {
-      void this.expireAndNotify(duel.id, user.id, dto.targetUserId);
-    }, DUEL_REQUEST_TTL * 1000);
+    // 같은 requestId의 재시도다. 기존 결투의 **현재** 상태를 그대로 돌려준다 — 그 사이
+    // 수락됐다면 state: ACCEPTED다. 클라이언트는 revision으로 이미 반영한 상태보다 오래된
+    // ack를 버린다.
+    //
+    // 첫 요청이 만료 타이머·초대까지 걸었는지는 알 수 없으므로(행 커밋과 이 등록은 서로 다른
+    // 단계다 — 그 사이에 프로세스가 죽으면 초기화되지 않은 PENDING 결투가 스윕까지 남는다),
+    // 여기서 둘 다 다시 건다. 두 등록 모두 멱등이라 첫 요청이 이미 걸어둔 정상 경로에서도
+    // 안전하다(armExpiryTimer·redeliverInvite).
+    if (!created) {
+      if (duel.status === DuelStatus.PENDING) {
+        this.armExpiryTimer(duel.id, user, dto.targetUserId, remainingMs);
+        await this.redeliverInvite(duel.id, user, dto.targetUserId);
+      }
+      return { status: 'ok', ...duelStateFields(duel) };
+    }
 
-    if (delivered) await this.duelsService.markInviteDelivered(duel.id);
+    // 타이머를 초대 전송보다 **먼저** 건다. 만료는 결투 생성 시점부터 30초인데, 전송이
+    // 느린 만큼 타이머가 늦게 걸리면 만료도 그만큼 밀린다. startGameRound가 같은 이유로
+    // emit보다 타이머를 먼저 건다.
+    this.armExpiryTimer(duel.id, user, dto.targetUserId, remainingMs);
 
-    return { status: 'ok', duelId: duel.id };
+    // 초대 전송을 이 핸들러의 **반환 뒤로** 미룬다. 예전엔 여기서 초대를 await한 뒤
+    // ack를 돌려줬는데, 그러면 상대가 초대를 받아 곧바로 수락했을 때 신청자에게
+    // duel:accepted가 요청 ack보다 먼저 도착할 수 있었다 — 신청자 클라이언트는 아직
+    // duelId를 모르는 상태로 수락 이벤트를 받고, 뒤늦은 ack가 이미 열린 게임 위에 대기
+    // 화면을 다시 띄웠다.
+    //
+    // setImmediate는 마이크로태스크가 모두 비워진 뒤(check 페이즈) 돌므로, 핸들러가
+    // 돌려준 Promise의 해소 — 즉 socket.io가 ack 패킷을 신청자 소켓에 쓰는 것 — 보다
+    // 반드시 뒤다. 그 뒤에야 초대가 나가고, 상대가 받아 수락해 duel:accepted가 신청자
+    // 소켓으로 오는 것은 다시 그 뒤이므로, 같은 연결의 전송 순서상 역전이 불가능해진다.
+    //
+    // 그래서 ack의 의미는 "결투 요청 생성 완료"다 — 초대가 상대에게 닿았는지는 뜻하지
+    // 않는다. 전달 실패는 예전과 똑같이 inviteDeliveredAt을 남기지 않는 것으로 처리되고,
+    // 만료 시 무응답 청구에서 빠진다(duel.entity.ts#inviteDeliveredAt).
+    //
+    // ack 순서가 보장돼도 클라이언트의 상태 반영이 끝났다는 뜻은 아니므로, 프론트의
+    // 순서 방어(SocketProvider의 duel:accepted 선처리)는 그대로 유지해야 한다.
+    setImmediate(() => {
+      void this.deliverDuelInvite(duel.id, user, dto.targetUserId);
+    });
+
+    // ack에도 이벤트와 같은 상태 필드를 싣는다 — PENDING / revision 0.
+    return { status: 'ok', ...duelStateFields(duel) };
+  }
+
+  /**
+   * 이 결투의 만료 타이머를 건다 (생성 경로와 재시도 경로 공용).
+   *
+   * 기준은 **언제나 DB의 requestedAt**이다 — requestDuel이 돌려준 남은 시간을 그대로 쓴다.
+   * 반환 뒤에 DUEL_REQUEST_TTL 전체를 새로 걸면, 커밋 후처리(보호막 해제 등)가 지연된 만큼
+   * 타이머가 기한보다 늦게 발화한다. 그 구간에서 클라이언트는 duel:sync의 expiresAt을 보고
+   * 이미 만료로 판단하는데 서버는 아직 PENDING이라, 지난 기한의 수락이 성공한다.
+   * 남은 시간을 못 읽었을 때(null)만 예전처럼 TTL 전체로 건다 — 기준이 조금 늦어질 뿐이고
+   * 어긋난 만큼은 스윕이 정리한다.
+   *
+   * 결투당 한 번만 건다. 소켓 이벤트에는 레이트 리밋이 없어, 같은 requestId를 반복해 보내면
+   * 재시도마다 타이머가 쌓인다(각각은 가볍지만 30초 창 동안 누적된다). 이 판정이 동기라
+   * 한꺼번에 도착한 무리도 함께 걸러진다 — 사이에 끼어들 await이 없다.
+   *
+   * @returns 이번 호출이 실제로 걸었으면 true.
+   *
+   *   초대 재전송의 합치기에는 이 값을 쓰지 않는다. 이 표시는 타이머가 발화할 때까지
+   *   남아 있어, 이 프로세스가 만든 결투는 재시도 시점에 언제나 false다 — 그것으로
+   *   재전송까지 묶으면 초대가 유실된 재시도에서 redeliverInvite가 통째로 건너뛰어진다.
+   *   재전송은 redeliveringInvites로 따로 묶는다.
+   */
+  private armExpiryTimer(
+    duelId: number,
+    challenger: { id: string },
+    targetUserId: string,
+    remainingMs: number | null,
+  ): boolean {
+    if (this.armedExpiries.has(duelId)) return false;
+    this.armedExpiries.add(duelId);
+    setTimeout(
+      () => {
+        // 타이머가 발화하면 이 결투는 끝난다 — 표시를 지워 집합이 스스로 줄어들게 한다.
+        this.armedExpiries.delete(duelId);
+        void this.expireAndNotify(duelId, challenger.id, targetUserId);
+      },
+      remainingMs ?? DUEL_REQUEST_TTL * 1000,
+    );
+    return true;
+  }
+
+  /**
+   * 재시도가 받은 PENDING 결투의 초대를 아직 전달되지 않았을 때만 다시 보낸다.
+   *
+   * 필요한 이유: requestDuel은 행을 커밋한 뒤 반환하고, 초대 전송은 그 **다음** 단계다.
+   * 첫 요청이 그 사이에 끊기면(프로세스 종료, 배포 중 재시작) 아무도 초대를 받지 못한 채
+   * PENDING 결투만 남는다. 재시도는 행이 있다는 사실만 볼 수 있어 그 상태를 구분하지
+   * 못하므로, 구분하는 대신 전달 기록이 없으면 다시 보낸다.
+   *
+   * 첫 요청의 emit이 아직 기록 전인 좁은 창에서는 초대가 두 번 나갈 수 있지만, 같은
+   * revision이라 클라이언트가 뒤엣것을 버린다(duel.entity.ts#revision).
+   *
+   * 몰려온 재시도는 redeliveringInvites로 합친다 — 전달 기록 조회(await)와 emit 사이에
+   * 다른 재시도가 끼어들면 저마다 초대를 내보내 상대 화면을 같은 초대로 두드린다. 표시는
+   * 전송이 끝난 뒤에 지우므로, 이번 전송이 또 실패했다면(기록이 남지 않았다면) 다음
+   * 재시도가 다시 시도한다.
+   *
+   * 실패는 삼킨다 — 재시도의 답(결투의 현재 상태)은 이미 확정돼 있어, 여기서 던지면 살아
+   * 있는 결투에 에러 ack가 나간다. 실패해도 만료 타이머와 스윕이 백스톱으로 남는다.
+   */
+  private async redeliverInvite(
+    duelId: number,
+    challenger: { id: string; nickname: string },
+    targetUserId: string,
+  ): Promise<void> {
+    if (this.redeliveringInvites.has(duelId)) return;
+    this.redeliveringInvites.add(duelId);
+    try {
+      if (await this.duelsService.isInviteDelivered(duelId)) {
+        this.redeliveringInvites.delete(duelId);
+        return;
+      }
+      // 초대는 핸들러 반환 뒤로 미룬다 — 이유는 handleDuelRequest의 setImmediate 주석과 같다.
+      // 표시는 전송이 끝난 뒤에 지운다 — emit 전에 지우면 전달 기록이 남기 전의 재시도가
+      // 판정을 통과해 같은 초대를 한 번 더 내보낸다.
+      setImmediate(() => {
+        void this.deliverDuelInvite(duelId, challenger, targetUserId).finally(
+          () => this.redeliveringInvites.delete(duelId),
+        );
+      });
+    } catch (err) {
+      this.redeliveringInvites.delete(duelId);
+      this.logger.error(`결투 초대 재전송 판정 실패 duelId=${duelId}`, err);
+    }
+  }
+
+  /**
+   * 결투 초대를 상대에게 보내고, 살아 있는 소켓으로 실제 나갔으면 전달로 기록한다.
+   *
+   * 초대가 상대의 살아 있는 소켓으로 실제 나갔는지를 여기서 확정해 기록한다. 무응답
+   * 페널티는 이 기록에만 근거한다 — 만료 시점에 소켓 생존을 다시 확인하는 방식은 끊김이
+   * ping timeout만큼 늦게 드러나 창 후반부의 단절을 놓쳤고(만료가 30초인데 감지는 최대
+   * 20초 지연), 서버 재시작으로 타이머가 유실된 신청은 확인할 방법조차 없었다.
+   *
+   * 이 판단도 socket.connected를 읽으므로 감지 지연 자체가 사라진 것은 아니다 — 창의
+   * 끝(30초 내내)에서 신청 시점 한 순간으로 좁아졌을 뿐이다. 남은 구멍과 그것을 닫는
+   * 방법(클라이언트 렌더 ack)은 socket-options.ts 주석에 정리해 두었다.
+   *
+   * 반드시 자체적으로 예외를 삼킨다 — 핸들러 밖(setImmediate)에서 도는 몸통이라 여기서
+   * reject가 새면 ack 에러가 아니라 unhandledRejection이 되어 프로세스가 죽는다.
+   * 실패해도 결투는 살아 있고 만료 타이머도 이미 걸려 있어, 전달 기록만 비는 채로
+   * 30초 뒤 무응답 청구 없이 만료된다.
+   *
+   * 초대는 큐에 넣지 않으므로(notifyUser의 ephemeral 주석 참고) notifyUser를 거치지 않고
+   * 직접 emit한다 — 소켓 조회와 emit 사이에 결투 상태 확인을 끼워야 하기 때문이다.
+   */
+  private async deliverDuelInvite(
+    duelId: number,
+    challenger: { id: string; nickname: string },
+    targetUserId: string,
+  ): Promise<void> {
+    try {
+      const socket = await this.getLiveSocket(targetUserId);
+      if (!socket) return;
+
+      // 만료 타이머가 전송보다 먼저 걸려 있어, 소켓 조회가 30초 넘게 걸리면 결투가 이미
+      // EXPIRED로 넘어가 duel:expired가 나간 뒤일 수 있다. 수신 클라이언트는 초대 전에 온
+      // duel:expired를 duelId 불일치로 버리므로, 여기서 막지 않으면 늦은 초대가 끝난
+      // 결투의 수락 화면을 연다. 스윕·탈퇴 정리로 끝난 결투도 같은 이유로 거른다.
+      //
+      // 확인을 소켓 조회 **뒤**, emit 바로 앞에 둔다 — 이 await가 풀린 뒤 emit까지는
+      // 동기라서, 확인 이후에 만료가 커밋돼도 그 duel:expired는 커밋·소켓 조회를 더 거쳐야
+      // 하므로 이 초대보다 뒤에 나간다. 클라이언트는 초대 → 만료 순서로 받아 모달을 닫는다.
+      // 조회 요청과 커밋이 거의 동시인 극히 좁은 경합은 남으며, 그것은 후속 계약의
+      // expiresAt/revision으로 클라이언트가 오래된 이벤트를 버려 닫는다.
+      //
+      // 기한이 지났으면 상태가 아직 PENDING이어도 거른다 — 만료 커밋이 밀린 창에서 초대를
+      // 내보내면 수락 CAS(acceptDuel)가 기한으로 막는 모달을 여는 셈이다.
+      const state = await this.duelsService.findState(duelId);
+      if (!state || state.state !== DuelStatus.PENDING || state.deadlinePassed)
+        return;
+      // 상태 조회를 기다리는 사이 끊겼을 수 있다 — 끊긴 소켓으로의 emit은 조용히 버려지므로
+      // 여기서 다시 보지 않으면 받지 못한 초대를 전달로 기록해 무응답을 청구한다.
+      if (!socket.connected) return;
+
+      // 상태 필드만 골라 싣는다 — deadlinePassed는 이 전송을 거를지 정하는 내부 판정값이라
+      // 이벤트 계약에 넣지 않는다(클라이언트의 기한은 duel:sync의 expiresAt이 답한다).
+      socket.emit('duel:requested', {
+        duelId: state.duelId,
+        requestId: state.requestId,
+        state: state.state,
+        revision: state.revision,
+        fromUserId: challenger.id,
+        fromNickname: challenger.nickname,
+      });
+      await this.duelsService.markInviteDelivered(duelId);
+    } catch (err) {
+      this.logger.error(`결투 초대 전달 실패 duelId=${duelId}`, err);
+    }
   }
 
   // 타이머 발화 시점의 소켓id를 재조회한다 (요청 시점에 캡처해두면 그 사이 재접속한 클라이언트에게
@@ -425,6 +602,24 @@ export class RealtimeGateway
     return this.respondToDuel(client, dto.duelId, false);
   }
 
+  /**
+   * 서버가 확정한 결투 상태를 돌려준다 — 재접속하거나 duel:request의 ack를 못 받았을 때
+   * 클라이언트가 호출한다. 결투가 없으면 duel: null이다(조회 조건은 DuelsService.syncDuel).
+   *
+   * 이벤트를 다시 보내지 않고 ack로만 답한다. 같은 상태를 이벤트로 재생하면 이미 반영한
+   * 클라이언트에게 중복이 되고, 결국 revision으로 걸러야 하는 건 마찬가지다. 응답도 같은
+   * 상태 필드(duelId·requestId·state·revision)를 실어, 이벤트와 한 규칙으로 비교하면 된다.
+   */
+  @SubscribeMessage('duel:sync')
+  async handleDuelSync(
+    @ConnectedSocket() client: Socket,
+    @MessageBody(wsValidationPipe) dto: DuelSyncDto,
+  ) {
+    const user = getSocketUser(client);
+    const duel = await this.duelsService.syncDuel(user.id, dto);
+    return { status: 'ok', duel };
+  }
+
   private async respondToDuel(client: Socket, duelId: number, accept: boolean) {
     const user = getSocketUser(client);
     const duel = await this.duelsService.respondDuel(duelId, user.id, accept);
@@ -435,7 +630,7 @@ export class RealtimeGateway
     // shieldUntil은 클라이언트 타이머용 안내값이고, 재신청 가능 여부 판정은 언제나
     // requestDuel이 Redis를 다시 읽어 내린다. 그래도 보호막 설정이 실패했으면 null로
     // 나간다 — 안내와 실제 판정이 어긋나면 "30분간 안전하다"를 믿은 쪽이 곧바로 다시 걸린다.
-    const payload = accept ? { duelId: duel.id } : duelPenaltyPayload(duel);
+    const payload = accept ? duelStateFields(duel) : duelPenaltyPayload(duel);
     client.emit(event, payload);
     await this.notifyUser(duel.challengerId, event, payload);
 
@@ -480,11 +675,13 @@ export class RealtimeGateway
     try {
       // 세션을 남기면 이미 걸린 go 타이머가 VOID된 결투에 game:go를 쏜다.
       await this.minigameService.discardSession(participants.id);
-      await this.duelsService.voidByGame(participants.id);
+      const voided = await this.duelsService.voidByGame(participants.id);
+      // 행이 없으면 알릴 결투도 없다 (duels 행은 신청 락 실패 경로 외에는 지워지지 않는다).
+      if (!voided) return;
       await this.emitToBoth(
         participants,
         'duel:voided',
-        duelVoidPayload(participants.id),
+        duelVoidPayload(voided),
       );
     } catch (err) {
       this.logger.error(
@@ -664,7 +861,7 @@ export class RealtimeGateway
     if (outcome.status === 'completed') {
       const { duel } = outcome;
       await this.emitToBoth(participants, 'duel:completed', {
-        duelId: duel.id,
+        ...duelStateFields(duel),
         winnerId: duel.winnerId,
         loserId: duel.loserId,
         scoreDelta: duel.scoreDelta,
@@ -674,8 +871,14 @@ export class RealtimeGateway
       return;
     }
 
+    if (!outcome.duel) {
+      this.logger.warn(
+        `무효 처리할 결투 행이 없어 duel:voided를 생략한다 duelId=${participants.id}`,
+      );
+      return;
+    }
     await this.emitToBoth(participants, 'duel:voided', {
-      ...duelVoidPayload(participants.id),
+      ...duelVoidPayload(outcome.duel),
       scores: outcome.scores,
     });
   }

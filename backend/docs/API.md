@@ -410,6 +410,9 @@ curl http://localhost:3000/api/spots/930
 ```json
 {
   "duelId": 12,
+  "requestId": "7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6",
+  "state": "REJECTED",
+  "revision": 1,
   "scorePenalty": 2,
   "penalizedUserId": "5f2c...",
   "shieldUntil": "2026-08-27T02:41:07.000Z"
@@ -418,6 +421,7 @@ curl http://localhost:3000/api/spots/930
 
 | 필드 | 설명 |
 |---|---|
+| `requestId` / `state` / `revision` | 모든 결투 이벤트 공통 상태 필드 — 아래 **결투 상태 필드** 참고 |
 | `scorePenalty` | 이번 종료로 깎인 점수. 차감이 없었으면 `0` |
 | `penalizedUserId` | 깎이고 보호막을 받은 참가자. 없으면 `null` — **자기 id와 비교해서** 화면을 가르세요 |
 | `shieldUntil` | 보호 기간이 끝나는 **절대 시각**(ISO). 없으면 `null` |
@@ -436,11 +440,115 @@ curl http://localhost:3000/api/spots/930
 > `penalizedUserId`와 `shieldUntil`은 `null`입니다. 라운드 결과가 있는 경우에만
 > `scores` 필드가 추가로 붙습니다.
 
+### 결투 상태 필드 · 요청 재시도 · 상태 재조회 (`duel:sync`)
+
+결투 이벤트는 **도착 순서가 보장되지 않습니다**. 상대가 곧바로 수락하면 `duel:accepted`가
+`duel:request`의 ack보다 먼저 올 수 있고, 오프라인 큐에서 재생된 이벤트가 이미 반영한 상태보다
+늦게 올 수도 있습니다. 그래서 모든 결투 ack·이벤트에 같은 상태 필드를 싣습니다. 순서가 아니라
+이 필드로 판단하세요.
+
+| 필드 | 설명 |
+|---|---|
+| `duelId` | 결투 id |
+| `requestId` | `duel:request`에 보낸 uuid. 보내지 않은(구버전) 요청의 결투는 `null` |
+| `state` | `PENDING` / `ACCEPTED` / `REJECTED` / `EXPIRED` / `COMPLETED` / `VOID` |
+| `revision` | 상태 버전. 생성 시 `0`이고 상태가 바뀔 때마다 서버가 1씩 올립니다 |
+
+**클라이언트 규칙**: `duelId`별로 마지막에 반영한 `revision`을 기억하고, 새로 받은 값이 그
+**이하**면(같은 값 포함) 버리세요. 예를 들어 `ACCEPTED`(revision 1)를 반영한 뒤 늦게 온
+`PENDING` ack(revision 0)는 대기 화면을 다시 열지 않고 버려집니다. ack보다 먼저 온 이벤트는
+`requestId`로 자기 요청의 것인지 가립니다. 기존 "duelId 불일치 시 무시" 휴리스틱을 대체합니다.
+
+필드가 실리는 곳: `duel:request` ack, `duel:requested`, `duel:accepted`, `duel:rejected`,
+`duel:expired`, `duel:voided`, `duel:completed`, `duel:sync` 응답. 기존 필드는 그대로 두고
+**추가만** 했으므로 구버전 앱은 영향이 없습니다. `game:*` 라운드 이벤트는 상태 전이가 아니라
+싣지 않습니다.
+
+**`duel:request` — `requestId` (선택)**
+
+```json
+{ "targetUserId": "5f2c...", "requestId": "7d3f6a2e-1b4c-4d5e-8f90-a1b2c3d4e5f6" }
+```
+
+- 신청마다 **새 uuid**를 만들고, ack를 못 받아 다시 보낼 때는 **같은 값**을 보내세요.
+- 같은 사용자가 같은 `requestId`로 다시 보내면 새 결투를 만들지 않고, 기존 결투의 **현재
+  상태**를 ack로 돌려줍니다. 그 사이 수락됐다면 `state: "ACCEPTED"`가 옵니다.
+- 아직 `PENDING`이면 서버가 만료 타이머를 다시 걸고, 초대가 상대에게 **전달된 기록이 없을
+  때만** 초대를 다시 보냅니다(첫 요청이 결투를 만든 뒤 초대 전에 끊겼을 수 있습니다). 즉
+  재시도 뒤 상대에게 `duel:requested`가 한 번 더 갈 수 있으니, 같은 `duelId`의 초대는
+  `revision`으로 걸러 주세요. 신청자의 ack는 영향받지 않습니다.
+- 재시도는 사거리·보호막 같은 검문을 다시 거치지 않습니다. 첫 요청의 결과를 그대로 돌려줍니다.
+- 같은 `requestId`를 **다른 상대**에게 쓰면 `DUEL_REQUEST_ID_REUSED`로 거부됩니다.
+- 보내지 않아도 동작합니다(구버전 앱 호환). 이 경우 재시도 보호가 없습니다.
+
+**`duel:request` ack**
+
+```json
+{ "status": "ok", "duelId": 12, "requestId": "7d3f...", "state": "PENDING", "revision": 0 }
+```
+
+ack의 의미는 **결투 요청 생성 완료**입니다. 초대가 상대에게 닿았다는 뜻은 아닙니다.
+
+**`duel:sync` — 서버 확정 상태 재조회**
+
+재접속했을 때, 또는 `duel:request` ack가 오지 않았을 때 호출하세요. ack가 안 왔다고 곧바로
+신청 실패로 처리하지 마세요. 서버에는 결투가 만들어져 있을 수 있습니다.
+
+```jsonc
+{ "requestId": "7d3f..." }   // ack를 못 받아 duelId를 모를 때 — 본인이 신청한 결투만
+{ "duelId": 12 }              // 알고 있는 결투 — 본인이 참가자인 결투만
+{}                            // 본인이 참가 중인 진행 중(PENDING/ACCEPTED) 결투
+```
+
+`requestId`나 `duelId`로 조회하면 이미 끝난 결투도 돌려줍니다. 예를 들어 ack를 기다리는 사이
+만료됐다면 `state: "EXPIRED"`가 옵니다. 결투가 없으면 `duel`이 `null`입니다.
+
+```json
+{
+  "status": "ok",
+  "duel": {
+    "duelId": 12,
+    "requestId": "7d3f...",
+    "state": "PENDING",
+    "revision": 0,
+    "role": "opponent",
+    "expiresAt": "2026-09-16T05:30:30.000Z",
+    "opponent": { "id": "5f2c...", "nickname": "상대", "team": "JP" }
+  }
+}
+```
+
+| 필드 | 설명 |
+|---|---|
+| `role` | 내가 건 결투면 `challenger`, 받은 결투면 `opponent`. `opponent`이면서 `PENDING`이면 초대 화면을 복원하세요 |
+| `expiresAt` | `PENDING`일 때 응답 기한의 **절대 시각**(ISO), 그 외에는 `null`. 서버가 재시작돼도 이 값으로 타이머를 복원할 수 있습니다. 기한이 지나도 실제 만료는 서버가 처리하고 `duel:expired`가 따로 옵니다 |
+
+`expiresAt`이 지난 뒤의 `duel:accept`와 `duel:reject`는 **아직 `state`가 `PENDING`이어도
+거부됩니다**(`DUEL_ALREADY_HANDLED`). 기한은 전이와 같은 문장에서 DB 시계로 강제하므로,
+만료 이벤트가 아직 오지 않았다는 이유로 응답을 시도하지 마세요 — 그 결투는 곧
+`duel:expired`로 끝납니다. 같은 이유로 기한이 지난 초대는 상대에게 `duel:requested`로
+나가지 않습니다.
+
+기한이 지난 거절이 `REJECTED`가 아니라 `EXPIRED`로 끝나는 것은 의도된 동작입니다. 받아주면
+같은 상황이 응답 경로에 따라 `REJECTED`/`duel:rejected`/`DUEL_REJECT`와
+`EXPIRED`/`duel:expired`/`DUEL_NO_RESPONSE`로 갈리고, 무응답 청구가 면제되는 경우
+(초대 전달 기록이 없는 결투)에도 거절 페널티만 부과됩니다.
+| `opponent` | 상대방 정보. 상대가 탈퇴했으면 `null` |
+
+응답의 상태 필드도 위 규칙과 똑같이 `revision`으로 비교하세요. `duel:sync`는 이벤트를 다시
+보내지 않고 ack로만 답합니다. `ACCEPTED` 결투의 미니게임 화면 복구(`game:start` 재전송)는
+이 응답에 포함되지 않습니다.
+
+> **배포 순서**: DB 마이그레이션(`DuelRequestRevision1786900000000`)을 **먼저** 실행한 뒤
+> 서버를 배포해야 합니다. 서버는 필드를 추가만 하므로 앱보다 먼저 올라가도 구버전 앱이 깨지지
+> 않습니다.
+
 **`duel:request` 에러 케이스 (추가)**
 
 | 상황 | code | 메시지 |
 |---|---|---|
 | 상대가 보호 기간 중 | `DUEL_TARGET_SHIELDED` | `상대가 결투 거절 보호 중입니다. (약 N분 후 해제)` |
+| 같은 `requestId`를 다른 상대에게 사용 | `DUEL_REQUEST_ID_REUSED` | `이미 다른 결투 신청에 사용된 요청입니다.` |
 
 > 남은 시간을 그대로 알려주는 것은 **의도된 동작**입니다. 이 값으로 상대가 직전 결투를
 > 언제 거절/무시했는지 역산할 수 있지만, 아래 `encounter:detected`가 이미 같은 정보를 더
