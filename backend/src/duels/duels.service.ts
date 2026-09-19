@@ -181,6 +181,20 @@ export function duelVoidPayload(
   });
 }
 
+/**
+ * PENDING 결투의 응답을 받아줄지 가르는 CAS 조건 — 응답 기한이 아직 남아 있으면 참.
+ *
+ * 수락·거절이 **같은 문장**을 쓰도록 한 곳에 둔다. 한쪽에만 걸면 기한이 지난 뒤의 응답이
+ * 어느 쪽으로 들어왔는지에 따라 결투의 최종 상태·이벤트·원장 타입이 갈린다
+ * (REJECTED/duel:rejected/DUEL_REJECT vs EXPIRED/duel:expired/DUEL_NO_RESPONSE).
+ *
+ * 기준 시계는 requestedAt을 찍은 것과 같은 LOCALTIMESTAMP다 — 앱에서 Date로 더하면
+ * 앱·DB 타임존 차이만큼 어긋난다(pendingExpiresAt 주석의 같은 함정). 바인딩 이름은
+ * :ttl이며 값은 DUEL_REQUEST_TTL(초)이다.
+ */
+const WITHIN_RESPONSE_DEADLINE =
+  '"requestedAt" + make_interval(secs => :ttl) > LOCALTIMESTAMP';
+
 /** duel:sync 응답. 호출자 기준으로 상대와 역할을 채운다. */
 export interface DuelSyncView extends DuelStateFields {
   /** 호출자가 이 결투를 건 쪽인지 받은 쪽인지 — 받은 쪽의 PENDING이면 초대 화면을 복원한다. */
@@ -1001,14 +1015,11 @@ export class DuelsService {
       //
       // 기준은 requestedAt과 같은 시계(LOCALTIMESTAMP)다 — 앱에서 Date로 더하면
       // 앱·DB 타임존 차이만큼 어긋난다(pendingExpiresAt 주석의 같은 함정).
-      .where(
-        'id = :id AND status = :pending AND "requestedAt" + make_interval(secs => :ttl) > LOCALTIMESTAMP',
-        {
-          id: duel.id,
-          pending: DuelStatus.PENDING,
-          ttl: DUEL_REQUEST_TTL,
-        },
-      )
+      .where(`id = :id AND status = :pending AND ${WITHIN_RESPONSE_DEADLINE}`, {
+        id: duel.id,
+        pending: DuelStatus.PENDING,
+        ttl: DUEL_REQUEST_TTL,
+      })
       .returning('revision')
       .execute();
     if (updateResult.affected === 0) {
@@ -1253,12 +1264,15 @@ export class DuelsService {
    * 차감·원장은 무응답 만료(expireDuel·sweepStaleDuels)와 같은 경로를 쓴다
    * (chargeDuelPenalties) — 금액과 원장 형태가 두 곳에서 갈리지 않도록.
    *
-   * 수락(acceptDuel)과 달리 응답 기한은 CAS에 넣지 않는다. 기한이 지난 거절을 막아도 그
-   * 결투는 곧 만료로 끝나고, 초대를 받은 쪽이 DUEL_NO_RESPONSE_SCORE_PENALTY(= 거절과 같은
-   * 금액)를 무는 결과가 같다 — 거절 후에만 이 경로가 도달 가능하므로 초대는 이미 전달됐고,
-   * 무응답 청구 조건(inviteDeliveredAt)도 충족된다. 막으면 같은 결과를 에러 ack와 뒤이은
-   * duel:expired로 나눠 주게 될 뿐이다. 수락은 다르다 — 양쪽이 만료로 본 결투에 게임이
-   * 열려 서버 상태와 클라이언트 화면이 갈라진다.
+   * 응답 기한은 수락과 **같은 조건**으로 CAS에 넣는다(WITHIN_RESPONSE_DEADLINE).
+   *
+   * 기한이 지난 거절을 받아주면 만료 경로와 결과가 갈린다. 금액이 같다는 것만으로는
+   * 부족하다 — 최종 상태·이벤트·원장 타입이 REJECTED/duel:rejected/DUEL_REJECT와
+   * EXPIRED/duel:expired/DUEL_NO_RESPONSE로 다르고, 무엇보다 **차감 여부 자체가 갈린다**:
+   * markInviteDelivered는 실패를 삼키므로 상대가 초대를 봤는데도 inviteDeliveredAt이
+   * NULL일 수 있는데, 그 상태에서 만료는 buildNoResponseCharges가 걸러 청구하지 않고
+   * 늦은 거절은 그 기록과 무관하게 2점을 문다. 기록 실패는 서버 사정이라 응답자에게
+   * 전가하지 않는다 — 이 시스템의 기본값은 "기록이 없으면 청구하지 않는다"이다.
    */
   private async rejectDuel(duel: Duel): Promise<PenalizedDuel> {
     const responderId = duel.opponentId;
@@ -1290,10 +1304,14 @@ export class DuelsService {
           revision: () => '"revision" + 1',
           respondedAt: () => 'CURRENT_TIMESTAMP',
         })
-        .where('id = :id AND status = :pending', {
-          id: duel.id,
-          pending: DuelStatus.PENDING,
-        })
+        .where(
+          `id = :id AND status = :pending AND ${WITHIN_RESPONSE_DEADLINE}`,
+          {
+            id: duel.id,
+            pending: DuelStatus.PENDING,
+            ttl: DUEL_REQUEST_TTL,
+          },
+        )
         .returning('revision')
         .execute();
       if (updateResult.affected === 0) return null;

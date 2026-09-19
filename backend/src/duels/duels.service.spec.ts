@@ -1006,6 +1006,56 @@ describe('DuelsService', () => {
       expect(redis.setDuelShield).not.toHaveBeenCalled();
     });
 
+    // 한쪽에만 기한을 걸면, 기한이 지난 뒤의 응답이 어느 쪽으로 들어왔는지에 따라
+    // 최종 상태·이벤트·원장 타입이 갈린다(REJECTED/DUEL_REJECT vs EXPIRED/DUEL_NO_RESPONSE).
+    it('거절 CAS도 수락과 같은 응답 기한 조건을 쓴다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      const qb = createQueryBuilderMock(1);
+      txManager.createQueryBuilder.mockReturnValueOnce(qb);
+
+      await service.respondDuel(1, opponentId, false);
+
+      const [clause, params] = qb.where.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(clause).toContain(
+        '"requestedAt" + make_interval(secs => :ttl) > LOCALTIMESTAMP',
+      );
+      expect(params).toMatchObject({ ttl: DUEL_REQUEST_TTL });
+    });
+
+    /**
+     * markInviteDelivered는 실패를 삼키므로, 상대가 초대를 **실제로 봤는데도**
+     * inviteDeliveredAt이 NULL인 결투가 있을 수 있다. 그 상태로 기한이 지나면 두 경로의
+     * 결과가 갈린다 — 만료는 buildNoResponseCharges가 걸러 청구하지 않는데, 늦은 거절을
+     * 받아주면 그 기록과 무관하게 2점을 문다. 기록 실패는 서버 사정이라 응답자에게
+     * 전가하지 않는다. 기한에 걸린 거절은 수락과 같이 거부하고, 결투는 만료 경로로 끝난다.
+     */
+    it('전달 기록이 없는 결투의 기한 초과 거절은 거부하고 차감하지 않는다', async () => {
+      duelRepo.findOne.mockResolvedValue({
+        ...buildPendingDuel(),
+        inviteDeliveredAt: null,
+      });
+      // 기한이 지나 전이가 0행이 된 상황.
+      txManager.createQueryBuilder.mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      const err = await service
+        .respondDuel(1, opponentId, false)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({
+        code: ErrorCode.DUEL_ALREADY_HANDLED,
+      });
+      expect(usersService.applyScoreDelta).not.toHaveBeenCalled();
+      expect(scoresService.record).not.toHaveBeenCalled();
+      // 차감이 없으면 보호막도 없다 — 대가 없이 30분간 결투를 피하는 수단이 된다.
+      expect(redis.setDuelShield).not.toHaveBeenCalled();
+    });
+
     // 상태 전이(CAS)와 점수 차감은 한 트랜잭션이다. CAS가 밀리면 차감도 원장도 남으면 안 된다.
     it('이미 처리된 결투를 거절하면 점수도 보호막도 건드리지 않는다', async () => {
       duelRepo.findOne.mockResolvedValue(buildPendingDuel());

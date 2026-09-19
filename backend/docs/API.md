@@ -523,10 +523,16 @@ ack의 의미는 **결투 요청 생성 완료**입니다. 초대가 상대에�
 | `role` | 내가 건 결투면 `challenger`, 받은 결투면 `opponent`. `opponent`이면서 `PENDING`이면 초대 화면을 복원하세요 |
 | `expiresAt` | `PENDING`일 때 응답 기한의 **절대 시각**(ISO), 그 외에는 `null`. 서버가 재시작돼도 이 값으로 타이머를 복원할 수 있습니다. 기한이 지나도 실제 만료는 서버가 처리하고 `duel:expired`가 따로 옵니다 |
 
-`expiresAt`이 지난 뒤의 `duel:accept`는 **아직 `state`가 `PENDING`이어도 거부됩니다**
-(`DUEL_ALREADY_HANDLED`). 기한은 전이와 같은 문장에서 DB 시계로 강제하므로, 만료 이벤트가
-아직 오지 않았다는 이유로 수락을 시도하지 마세요 — 그 결투는 곧 `duel:expired`로 끝납니다.
-같은 이유로 기한이 지난 초대는 상대에게 `duel:requested`로 나가지 않습니다.
+`expiresAt`이 지난 뒤의 `duel:accept`와 `duel:reject`는 **아직 `state`가 `PENDING`이어도
+거부됩니다**(`DUEL_ALREADY_HANDLED`). 기한은 전이와 같은 문장에서 DB 시계로 강제하므로,
+만료 이벤트가 아직 오지 않았다는 이유로 응답을 시도하지 마세요 — 그 결투는 곧
+`duel:expired`로 끝납니다. 같은 이유로 기한이 지난 초대는 상대에게 `duel:requested`로
+나가지 않습니다.
+
+기한이 지난 거절이 `REJECTED`가 아니라 `EXPIRED`로 끝나는 것은 의도된 동작입니다. 받아주면
+같은 상황이 응답 경로에 따라 `REJECTED`/`duel:rejected`/`DUEL_REJECT`와
+`EXPIRED`/`duel:expired`/`DUEL_NO_RESPONSE`로 갈리고, 무응답 청구가 면제되는 경우
+(초대 전달 기록이 없는 결투)에도 거절 페널티만 부과됩니다.
 | `opponent` | 상대방 정보. 상대가 탈퇴했으면 `null` |
 
 응답의 상태 필드도 위 규칙과 똑같이 `revision`으로 비교하세요. `duel:sync`는 이벤트를 다시
