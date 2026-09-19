@@ -645,23 +645,48 @@ describe('DuelsService', () => {
   /** 게이트웨이가 duel:requested를 emit하기 직전에 끝난 결투를 거르고 revision을 싣는 데 쓴다. */
   describe('findState', () => {
     it('결투의 상태 필드를 돌려준다', async () => {
-      duelRepo.findOne.mockResolvedValueOnce({
-        id: 7,
-        requestId: null,
-        status: DuelStatus.EXPIRED,
-        revision: 1,
-      } as Duel);
+      dataSource.query.mockResolvedValueOnce([
+        {
+          id: 7,
+          requestId: null,
+          status: DuelStatus.EXPIRED,
+          revision: 1,
+          deadlinePassed: true,
+        },
+      ]);
 
       await expect(service.findState(7)).resolves.toEqual({
         duelId: 7,
         requestId: null,
         state: DuelStatus.EXPIRED,
         revision: 1,
+        deadlinePassed: true,
+      });
+    });
+
+    /**
+     * 기한 경과는 상태와 따로 본다 — 만료가 아직 커밋되지 않은 창에서는 행이 PENDING이라,
+     * 상태만 보면 이미 기한이 지난 초대가 상대 화면에 뜬다.
+     */
+    it('아직 PENDING이어도 기한이 지났으면 deadlinePassed로 알린다', async () => {
+      dataSource.query.mockResolvedValueOnce([
+        {
+          id: 7,
+          requestId: null,
+          status: DuelStatus.PENDING,
+          revision: 0,
+          deadlinePassed: true,
+        },
+      ]);
+
+      await expect(service.findState(7)).resolves.toMatchObject({
+        state: DuelStatus.PENDING,
+        deadlinePassed: true,
       });
     });
 
     it('결투가 없으면 null이다', async () => {
-      duelRepo.findOne.mockResolvedValueOnce(null);
+      dataSource.query.mockResolvedValueOnce([]);
       await expect(service.findState(7)).resolves.toBeNull();
     });
   });
@@ -838,6 +863,58 @@ describe('DuelsService', () => {
       await expect(service.respondDuel(1, opponentId, true)).rejects.toThrow(
         ConflictException,
       );
+    });
+
+    /**
+     * 만료 타이머는 예약일 뿐 기한의 강제가 아니다. 이벤트 루프 지연·DB 풀 대기·서버
+     * 재시작(타이머 유실)·remainingMs 조회 실패로 TTL 전체를 다시 건 경우에는 기한이
+     * 지났는데도 행이 PENDING으로 남아 있고, status만 보는 CAS는 그 수락을 통과시킨다.
+     * 그러면 duel:sync.expiresAt은 만료를 가리키는데 서버는 수락하는 계약 불일치가 된다.
+     *
+     * 강제는 전이와 **같은 문장에서** DB 시계로 해야 한다. 이 스위트의 쿼리 빌더는 SQL을
+     * 실행하지 않으므로(affected를 테스트가 정한다), 조건이 UPDATE에 실제로 실렸는지를
+     * 검증한다.
+     */
+    it('수락 CAS는 DB 시계 기준 응답 기한을 조건에 포함한다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      const qb = createQueryBuilderMock(1);
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(qb);
+
+      await service.respondDuel(1, opponentId, true);
+
+      const [clause, params] = qb.where.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      // 앱 시계(Date)로 비교하면 앱·DB 타임존 차이만큼 어긋난다 — LOCALTIMESTAMP여야 한다.
+      expect(clause).toContain(
+        '"requestedAt" + make_interval(secs => :ttl) > LOCALTIMESTAMP',
+      );
+      expect(params).toMatchObject({
+        id: 1,
+        pending: DuelStatus.PENDING,
+        ttl: DUEL_REQUEST_TTL,
+      });
+    });
+
+    // 기한에 걸려 전이가 0행이면 "이미 처리된 결투"와 같은 코드로 답한다 — 행은 아직
+    // PENDING이지만 만료 타이머나 스윕이 곧 EXPIRED로 확정하고 duel:expired를 보낸다.
+    it('기한이 지나 전이가 실패하면 수락을 거부한다', async () => {
+      duelRepo.findOne.mockResolvedValue(buildPendingDuel());
+      (duelRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce(
+        createQueryBuilderMock(0),
+      );
+
+      const err = await service
+        .respondDuel(1, opponentId, true)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({
+        code: ErrorCode.DUEL_ALREADY_HANDLED,
+      });
+      // 전이가 없었으니 락도 건드리지 않는다.
+      expect(redis.extendLock).not.toHaveBeenCalled();
     });
 
     it('수락 시 락을 DUEL_ACTIVE_TTL로 연장한다', async () => {

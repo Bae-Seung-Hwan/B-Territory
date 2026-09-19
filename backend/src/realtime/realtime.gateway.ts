@@ -534,14 +534,23 @@ export class RealtimeGateway
       // 하므로 이 초대보다 뒤에 나간다. 클라이언트는 초대 → 만료 순서로 받아 모달을 닫는다.
       // 조회 요청과 커밋이 거의 동시인 극히 좁은 경합은 남으며, 그것은 후속 계약의
       // expiresAt/revision으로 클라이언트가 오래된 이벤트를 버려 닫는다.
+      //
+      // 기한이 지났으면 상태가 아직 PENDING이어도 거른다 — 만료 커밋이 밀린 창에서 초대를
+      // 내보내면 수락 CAS(acceptDuel)가 기한으로 막는 모달을 여는 셈이다.
       const state = await this.duelsService.findState(duelId);
-      if (state?.state !== DuelStatus.PENDING) return;
+      if (!state || state.state !== DuelStatus.PENDING || state.deadlinePassed)
+        return;
       // 상태 조회를 기다리는 사이 끊겼을 수 있다 — 끊긴 소켓으로의 emit은 조용히 버려지므로
       // 여기서 다시 보지 않으면 받지 못한 초대를 전달로 기록해 무응답을 청구한다.
       if (!socket.connected) return;
 
+      // 상태 필드만 골라 싣는다 — deadlinePassed는 이 전송을 거를지 정하는 내부 판정값이라
+      // 이벤트 계약에 넣지 않는다(클라이언트의 기한은 duel:sync의 expiresAt이 답한다).
       socket.emit('duel:requested', {
-        ...state,
+        duelId: state.duelId,
+        requestId: state.requestId,
+        state: state.state,
+        revision: state.revision,
         fromUserId: challenger.id,
         fromNickname: challenger.nickname,
       });

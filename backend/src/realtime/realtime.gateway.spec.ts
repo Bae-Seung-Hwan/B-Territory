@@ -409,12 +409,14 @@ describe('RealtimeGateway 미니게임 시작·마감 실패 처리', () => {
 describe('duel:requested 전달 기록', () => {
   const duelId = 11;
   const targetUserId = 'user-2';
-  const pendingState = {
+  /** 이벤트·ack에 실리는 상태 필드 (findState의 deadlinePassed는 내부 판정용이라 빠진다). */
+  const pendingStateFields = {
     duelId,
     requestId: null,
     state: DuelStatus.PENDING,
     revision: 0,
   };
+  const pendingState = { ...pendingStateFields, deadlinePassed: false };
 
   function make(opponentSocket: { connected: boolean } | undefined) {
     const socket = opponentSocket && { ...opponentSocket, emit: jest.fn() };
@@ -501,7 +503,7 @@ describe('duel:requested 전달 기록', () => {
 
     // 초대에도 ack·이벤트와 같은 상태 필드가 실린다 — emit 직전에 읽은 값이다.
     expect(socket!.emit).toHaveBeenCalledWith('duel:requested', {
-      ...pendingState,
+      ...pendingStateFields,
       fromUserId: 'user-1',
       fromNickname: 'me',
     });
@@ -562,7 +564,7 @@ describe('duel:requested 전달 기록', () => {
     const ack = await gateway.handleDuelRequest(client, { targetUserId });
 
     // 핸들러가 반환하는 순간이 socket.io가 ack 패킷을 쓰는 순간이다.
-    expect(ack).toEqual({ status: 'ok', ...pendingState });
+    expect(ack).toEqual({ status: 'ok', ...pendingStateFields });
     expect(socket!.emit).not.toHaveBeenCalled();
     expect(markInviteDelivered).not.toHaveBeenCalled();
 
@@ -743,6 +745,39 @@ describe('duel:requested 전달 기록', () => {
   });
 
   /**
+   * 만료 커밋이 밀린 창에서는 행이 아직 PENDING이다. 상태만 보고 내보내면 수락 CAS가
+   * 기한으로 막는 초대 모달이 상대 화면에 뜬다 — 열자마자 에러가 나는 화면이다.
+   */
+  it('기한이 지났으면 아직 PENDING이어도 초대를 보내지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, socket, findState, markInviteDelivered } = make({
+      connected: true,
+    });
+    findState.mockResolvedValue({ ...pendingState, deadlinePassed: true });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+    await flushInvite();
+
+    expect(socket!.emit).not.toHaveBeenCalled();
+    expect(markInviteDelivered).not.toHaveBeenCalled();
+  });
+
+  // 초대 payload는 상태 필드만 싣는다 — 내부 판정용 플래그가 계약에 새면 안 된다.
+  it('초대 payload에 deadlinePassed를 싣지 않는다', async () => {
+    jest.useFakeTimers();
+    const { gateway, client, socket } = make({ connected: true });
+
+    await gateway.handleDuelRequest(client, { targetUserId });
+    await flushInvite();
+
+    const [, payload] = socket!.emit.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(payload).not.toHaveProperty('deadlinePassed');
+  });
+
+  /**
    * 상태 조회를 기다리는 사이 상대가 끊기면, 끊긴 소켓으로의 emit은 조용히 버려진다.
    * 그걸 전달로 기록하면 받지 못한 초대에 무응답이 청구된다.
    */
@@ -781,7 +816,7 @@ describe('duel:requested 전달 기록', () => {
     const ack = await gateway.handleDuelRequest(client, { targetUserId });
     await flushInvite();
 
-    expect(ack).toEqual({ status: 'ok', ...pendingState });
+    expect(ack).toEqual({ status: 'ok', ...pendingStateFields });
     expect(markInviteDelivered).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();

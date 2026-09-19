@@ -84,6 +84,17 @@ type DuelStateRow = {
   revision: number;
 };
 
+/**
+ * 초대를 내보내기 직전에 보는 "지금 이 결투" (findState).
+ *
+ * PENDING 여부만으로는 만료가 아직 커밋되지 않은 창을 가릴 수 없어, 기한 경과를 DB 시계
+ * 기준으로 함께 싣는다.
+ */
+export interface DuelLiveState extends DuelStateFields {
+  /** 응답 기한(requestedAt + DUEL_REQUEST_TTL)이 지났으면 true. 상태와 무관하게 판정한다. */
+  deadlinePassed: boolean;
+}
+
 export function duelStateFields(row: DuelStateRow): DuelStateFields {
   return {
     duelId: row.id,
@@ -795,13 +806,24 @@ export class DuelsService {
    * 만료 타이머는 초대 전송보다 먼저 걸려 있어, 전송 경로가 30초 넘게 지연되면 결투가
    * 이미 EXPIRED로 넘어간 뒤 초대가 나갈 수 있다 — 호출측이 PENDING인지 보고 거른다.
    * 초대 payload의 revision도 이 값을 쓴다.
+   *
+   * status만으로는 부족해 기한 경과(deadlinePassed)도 함께 준다. 만료가 아직 커밋되지
+   * 않은 창에서는 행이 PENDING이라, 그것만 보면 이미 기한이 지난 초대가 상대 화면에
+   * 뜬다 — 수락은 acceptDuel의 CAS가 막으므로 열리자마자 에러가 나는 모달이 된다.
+   * 계산을 DB 안에서 하는 이유는 pendingExpiresAt 주석의 타임존 함정과 같다.
    */
-  async findState(duelId: number): Promise<DuelStateFields | null> {
-    const duel = await this.duelRepo.findOne({
-      select: { id: true, requestId: true, status: true, revision: true },
-      where: { id: duelId },
-    });
-    return duel ? duelStateFields(duel) : null;
+  async findState(duelId: number): Promise<DuelLiveState | null> {
+    const rows = await this.dataSource.query<
+      (DuelStateRow & { deadlinePassed: boolean })[]
+    >(
+      'SELECT id, "requestId", status, revision, ("requestedAt" + make_interval(secs => $2) <= LOCALTIMESTAMP) AS "deadlinePassed" FROM duels WHERE id = $1',
+      [duelId, DUEL_REQUEST_TTL],
+    );
+    if (rows.length === 0) return null;
+    return {
+      ...duelStateFields(rows[0]),
+      deadlinePassed: rows[0].deadlinePassed,
+    };
   }
 
   /**
@@ -971,13 +993,28 @@ export class DuelsService {
         revision: () => '"revision" + 1',
         respondedAt: () => 'CURRENT_TIMESTAMP',
       })
-      .where('id = :id AND status = :pending', {
-        id: duel.id,
-        pending: DuelStatus.PENDING,
-      })
+      // 기한도 **같은 UPDATE 안에서** DB 시계로 본다. status만 보면 기한이 지났는데 아직
+      // EXPIRED가 커밋되지 않은 창(이벤트 루프 지연, DB 풀 대기, 서버 재시작으로 만료
+      // 타이머 유실, remainingMs 조회 실패로 TTL 전체를 다시 건 경우)에서 지난 기한의
+      // 수락이 성공한다. 게이트웨이의 setTimeout은 예약일 뿐 기한의 강제가 아니므로,
+      // 강제는 전이 자체와 원자적이어야 한다.
+      //
+      // 기준은 requestedAt과 같은 시계(LOCALTIMESTAMP)다 — 앱에서 Date로 더하면
+      // 앱·DB 타임존 차이만큼 어긋난다(pendingExpiresAt 주석의 같은 함정).
+      .where(
+        'id = :id AND status = :pending AND "requestedAt" + make_interval(secs => :ttl) > LOCALTIMESTAMP',
+        {
+          id: duel.id,
+          pending: DuelStatus.PENDING,
+          ttl: DUEL_REQUEST_TTL,
+        },
+      )
       .returning('revision')
       .execute();
     if (updateResult.affected === 0) {
+      // 기한이 지나 걸린 경우도 같은 코드로 답한다. 행은 아직 PENDING이지만 만료 타이머나
+      // 스윕이 곧 EXPIRED로 확정하고 duel:expired를 보내므로, 클라이언트가 할 일은
+      // "이 결투는 내 손을 떠났다"로 동일하다 — 코드를 늘리면 구버전 앱이 모르는 값을 받는다.
       throw new ConflictException(
         errBody(ErrorCode.DUEL_ALREADY_HANDLED, '이미 처리된 결투입니다.'),
       );
@@ -1215,6 +1252,13 @@ export class DuelsService {
    *
    * 차감·원장은 무응답 만료(expireDuel·sweepStaleDuels)와 같은 경로를 쓴다
    * (chargeDuelPenalties) — 금액과 원장 형태가 두 곳에서 갈리지 않도록.
+   *
+   * 수락(acceptDuel)과 달리 응답 기한은 CAS에 넣지 않는다. 기한이 지난 거절을 막아도 그
+   * 결투는 곧 만료로 끝나고, 초대를 받은 쪽이 DUEL_NO_RESPONSE_SCORE_PENALTY(= 거절과 같은
+   * 금액)를 무는 결과가 같다 — 거절 후에만 이 경로가 도달 가능하므로 초대는 이미 전달됐고,
+   * 무응답 청구 조건(inviteDeliveredAt)도 충족된다. 막으면 같은 결과를 에러 ack와 뒤이은
+   * duel:expired로 나눠 주게 될 뿐이다. 수락은 다르다 — 양쪽이 만료로 본 결투에 게임이
+   * 열려 서버 상태와 클라이언트 화면이 갈라진다.
    */
   private async rejectDuel(duel: Duel): Promise<PenalizedDuel> {
     const responderId = duel.opponentId;
