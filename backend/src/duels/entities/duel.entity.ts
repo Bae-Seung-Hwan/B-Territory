@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 
@@ -18,6 +19,12 @@ export enum DuelStatus {
 }
 
 @Entity('duels')
+// 같은 신청자의 같은 requestId는 결투 하나에만 묶인다 (DuelsService.requestDuel 멱등성).
+// requestId를 보내지 않는 구버전 앱의 행은 제외한다.
+@Index('IDX_duels_challenger_request', ['challengerId', 'requestId'], {
+  unique: true,
+  where: '"requestId" IS NOT NULL',
+})
 export class Duel {
   @PrimaryGeneratedColumn()
   id: number;
@@ -46,6 +53,25 @@ export class Duel {
 
   @Column({ type: 'enum', enum: DuelStatus, default: DuelStatus.PENDING })
   status: DuelStatus;
+
+  /**
+   * 클라이언트가 duel:request마다 만든 uuid. 재시도를 같은 결투로 묶는 데 쓰고(멱등성),
+   * 모든 결투 이벤트에 실어 ack보다 먼저 온 이벤트도 어느 요청의 것인지 가릴 수 있게 한다.
+   * 구버전 앱은 보내지 않아 NULL이다.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  requestId: string | null;
+
+  /**
+   * 상태 버전. 생성 시 0이고 status가 바뀌는 모든 UPDATE가 같은 문장에서 1씩 올린다.
+   *
+   * 클라이언트는 결투별로 마지막에 반영한 revision을 들고 그 이하를 버린다 — 이벤트·ack의
+   * 도착 순서가 뒤집혀도 오래된 상태가 새 상태를 덮지 않는다. 앱 메모리에서 올리지 않고
+   * 반드시 SQL(`"revision" + 1`)로 올릴 것: 조건부 UPDATE의 CAS와 같은 문장이어야 경합하는
+   * 두 전이가 같은 번호를 내지 않는다.
+   */
+  @Column({ type: 'int', default: 0 })
+  revision: number;
 
   @Column({ type: 'uuid', nullable: true })
   winnerId: string | null;
