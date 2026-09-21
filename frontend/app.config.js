@@ -67,6 +67,14 @@ module.exports = {
         // 개발용 성능 모니터의 다른 앱 위 표시 권한은 서비스에서 사용하지 않는다.
         'android.permission.SYSTEM_ALERT_WINDOW',
       ],
+      // 인앱 결제(현질)를 붙이는 날 여기에 <queries>가 필요해진다. Android 11+의 패키지
+      // 가시성 제한 때문에, targetSdk 30 이상에서는 선언하지 않은 다른 앱을 조회할 수
+      // 없다 — 원스토어 IAP SDK는 결제 모듈을 인텐트로 찾으므로 아래 둘을 선언해야 한다.
+      //   · action  com.onestore.ipc.iap.IapService.ACTION
+      //   · VIEW 인텐트 + data scheme "onestore"
+      // 빠뜨리면 빌드도 설치도 성공하고 **결제만 조용히 실패한다**(위 지도 API 키와 같은
+      // 종류의 함정이다). expo에는 queries를 받는 설정 필드가 없어서 withAndroidManifest
+      // config plugin을 직접 써야 한다. 근거와 원스토어 문서 링크는 docs/onestore-review.md 4장.
     },
     web: {
       output: 'static',
