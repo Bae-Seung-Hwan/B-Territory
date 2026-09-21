@@ -7,9 +7,9 @@
 
 - 구현 위치: `src/components/map/BusanMapView.tsx` (react-native-maps 네이티브)
   - `DistrictPolygons.tsx` — 구 경계 폴리곤(그래프 컬러링 폴백 팔레트, 향후 점령 상태 연동 지점)
-  - `SpotMarkers.tsx` — 관광지 마커(react-native-svg 커스텀 핀, 카테고리 필터/줌 자동 숨김, 뷰포트 필터링)
+  - `SpotMarkers.tsx` — 관광지 네이티브 핀(카테고리 필터/줌 자동 숨김, 뷰포트 필터링)
   - `CategoryFilterPanel.tsx` — 카테고리 on/off 오버레이
-  - `CurrentLocationMarker.tsx` — 현재 위치 pulse 마커(react-native-reanimated)
+  - 현재 위치는 `MapView`의 `showsUserLocation`으로 Google Maps SDK 기본 파란 점을 표시한다.
 - HUD: `src/components/map/MapHUD.tsx` (1위팀 · 이번주 수도 표시)
 - 필요 환경변수: `GOOGLE_MAPS_ANDROID_API_KEY` / `GOOGLE_MAPS_IOS_API_KEY` ([setup.md](./setup.md) 참고). `EXPO_PUBLIC_` 접두사가 없어 클라이언트 JS 번들에 노출되지 않고, `app.config.js`의 `react-native-maps` config plugin이 prebuild 시점에 네이티브 매니페스트/Info.plist에만 주입한다.
 - Google Cloud Console에서 "Maps SDK for Android"/"Maps SDK for iOS" 활성화, API 키를 패키지명(`com.bterritory.app`) + SHA-1(Android) / Bundle ID(iOS)로 제한해서 발급받는다.

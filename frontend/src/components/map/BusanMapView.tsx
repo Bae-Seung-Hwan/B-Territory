@@ -14,7 +14,6 @@ import {
 import { zoomFromLongitudeDelta } from '@/utils/geo';
 import { CATEGORY_META, DEFAULT_CATEGORY_KEY, MIN_CATEGORY_SHOW_ZOOM } from '@/constants/mapCategories';
 import { CategoryFilterPanel } from './CategoryFilterPanel';
-import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { toSigunguCode } from '@/constants/districts';
 import { DistrictDetailSheet } from './DistrictDetailSheet';
 import { DistrictPolygons } from './DistrictPolygons';
@@ -178,6 +177,9 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
         initialRegion={INITIAL_REGION}
         minZoomLevel={BUSAN_MIN_ZOOM_LEVEL}
         maxZoomLevel={BUSAN_MAX_ZOOM_LEVEL}
+        // GPS 위치는 별도 Marker가 아니라 Google Maps SDK의 파란 점으로 표시한다. 따라서
+        // 관광지 핀과 모양이 확실히 구분되고 Marker 자식 뷰 스냅샷 경로도 거치지 않는다.
+        showsUserLocation
         // 기본값이 둘 다 true라 두 손가락 드래그에 회전/기울임(3D tilt)이 섞여 들어가기 쉬운데,
         // 기울어지면 화면에 보이는 위경도 범위가 원근 때문에 바뀌어 순수 팬만 했는데도
         // latitudeDelta가 흔들리는 것처럼 보인다. 이 지도는 구역 색칠을 보여주는 탑뷰라
@@ -189,7 +191,6 @@ export const BusanMapView = forwardRef<BusanMapViewHandle, BusanMapViewProps>(fu
       >
         <DistrictPolygons tappable={isDistrictMode} onDistrictPress={handleDistrictPress} />
         {spotMarkers}
-        {coords && <CurrentLocationMarker coordinate={coords} />}
       </MapView>
       <CategoryFilterPanel
         activeCategories={activeCategories}

@@ -15,8 +15,8 @@
 | `socket.io-client` | 실시간 WebSocket |
 | `expo-location` | GPS 위치 추적 |
 | `react-native-maps` | Google Maps 렌더링(네이티브, Dev Build 필요) |
-| `react-native-svg` | 커스텀 마커 아이콘 |
-| `react-native-reanimated` | 현재 위치 pulse 마커 등 애니메이션 |
+| `react-native-svg` | SVG 기반 UI 아이콘 지원 |
+| `react-native-reanimated` | UI 애니메이션 |
 | `@gorhom/bottom-sheet` | 바텀시트 UI (국가 선택 등) |
 | `i18n-iso-countries` | 국가 목록 · 코드 변환 (국적 선택) |
 | `@expo/vector-icons` | 탭 아이콘 |

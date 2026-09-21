@@ -1,13 +1,10 @@
 import { memo, useCallback, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { Callout, type MapMarker, type Region } from 'react-native-maps';
+import { type MapMarker, type Region } from 'react-native-maps';
 import { MapPin } from './MapPin';
 import type { Spot } from '@/api/spots';
 import { categoryKey, getCategoryMeta } from '@/constants/mapCategories';
-import { BrandColors } from '@/constants/theme';
 import type { SpotClaimState } from '@/hooks/use-spot-claim';
 import { isCategoryVisible } from '@/utils/mapZoom';
-import { useTranslation } from '@/i18n';
 
 type SpotHandler = (spot: Spot) => void;
 
@@ -15,41 +12,6 @@ type SpotHandler = (spot: Spot) => void;
 export interface SpotPoint {
   spot: Spot;
   coordinate: { latitude: number; longitude: number };
-}
-
-interface SpotCalloutProps {
-  spot: Spot;
-  claimText: string;
-  color: string;
-  onPress: () => void;
-}
-
-// 말풍선 내용만 따로 둔 이유: useTranslation()은 i18n 스토어를 구독하고 매 호출마다 t를 새로
-// 바인딩하는데, 이 문구는 열려 있는 말풍선 하나에서만 필요하다. 마커 본체에 두면 화면의
-// 마커 수(수십 개)만큼 불필요한 구독이 생긴다.
-function SpotCallout({ spot, claimText, color, onPress }: SpotCalloutProps) {
-  const { t } = useTranslation();
-
-  return (
-    // ⚠️ Callout.onPress는 Android 전용이다(iOS는 Apple Maps에서만 동작하는데 이 앱은 iOS에서도
-    // PROVIDER_GOOGLE을 쓴다). iOS 빌드를 시작하면 말풍선 탭이 먹지 않으므로 대안이 필요하다.
-    <Callout onPress={onPress}>
-      <View style={styles.callout}>
-        <Text style={[styles.calloutCategory, { color }]}>
-          {t(`map.categories.${categoryKey(spot.contenttypeid)}`)}
-        </Text>
-        <Text style={styles.calloutTitle}>{spot.title}</Text>
-        {spot.addr1 && (
-          <Text style={styles.calloutAddr}>
-            {t('map.callout.address')}: {spot.addr1}
-          </Text>
-        )}
-        <Text style={styles.calloutClaim}>
-          {t('map.callout.claimStatus')}: {claimText}
-        </Text>
-      </View>
-    </Callout>
-  );
 }
 
 interface SpotMarkerProps {
@@ -127,19 +89,17 @@ const SpotMarker = memo(function SpotMarker({
       color={meta.color}
       onPress={handlePress}
       callout={claim && (
-        <SpotCallout spot={spot} claimText={claim.text} color={meta.color} onPress={handleCalloutPress} />
+        {
+          categoryKey: categoryKey(spot.contenttypeid),
+          categoryColor: meta.color,
+          title: spot.title,
+          address: spot.addr1,
+          claimText: claim.text,
+          onPress: handleCalloutPress,
+        }
       )}
     />
   );
-});
-
-const styles = StyleSheet.create({
-  // 말풍선 폭을 고정하지 않으면 Android에서 내용이 한 줄로 눌려 잘린다.
-  callout: { width: 200, paddingVertical: 2 },
-  calloutCategory: { fontSize: 11, fontWeight: '700' },
-  calloutTitle: { fontSize: 14, fontWeight: '600', color: '#111' },
-  calloutAddr: { marginTop: 2, fontSize: 12, color: '#666' },
-  calloutClaim: { marginTop: 4, fontSize: 12, fontWeight: '600', color: BrandColors.accent },
 });
 
 // 화면 밖 여유분 — 팬을 시작하자마자 마커가 뿅 나타나지 않도록 뷰포트보다 조금 넓게 잡는다.
