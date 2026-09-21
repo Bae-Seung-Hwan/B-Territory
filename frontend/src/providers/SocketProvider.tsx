@@ -99,7 +99,15 @@ function createRealtimeConnection() {
   let currentUser: User | null = null;
   const socket = io(`${SOCKET_BASE_URL}/realtime`, {
     autoConnect: false,
-    transports: ['websocket'],
+    // WebSocket을 먼저 시도하되 폴링 폴백을 남긴다. 한때 ['websocket']만 두었는데,
+    // WS 업그레이드를 막는 회선(일부 이동통신망·공용 Wi-Fi·검사형 프록시)에서는 HTTP
+    // API가 전부 정상인데 소켓만 죽어 채팅·결투가 통째로 먹통이 됐다 — 핸드셰이크가
+    // 서버에 도달조차 못 하므로 인증 거부 로그조차 남지 않아 원인 파악도 어려웠다.
+    // socket.io 4.8+는 첫 transport가 실패해도 나머지를 자동으로 시도하지 않으므로
+    // tryAllTransports를 함께 켜야 폴백이 실제로 동작한다. 폴링은 백엔드가 단일
+    // 인스턴스라(docker-compose.prod.yml) 스티키 세션 없이도 안전하다.
+    transports: ['websocket', 'polling'],
+    tryAllTransports: true,
     auth: (cb: (data: { token: string | null }) => void) => {
       void (async () => {
         try {
