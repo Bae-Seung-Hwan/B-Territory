@@ -101,7 +101,11 @@ export function useChatSocket() {
 
     const socket: Socket = io(`${SOCKET_BASE_URL}/chat`, {
       autoConnect: false,
-      transports: ['websocket'],
+      // SocketProvider와 같은 이유로 폴링 폴백을 남긴다(그쪽 주석 참고) — WS 업그레이드를
+      // 막는 회선에서 HTTP는 멀쩡한데 채팅만 죽는 것을 피한다. tryAllTransports가 없으면
+      // 4.8+에서는 첫 transport 실패 시 나머지를 시도하지 않아 폴백이 이름뿐이 된다.
+      transports: ['websocket', 'polling'],
+      tryAllTransports: true,
       // SocketProvider와 같은 이유로 함수형 auth를 쓴다 — 재연결마다 최신 토큰이 실린다.
       auth: (cb: (data: { token: string | null }) => void) => {
         void (async () => {
