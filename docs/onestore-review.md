@@ -7,7 +7,7 @@
 | 1 | 접근권한(위치) 사전 고지·동의 절차 미구현 | 2026-09-15 | 앱 코드 | 구현됨 — 1장 |
 | 2 | 앱 연령등급 설문 재진행 및 재검증 요청 | 2026-09-15 | ONEconsole 작업 | **미완 — 개발자 콘솔에서 직접 해야 한다.** 2장 |
 | 3 | 채팅 기능 주의·제재 안내문구 미구현 | 2026-09-15 | 앱 코드 | 구현됨 — 3장 |
-| 4 | 설치 시 Play 프로텍트 차단 팝업 | 2026-09-21 | **Google Play Console 작업** | **미완 — 앱 코드로 풀 수 없다.** 4장 |
+| 4 | 설치 시 Play 프로텍트 차단 팝업 | 2026-09-21 | **Google 소명 (외부 콘솔 작업)** | **미완 — 앱 코드로 풀 수 없다.** 4장 |
 
 ---
 
@@ -135,35 +135,34 @@
 
 > `<queries>`는 지금 불필요하지만 시한부다. `backend/src/scores/entities/point-event.entity.ts`에 `IAP` 포인트 사유가 이미 정의돼 있고, 현질을 붙이는 순간 `com.onestore.ipc.iap.IapService.ACTION` 액션과 `onestore` 스킴 VIEW 인텐트를 `<queries>`에 선언해야 한다. Android 11+ 패키지 가시성 제한 때문인데, **빠뜨리면 결제만 조용히 실패한다** — 지도 API 키 누락(`app.config.js` 상단 주석)과 같은 종류의 함정이다.
 
-### 대응: Google Play 출시 + 서명키 일치
+### 대응: Play 프로텍트 오분류 소명
 
-Play에 같은 패키지명으로 출시해 이력을 만드는 것이 근본 해결이다. **여기에 되돌릴 수 없는 선택이 하나 있다.**
+**원스토어가 안내한 해결책은 이것 하나다.** 기존 Play Console 계정으로 오분류 이의를 넣는다.
 
-Play Console에서 앱을 만들면 Play 앱 서명에 등록되는데, 기본값인 **"Google이 앱 서명 키 생성"** 을 고르면 Play가 배포하는 APK는 구글 키로 재서명된다. 그러면 Play판과 원스토어판의 서명키가 **달라져서**, Play에 출시해도 원스토어 APK는 여전히 "식별할 수 없는 앱"으로 남는다 — 조회 키가 `패키지명 + 서명키` 조합이기 때문이다. 애써 출시하고도 이번 지적이 그대로 남는 경로다.
+- <https://support.google.com/googleplay/android-developer/answer/2992033>
+- 제출 자료는 원스토어 문서에 명시돼 있지 않고 구글 쪽 안내를 따르라고만 되어 있다
+- 패키지명과 APK 서명 인증서 지문을 미리 준비해 둔다 — `eas credentials -p android` 출력 또는 `keytool -list -v -keystore <jks>`의 SHA-256
 
-따라서 앱 생성 시 **"기존 앱 서명 키 업로드"** 를 선택해 EAS keystore를 올려야 한다. 이 선택은 **앱 생성·최초 출시 설정 시점에만** 할 수 있다.
+> **Google Play 출시는 이 지적의 해결 조건이 아니다.** "Play에 유통된 적이 없는 패키지"는 원스토어가 적은 *원인 설명*이지 출시 요구가 아니다. 출시가 이력을 만들어 부수적으로 도움이 되기는 하지만, 그걸 노리고 일정을 잡으면 손해다 — 신규 **개인** 개발자 계정은 테스터 12명이 연속 14일 비공개 테스트에 참여해야 프로덕션 트랙을 열 수 있고(<https://support.google.com/googleplay/android-developer/answer/14151465>), 거기서 심사가 또 붙는다. 원스토어 재검증을 한 달 넘게 세워두게 된다. **이 지적에 대한 대응은 소명이고, Play 출시는 별개 일정으로 둔다.**
+
+### 원스토어 회신
+
+소명 결과는 즉시 나오지 않는다. 원스토어에는 **소명 접수 사실과 진행 상황**을 알리고, 원스토어 문서가 제시한 임시 이용자 가이드를 함께 안내하는 형태로 회신한다.
+
+> Play 스토어 → 프로필 → Play 프로텍트 → 설정 → "Play 프로텍트로 앱 검사" OFF → 스토어 재진입 후 다운로드
+
+### 나중에 Google Play에 출시할 때 (이번 대응과 별개)
+
+출시는 미뤄져 있다. 다만 **되돌릴 수 없는 선택이 하나 있어서** 그때 가서 읽으려고 여기 남긴다.
+
+Play Console에서 앱을 만들면 Play 앱 서명에 등록되는데, 기본값인 **"Google이 앱 서명 키 생성"** 을 고르면 Play가 배포하는 APK는 구글 키로 재서명된다. 그러면 Play판과 원스토어판의 서명키가 **달라진다.** 이 선택은 **앱 생성·최초 출시 설정 시점에만** 할 수 있으므로, 그 화면을 한 번 넘기면 끝이다.
 
 1. EAS keystore 내려받기: `eas credentials -p android` → 프로필 선택 → keystore 다운로드(`.jks`, 비밀번호, alias 확보)
 2. Play Console에서 앱 생성(`com.bterritory.app`) → 앱 서명 설정에서 **기존 키 업로드** 선택 → 그 화면에서 받은 `pepk.jar`과 암호화 키로 keystore를 암호화해 업로드
 3. `keytool -list -v -keystore <jks>`의 SHA-256이 원스토어에 올린 APK의 지문과 같은지 확인
-4. 프로덕션 트랙으로 출시 — 내부 테스트 트랙이 Play 프로텍트 평판에 반영되는지는 확인되지 않았다
-5. `eas.json`의 `submit.production`은 `./google-play-service-account.json`을 참조하는데 **현재 저장소에 없다.** Play Console에서 서비스 계정 키를 발급해 배치한다(커밋하지 않는다)
+4. `eas.json`의 `submit.production`은 `./google-play-service-account.json`을 참조하는데 **현재 저장소에 없다.** Play Console에서 서비스 계정 키를 발급해 배치한다(커밋하지 않는다)
 
-> 서명키를 통일해야 할 이유가 하나 더 있다. `app.config.js`의 google-signin 주석에 적힌 대로 Android 네이티브 Google 로그인은 **Google Cloud Console에 등록한 SHA-1**로 동작한다. Google이 생성한 키로 재서명되면 Play 설치본의 SHA-1이 달라져 **Play로 받은 이용자만 로그인이 깨진다.** 그 경우 Play 앱 서명 SHA-1을 Cloud Console에 추가 등록해야 하는데, 키를 통일하면 지문 하나로 양쪽 스토어가 함께 해결된다.
-
-### 병행: Play 프로텍트 오분류 소명
-
-출시 후 평판이 쌓이는 데 시간이 걸리므로 소명을 동시에 넣는다. Play Console 계정으로 진행한다.
-
-- <https://support.google.com/googleplay/android-developer/answer/2992033>
-- 원스토어 문서도 근본 해결로 구글 소명을 안내하며, 제출 자료는 구글 쪽 안내를 따르라고만 되어 있다
-- 패키지명과 APK 서명 인증서 지문(3번에서 확인한 SHA-256)을 미리 준비해 둔다
-
-### 원스토어 회신
-
-위 두 가지 모두 즉시 끝나지 않는다. 원스토어에는 **Play 출시·소명 진행 상황**과 함께, 원스토어 문서가 제시한 임시 이용자 가이드를 안내하는 형태로 회신한다.
-
-> Play 스토어 → 프로필 → Play 프로텍트 → 설정 → "Play 프로텍트로 앱 검사" OFF → 스토어 재진입 후 다운로드
+> 서명키를 통일해야 할 이유가 두 가지다. 하나는 이 장의 주제 — 서명키가 갈리면 Play에 출시해도 원스토어 APK는 여전히 별개의 `패키지명 + 서명키` 조합이라 Play 프로텍트 이력을 물려받지 못한다. 다른 하나가 더 즉각적이다. `app.config.js`의 google-signin 주석에 적힌 대로 Android 네이티브 Google 로그인은 **Google Cloud Console에 등록한 SHA-1**로 동작하는데, 구글이 생성한 키로 재서명되면 지문이 달라져 **Play로 받은 이용자만 로그인이 깨진다.** 그 경우 Play 앱 서명 SHA-1을 Cloud Console에 추가 등록해야 하고, 키를 통일하면 지문 하나로 양쪽 스토어가 함께 해결된다.
 
 ---
 
@@ -175,7 +174,5 @@ Play Console에서 앱을 만들면 Play 앱 서명에 등록되는데, 기본�
 4. [ ] 빌드된 APK의 실제 매니페스트 확인 — `aapt dump permissions <apk>` 또는 EAS 빌드 상세의 권한 목록에 **위치 두 개 외의 접근권한이 없는지**(특히 `READ/WRITE_EXTERNAL_STORAGE`와 `SYSTEM_ALERT_WINDOW`가 제거됐는지). `blockedPermissions`는 Gradle 매니페스트 병합 단계에서 적용되므로 바이너리로만 최종 확인된다
 5. [ ] ONEconsole 상품정보의 **권한 설명** 필드를 1장의 문구로 갱신
 6. [ ] ONEconsole 연령등급 설문 재진행 후 저장(2장)
-7. [ ] Play Console 앱 생성 시 **기존 앱 서명 키 업로드**를 선택했는지(4장) — Google 생성 키를 고르면 되돌릴 수 없고 이번 지적이 그대로 남는다
-8. [ ] 원스토어에 올리는 APK와 Play에 올리는 AAB가 **같은 keystore**로 서명됐는지 — `eas credentials -p android`의 SHA-256 지문으로 대조
-9. [ ] Play 프로텍트 소명 접수 및 원스토어 회신(4장) — 출시 완료를 기다리지 말고 병행한다
-10. [ ] 기존 바이너리 삭제 → 새 바이너리 업로드 → 재검증 요청
+7. [ ] Play 프로텍트 오분류 소명 접수 후 원스토어 회신(4장) — Play 출시를 기다릴 일이 아니다
+8. [ ] 기존 바이너리 삭제 → 새 바이너리 업로드 → 재검증 요청
