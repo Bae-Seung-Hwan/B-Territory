@@ -1,0 +1,99 @@
+{
+  "generatedAt": "2026-09-23T09:05:45.010Z",
+  "env": {
+    "node": "v22.15.0",
+    "platform": "win32 x64",
+    "cpus": 12,
+    "note": "단일 로컬 머신에서 앱·Postgres·Redis·부하 생성기가 모두 함께 돌았다. 분리된 환경의 수치가 아니라 상대 비교용이다."
+  },
+  "config": {
+    "CONNECTIONS": 50,
+    "DURATION": 10,
+    "WARMUP": 3,
+    "SEED_SPOTS": 3000,
+    "WRITE_REQUESTS": 3000
+  },
+  "datasetAtReadTime": {
+    "spots": 3001,
+    "scoreEvents": 3001
+  },
+  "scenarios": [
+    {
+      "name": "claim-visit",
+      "description": "GPS 방문 인증 + 점령 (PostGIS 거리 판정 · Redis 일일/방어 게이트 · 점수 원장 기록)",
+      "method": "POST",
+      "path": "/claims/visit",
+      "connections": 50,
+      "rps": 375,
+      "latencyMs": {
+        "p50": 112,
+        "p90": 140,
+        "p99": 181,
+        "max": 251
+      },
+      "requests": 3000,
+      "non2xx": 0,
+      "errors": 0,
+      "errorRate": 0
+    },
+    {
+      "name": "spots-list",
+      "description": "관광지 목록 (페이지네이션 + 구 필터, 관광지 3001건)",
+      "method": "GET",
+      "path": "/spots?limit=20&sigungucode=16",
+      "connections": 50,
+      "rps": 1446,
+      "latencyMs": {
+        "p50": 34,
+        "p90": 38,
+        "p99": 45,
+        "max": 91
+      },
+      "requests": 14460,
+      "non2xx": 0,
+      "errors": 0,
+      "errorRate": 0
+    },
+    {
+      "name": "spot-claim-status",
+      "description": "관광지 점령 현황 (관광지 × 점령 조인, 점령된 관광지)",
+      "method": "GET",
+      "path": "/claims/spots/1",
+      "connections": 50,
+      "rps": 1933.2,
+      "latencyMs": {
+        "p50": 25,
+        "p90": 29,
+        "p99": 37,
+        "max": 53
+      },
+      "requests": 19332,
+      "non2xx": 0,
+      "errors": 0,
+      "errorRate": 0
+    },
+    {
+      "name": "hall-of-fame",
+      "description": "명예의 전당 유저 랭킹 (점수 원장 3001행 집계)",
+      "method": "GET",
+      "path": "/hall-of-fame/users",
+      "connections": 50,
+      "rps": 4374.5,
+      "latencyMs": {
+        "p50": 10,
+        "p90": 14,
+        "p99": 20,
+        "max": 34
+      },
+      "requests": 43739,
+      "non2xx": 0,
+      "errors": 0,
+      "errorRate": 0
+    }
+  ],
+  "writeVerification": {
+    "requestsSent": 3000,
+    "scoreEventsPersisted": 3000,
+    "note": "점령 성공마다 원장 1행. 요청 수와 같아야 성공 경로를 측정한 것이다."
+  }
+}
