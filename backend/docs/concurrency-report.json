@@ -1,0 +1,45 @@
+{
+  "generatedAt": "2026-09-23T09:09:55.478Z",
+  "config": {
+    "RESPONDERS": 8,
+    "ROUNDS": 30,
+    "RETRIES": 10
+  },
+  "responseRace": {
+    "guarded": {
+      "rounds": 30,
+      "brokenRounds": 0,
+      "doubleCharges": 0,
+      "maxWinners": 1,
+      "lostRevisionBumps": 0,
+      "finalStatuses": {
+        "ACCEPTED": 30
+      }
+    },
+    "naive": {
+      "rounds": 30,
+      "brokenRounds": 30,
+      "maxWinners": 8,
+      "lostRevisionBumps": 210,
+      "finalStatuses": {
+        "REJECTED": 21,
+        "ACCEPTED": 9
+      }
+    }
+  },
+  "requestIdempotency": {
+    "attempts": 10,
+    "fulfilled": 10,
+    "rowsCreated": 1,
+    "distinctDuelIds": 1,
+    "createdFlagTrue": 1,
+    "errors": []
+  },
+  "crossRequest": {
+    "fulfilled": 1,
+    "pendingRows": 1,
+    "errors": [
+      "DUEL_ALREADY_ACTIVE"
+    ]
+  }
+}
