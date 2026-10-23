@@ -62,6 +62,20 @@ const REPO_URL = 'https://github.com/Bae-Seung-Hwan/B-Territory';
  */
 const STORE_URL = 'https://m.onestore.co.kr/v2/ko-kr/app/0001008950';
 
+/**
+ * 서비스 종료일(KST).
+ *
+ * 위치기반서비스사업을 폐업할 때는 종료 사실을 홈페이지에 30일 이상 게시해야 하고, 이 페이지가
+ * 그 게시 자리다. 게시 시작일은 이 값이 develop에 병합돼 배포된 날이며, Legal Pages 워크플로
+ * 실행 기록이 그 증거로 남는다.
+ *
+ * 종료일 이후에 빌드하면 공지가 "종료되었습니다"로 바뀐다. 다만 이 사이트는 날짜가 지났다고
+ * 저절로 다시 빌드되지 않으므로, 종료일에 워크플로를 손으로 한 번 돌려야 한다(workflow_dispatch).
+ */
+const SHUTDOWN_DATE = '2026-11-25';
+const SHUTDOWN_AT = new Date(`${SHUTDOWN_DATE}T00:00:00+09:00`);
+const HAS_SHUT_DOWN = new Date() >= SHUTDOWN_AT;
+
 /** `build-legal-pages.mjs`와 같은 목록이어야 언어 전환이 서로 닿는다. */
 const LANGS = ['ko', 'en'];
 
@@ -121,6 +135,18 @@ const COPY = {
     lead: '부산의 관광지를 직접 찾아가 점령하고, 국적으로 나뉜 팀이 부산 16개 구·군을 두고 겨루는 위치기반 관광 게임입니다.',
     cta: '원스토어에서 받기',
     ctaPending: '스토어 등록 준비 중',
+    ctaEnding: (date) => `${date} 서비스 종료`,
+    ctaEnded: '서비스 종료',
+    noticeTitle: '서비스 종료 안내',
+    notice: (date) => [
+      `B-territory는 ${date}에 서비스를 종료합니다. 그동안 이용해 주셔서 감사합니다.`,
+      '종료일에 계정 정보(이메일·닉네임), 점령·결투 기록, 미션 후기 등 보관 중인 개인정보와 위치정보를 모두 파기합니다. 종료 전에 앱에서 직접 계정을 삭제하시면 그 즉시 삭제됩니다.',
+    ],
+    noticeEndedTitle: '서비스가 종료되었습니다',
+    noticeEnded: (date) => [
+      `B-territory는 ${date}에 서비스를 종료했습니다. 그동안 이용해 주셔서 감사합니다.`,
+      '보관하던 개인정보와 위치정보는 종료일에 모두 파기했습니다.',
+    ],
     platform: 'Android · 무료',
     featuresTitle: '무엇을 하나요',
     features: [
@@ -176,6 +202,18 @@ const COPY = {
     lead: 'A location-based tourism game: visit real spots in Busan to claim them, and compete for the 16 districts of Busan on a team decided by your nationality.',
     cta: 'Get it on ONE Store',
     ctaPending: 'Coming soon to the store',
+    ctaEnding: (date) => `Service ends ${date}`,
+    ctaEnded: 'Service ended',
+    noticeTitle: 'Service ending',
+    notice: (date) => [
+      `B-territory will shut down on ${date}. Thank you for playing.`,
+      'On that day we will destroy all personal and location information we hold, including your account (email and nickname), claim and duel records, and mission reviews. If you delete your account in the app before then, it is deleted immediately.',
+    ],
+    noticeEndedTitle: 'B-territory has shut down',
+    noticeEnded: (date) => [
+      `B-territory shut down on ${date}. Thank you for playing.`,
+      'All personal and location information we held was destroyed on that day.',
+    ],
     platform: 'Android · Free',
     featuresTitle: 'What you do',
     features: [
@@ -261,6 +299,17 @@ a { color: var(--accent); }
 .cta.pending { background: rgba(255,255,255,.18); color: #fff; font-weight: 600;
   box-shadow: none; border: 1px solid rgba(255,255,255,.5); }
 .platform { margin: .9rem 0 0; font-size: .875rem; opacity: .85; }
+
+/* 종료 공지 — 히어로보다 먼저 읽혀야 해서 맨 위에 둔다. */
+.notice { background: #FFF4D6; color: #4A3500; border-bottom: 1px solid #E8C866;
+  padding: 1.1rem 1.25rem; }
+.notice .inner { max-width: 54rem; margin: 0 auto; }
+.notice h2 { margin: 0 0 .4rem; font-size: 1.05rem; }
+.notice p { margin: 0 0 .35rem; font-size: .935rem; }
+.notice a { color: inherit; }
+@media (prefers-color-scheme: dark) {
+  .notice { background: #3A2E0E; color: #F5E3B0; border-bottom-color: #6B5620; }
+}
 .langs { margin: 1.75rem 0 0; font-size: .875rem; }
 .langs a { color: #fff; opacity: .9; }
 
@@ -300,7 +349,34 @@ function screenshots() {
     .sort();
 }
 
-function ctaHtml(copy) {
+function formatDate(lang, date) {
+  return new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ko-KR', {
+    dateStyle: 'long',
+    timeZone: 'Asia/Seoul',
+  }).format(date);
+}
+
+function noticeHtml(lang, copy) {
+  const date = formatDate(lang, SHUTDOWN_AT);
+  const title = HAS_SHUT_DOWN ? copy.noticeEndedTitle : copy.noticeTitle;
+  const body = HAS_SHUT_DOWN ? copy.noticeEnded(date) : copy.notice(date);
+  return `<section class="notice" aria-labelledby="notice-title">
+<div class="inner">
+<h2 id="notice-title">${escapeHtml(title)}</h2>
+${body.map((line) => `<p>${escapeHtml(line)}</p>`).join('\n')}
+<p>${escapeHtml(copy.contactLabel)}: <a href="mailto:${escapeHtml(CONTACT)}">${escapeHtml(CONTACT)}</a></p>
+</div>
+</section>`;
+}
+
+function ctaHtml(lang, copy) {
+  // 한 달 안에 닫을 서비스로 새 이용자를 보내지 않는다. 스토어 링크 대신 종료일을 보여 준다.
+  if (HAS_SHUT_DOWN) {
+    return `<span class="cta pending">${escapeHtml(copy.ctaEnded)}</span>`;
+  }
+  if (SHUTDOWN_DATE) {
+    return `<span class="cta pending">${escapeHtml(copy.ctaEnding(formatDate(lang, SHUTDOWN_AT)))}</span>`;
+  }
   if (!STORE_URL) {
     return `<span class="cta pending">${escapeHtml(copy.ctaPending)}</span>`;
   }
@@ -348,13 +424,14 @@ ${shots
 <style>${STYLE}</style>
 </head>
 <body>
+${noticeHtml(lang, copy)}
 <header class="hero">
 <div class="inner">
 <img class="icon" src="icon.png" alt="" />
 <h1>${escapeHtml(APP_NAME)}</h1>
 <p class="tagline">${escapeHtml(copy.tagline)}</p>
 <p class="lead">${escapeHtml(copy.lead)}</p>
-${ctaHtml(copy)}
+${ctaHtml(lang, copy)}
 <p class="platform">${escapeHtml(copy.platform)}</p>
 <p class="langs"><a href="index${otherSuffix}">${escapeHtml(COPY[other].lang)}</a></p>
 </div>
