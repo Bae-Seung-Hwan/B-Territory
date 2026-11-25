@@ -8,8 +8,10 @@
 |---|---|---|---|
 | <img src="site-assets/screenshots/01-map-busan.jpg" width="170"> | <img src="site-assets/screenshots/02-map-spots.jpg" width="170"> | <img src="site-assets/screenshots/03-claim.jpg" width="170"> | <img src="site-assets/screenshots/04-district.jpg" width="170"> |
 
-- 소개 페이지: <https://bae-seung-hwan.github.io/B-Territory/>
-- API 서버: `https://b-territory.duckdns.org` (AWS EC2, 상시 가동)
+> **서비스 종료 안내** — B-Territory는 2026년 11월 25일 운영을 종료했습니다. 서버와 이용자 데이터는 모두 파기했고, 이 저장소는 코드와 검증 기록을 보여주기 위해 남겨 둡니다.
+
+- 소개 페이지(종료 공지): <https://bae-seung-hwan.github.io/B-Territory/>
+- API 서버: 종료 (운영 당시 AWS EC2 · `b-territory.duckdns.org`)
 
 ---
 
